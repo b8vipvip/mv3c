@@ -70,7 +70,7 @@ docker compose -f docker-compose.mv3c.yml logs --tail=150 mv3c
 # 重启
 docker compose -f docker-compose.mv3c.yml restart mv3c
 
-# 更新源码并重新构建（通过 GitHub SSH）
+# 更新源码并重新构建（命令行 Git 连接方式由 origin 决定）
 sudo -H git pull --ff-only origin main
 docker compose -f docker-compose.mv3c.yml up -d --build
 ~~~
@@ -79,7 +79,7 @@ docker compose -f docker-compose.mv3c.yml up -d --build
 
 ## 4.1 版本更新（自动 + 手动）
 
-后台新增「**版本更新**」页面，显示当前版本、GitHub 最新版本、CI 验证状态、自动更新开关、手动更新、部署进度与日志。
+后台新增「**版本更新**」页面，显示当前版本、GitHub 最新版本、CI 验证状态、自动更新开关、手动更新、部署进度与日志。后台更新优先 SSH，失败自动回退 HTTPS；终端里单独执行的 git pull 不具备此自动回退逻辑。
 
 **首次需要在 Docker 宿主机安装更新服务（一次性操作）：**
 
@@ -89,7 +89,7 @@ sudo bash mv3c/updater/install.sh
 sudo systemctl status mv3c-updater.timer
 ~~~
 
-建议将 Git 仓库放在 **root 所有的 /opt/mv3c**；安装脚本会检查来源仓库、分支和工作区是否干净，并验证 root 能通过 SSH 拉取代码。若原 origin 为本仓库 HTTPS 地址，安装时将自动改为 SSH；SSH 失败不会回退到 HTTPS。安装后，管理员在 /admin →「版本更新」管理策略，无需在 .env 中设置版本更新选项。
+建议将 Git 仓库放在 **root 所有的 /opt/mv3c**；安装脚本会检查来源仓库、分支和工作区是否干净。后台自动和手动更新都**优先 SSH，失败时自动回退到固定的 GitHub HTTPS 地址**；安装脚本会测试两种方式，SSH 成功则优先设置 SSH origin，仅 HTTPS 成功则使用 HTTPS。安装后，管理员在 /admin →「版本更新」管理策略，无需在 .env 中设置版本更新选项。
 
 默认启用自动更新、每 10 分钟检查 GitHub main 分支；只有 mv3c validation 和 mv3c source Docker build 两项 GitHub Actions **均成功**，才会构建并更新 Docker 容器。也可切换到 GitHub Release 通道（仓库必须先发布 Release），或关闭自动更新并手动触发。部署失败时会尝试回滚代码和镜像，**不会回滚数据库迁移**。
 
