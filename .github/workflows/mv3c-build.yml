@@ -83,6 +83,12 @@ jobs:
             if(config.appTitle!=='mv3c CI' || config.registrationEnabled!==false)process.exit(1);
             console.log('Admin API, encrypted provider config and live site changes OK');
           "
+      - name: Validate updater inside the live Docker stack
+        timeout-minutes: 3
+        run: |
+          docker compose exec -T mv3c node --test /app/mv3c/updater/tests/test_updater.cjs
+          docker compose exec -T mv3c node /app/mv3c/updater/bridge.cjs state > /tmp/mv3c-updater-state.json
+          node -e "const x=require('/tmp/mv3c-updater-state.json');if(!x.config||x.config.channel!=='main')process.exit(1);console.log('Updater database bridge ready')"
       - name: Dump runtime logs on failure
         if: failure()
         run: docker compose -f docker-compose.mv3c.yml logs --tail=250
