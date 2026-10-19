@@ -101,6 +101,7 @@ export default function Mv3cAdmin() {
   const [users, setUsers] = useState<UsersResponse | null>(null);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [updates, setUpdates] = useState<UpdateState | null>(null);
+  const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
     autoEnabled: true, channel: 'main', intervalMinutes: 10,
   });
@@ -162,11 +163,11 @@ export default function Mv3cAdmin() {
     try {
       const result = await adminRequest<UpdateState>(token, '/updates');
       setUpdates(result);
-      setUpdateConfig((current) => current && result ? result.config : current);
+      if (!updateConfigTouched) setUpdateConfig(result.config);
     } catch (err) {
       setError(err instanceof Error ? err.message : '更新状态加载失败');
     }
-  }, [token]);
+  }, [token, updateConfigTouched]);
 
   useEffect(() => {
     if (!token || tab !== 'updates') return;
@@ -241,6 +242,7 @@ export default function Mv3cAdmin() {
     });
     setUpdates(result);
     setUpdateConfig(result.config);
+    setUpdateConfigTouched(false);
     setMessage('版本更新策略已保存。自动检查由宿主机更新服务执行。');
   });
 
@@ -507,9 +509,9 @@ export default function Mv3cAdmin() {
                       <h3 className="font-semibold">自动更新策略</h3>
                       <label className="flex items-center gap-2">
                         <input type="checkbox" checked={updateConfig.autoEnabled}
-                          onChange={(e) => setUpdateConfig((c) => ({
+                          onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, autoEnabled: e.target.checked,
-                          }))} />
+                          })); }} />
                         GitHub 有新版本且 CI 通过时自动构建并部署
                       </label>
                       <label className="block space-y-2">
@@ -517,7 +519,7 @@ export default function Mv3cAdmin() {
                         <select className={fieldClass} value={updateConfig.channel}
                           onChange={(e) => setUpdateConfig((c) => ({
                             ...c, channel: e.target.value as 'main' | 'release',
-                          }))}>
+                          })); }}>
                           <option value="main">main 分支（最新通过 CI 的提交）</option>
                           <option value="release">正式版（GitHub 最新 Release）</option>
                         </select>
@@ -527,7 +529,7 @@ export default function Mv3cAdmin() {
                         <select className={fieldClass} value={updateConfig.intervalMinutes}
                           onChange={(e) => setUpdateConfig((c) => ({
                             ...c, intervalMinutes: Number(e.target.value),
-                          }))}>
+                          })); }}>
                           {[5, 10, 15, 30, 60].map((n) => (
                             <option key={n} value={n}>每 {n} 分钟</option>
                           ))}
