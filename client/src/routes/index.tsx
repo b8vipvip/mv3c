@@ -21,6 +21,7 @@ import ShareRoute from './ShareRoute';
 import ChatRoute from './ChatRoute';
 import Search from './Search';
 import Root from './Root';
+import Mv3cAdmin from './Mv3cAdmin';
 
 const AuthLayout = () => (
   <AuthContextProvider>
@@ -127,6 +128,10 @@ export const router = createBrowserRouter(
                   element: <TwoFactorSetupScreen />,
                 },
               ],
+            },
+            {
+              path: 'admin',
+              element: <Mv3cAdmin />,
             },
             dashboardRoutes,
             {
