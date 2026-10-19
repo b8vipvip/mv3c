@@ -17,7 +17,7 @@ services:
       MONGO_URI: mongodb://mongodb:27017/mv3c
       SEARCH: "false"
     ports:
-      - "127.0.0.1:\${MV3C_PORT:-3080}:3080"
+      - "127.0.0.1:${MV3C_PORT:-3080}:3080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
