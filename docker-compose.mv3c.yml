@@ -1,0 +1,54 @@
+# Build the rebranded mv3c source locally; do NOT use the upstream prebuilt UI.
+name: mv3c
+
+services:
+  mv3c:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mv3c:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3080"
+      NODE_ENV: production
+      APP_TITLE: mv3c
+      MONGO_URI: mongodb://mongodb:27017/mv3c
+      CONFIG_PATH: /app/librechat.yaml
+      SEARCH: "false"
+    ports:
+      # Reverse proxy through Nginx/Caddy with TLS for public access.
+      - "127.0.0.1:${MV3C_PORT:-3080}:3080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      - mv3c-images:/app/client/public/images
+      - mv3c-uploads:/app/uploads
+      - mv3c-logs:/app/api/logs
+      - mv3c-data:/app/data
+    depends_on:
+      - mongodb
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 90s
+
+  mongodb:
+    image: mongo:8.0.20
+    restart: unless-stopped
+    command: mongod --noauth
+    volumes:
+      - mv3c-mongodb:/data/db
+    # Intentionally no host port; only the mv3c container can access MongoDB.
+
+volumes:
+  mv3c-mongodb:
+  mv3c-images:
+  mv3c-uploads:
+  mv3c-logs:
+  mv3c-data:
