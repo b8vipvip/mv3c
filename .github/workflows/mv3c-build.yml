@@ -1,0 +1,30 @@
+name: mv3c source Docker build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mv3c-build.yml
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - client/**
+      - api/**
+      - packages/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build mv3c from modified source
+        run: |
+          docker build --progress=plain \
+            --build-arg NODE_MAX_OLD_SPACE_SIZE=4096 \
+            --build-arg NPM_CI_TIMEOUT_SECONDS=1800 \
+            -t mv3c:ci .
