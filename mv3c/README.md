@@ -17,6 +17,8 @@ docker compose -f docker-compose.mv3c.yml ps
 curl -fsS http://127.0.0.1:3080/readyz
 ~~~
 
+首次克隆如 SSH 不可用，可改用 `git clone https://github.com/b8vipvip/mv3c.git`；安装宿主机更新器后，后台自动与手动更新仍优先 SSH、失败回退 HTTPS。
+
 **无需运行**旧版的 Python 初始化脚本，也无需创建 .env 或编辑 librechat.yaml。旧文件仅为兼容/参考保留，**mv3c 运行时不再从中读取 AI 供应商和站点配置**。
 
 服务默认仅监听主机 127.0.0.1:3080。在宝塔 Nginx 反向代理中，将 HTTPS 域名转发到 http://127.0.0.1:3080；不要公开 MongoDB。**第一次注册管理员前，请先通过 SSH 隧道或仅自己可访问的域名进行初始化，不要直接向公网开放无人认领的首个管理员账号。**
