@@ -42,11 +42,14 @@ def utc_now() -> str:
 
 def run(args: list[str], cwd: Path, *, input_data: str | None = None,
         timeout: int = 120, env: dict[str, str] | None = None) -> str:
-    completed = subprocess.run(
-        args, cwd=cwd, input=input_data, text=True, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            args, cwd=cwd, input=input_data, text=True, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise UpdateError("{} timed out after {} seconds".format(args[0], timeout)) from error
     if completed.returncode:
         raise UpdateError(
             "{} failed (exit {}): {}".format(args[0], completed.returncode,
@@ -67,13 +70,12 @@ def fetch_from_origin(repo: Path, origin: str, *refspec: str) -> None:
     """Fetch into origin's tracking refs from a pinned, explicitly selected URL."""
     if origin not in (SSH_ORIGIN, HTTPS_ORIGIN):
         raise UpdateError("Untrusted GitHub source")
-    override = "remote.origin.url=" + origin
-    # Reject global/local insteadOf rewrites that could redirect a trusted URL.
-    effective = git(repo, "-c", override, "remote", "get-url", "origin")
+    # A direct URL avoids relying on the configured origin transport.
+    # Verify insteadOf rewrites before fetching; no arbitrary destinations.
+    effective = git(repo, "ls-remote", "--get-url", origin)
     if effective != origin:
         raise UpdateError("Git URL rewrite prevents the expected transport")
-    git(repo, "-c", override, "fetch", "--quiet", "--prune",
-        "origin", *refspec, timeout=120)
+    git(repo, "fetch", "--quiet", "--prune", origin, *refspec, timeout=120)
 
 
 def fetch_prefer_ssh(repo: Path, *refspec: str) -> str:
@@ -177,7 +179,9 @@ def is_descendant(repo: Path, previous: str, target: str) -> bool:
 def target_for_channel(repo: Path, channel: str) -> tuple[str, str]:
     if channel not in ("main", "release"):
         raise UpdateError("Unsupported update channel")
-    transport = fetch_prefer_ssh(repo, "main")
+    transport = fetch_prefer_ssh(
+        repo, "refs/heads/main:refs/remotes/origin/main"
+    )
     if channel == "main":
         sha = git(repo, "rev-parse", "refs/remotes/origin/main")
         label = "main · " + sha[:12] + " · " + transport
