@@ -36,6 +36,7 @@ class BrandingTests(unittest.TestCase):
     def test_compose_and_endpoint_contract(self):
         yaml = (ROOT.parent / "librechat.yaml").read_text(encoding="utf-8")
         self.assertIn("prompt_mode: full", yaml)
+        self.assertIn("useResponsesApi: false", yaml)
         self.assertIn("fetch: true", yaml)
         self.assertIn("titleConvo: false", yaml)
         self.assertIn("${CHAT2API_API_KEY}", yaml)
