@@ -31,3 +31,25 @@ jobs:
             --build-arg NODE_MAX_OLD_SPACE_SIZE=4096 \
             --build-arg NPM_CI_TIMEOUT_SECONDS=1800 \
             -t mv3c:ci .
+      - name: Start env-free mv3c and verify public startup
+        timeout-minutes: 10
+        run: |
+          docker tag mv3c:ci mv3c:local
+          docker compose -f docker-compose.mv3c.yml up -d --no-build
+          ready=0
+          for i in $(seq 1 80); do
+            if curl --silent --fail http://127.0.0.1:3080/readyz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$ready" != 1 ]; then
+            echo "mv3c did not become ready"
+            exit 1
+          fi
+          curl --silent --fail http://127.0.0.1:3080/api/config > /tmp/mv3c-startup.json
+          node -e "const x=require('/tmp/mv3c-startup.json'); if(x.appTitle!=='mv3c'||x.registrationEnabled!==true) process.exit(1); console.log('env-free startup and first-user registration are ready')"
+      - name: Dump runtime logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.mv3c.yml logs --tail=250
