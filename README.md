@@ -16,7 +16,7 @@
 git clone https://github.com/b8vipvip/mv3c.git
 cd mv3c
 
-# chat2api 必须已有可用的 API Key。运行时会交互式隐藏输入 Key。
+# chat2api 必须已有可用的 API Key，且 Key 必须同时具有 `models` 和 `chat` 权限范围。运行时会交互式隐藏输入 Key。
 python3 mv3c/setup.py \
   --base-url 'https://你的-chat2api-域名/v1' \
   --domain 'https://你的-mv3c-域名'
@@ -46,7 +46,7 @@ curl -fsS http://127.0.0.1:3080/readyz
 
 mv3c 的登录和用户记录**不依赖** chat2api 的账号体系。默认允许邮箱注册（`ALLOW_REGISTRATION=true`）；如果你希望只允许受邀用户注册，可在部署前将 `.env` 中此项改为 `false`。用户聊天记录由 mv3c 的 MongoDB 持久保存。
 
-配置文件 [librechat.yaml](../librechat.yaml) 只启用 `chat2api` 自定义端点，统一通过服务端 `CHAT2API_API_KEY` 认证。API Key 不会由浏览器直接提交给 chat2api；**但所有 mv3c 用户共用此 Key，因此 chat2api 端看到的是统一调用身份，不具备按 mv3c 用户单独结算的能力**。
+配置文件 [librechat.yaml](librechat.yaml) 只启用 `chat2api` 自定义端点，统一通过服务端 `CHAT2API_API_KEY` 认证。API Key 不会由浏览器直接提交给 chat2api；**但所有 mv3c 用户共用此 Key，因此 chat2api 端看到的是统一调用身份，不具备按 mv3c 用户单独结算的能力**。
 
 模型来自 `/v1/models`，静态候选 `gpt-6-sol`、`gpt-5.6-sol` 仅用于初始回退；实际可用性由 chat2api 的模型路由、Worker 状态和账号权限决定。可以在 `librechat.yaml` 中调整候选列表。
 
@@ -73,13 +73,13 @@ python3 mv3c/apply_branding.py --check
 docker compose -f docker-compose.mv3c.yml config --quiet
 ```
 
-上游版本固定在 [`.mv3c-upstream-imported`](../.mv3c-upstream-imported) 指定的提交。更新上游时应在新分支审查变更、重新执行 `mv3c/apply_branding.py` 和测试，**不要自动把上游 main 覆盖到 mv3c 的 main**。
+上游版本固定在 [`.mv3c-upstream-imported`](.mv3c-upstream-imported) 指定的提交。更新上游时应在新分支审查变更、重新执行 `mv3c/apply_branding.py` 和测试，**不要自动把上游 main 覆盖到 mv3c 的 main**。
 
 源码的部分内部包名、环境变量和协议仍保留 `LibreChat`/`@librechat/*`，这是为了兼容原有模块，不代表用户端仍以 LibreChat 为品牌。管理后台商业镜像不包含在本部署中。
 
 ## 5. 开源来源与许可证
 
-本项目基于 **LibreChat**，原作者及版权归属见 [LICENSE](../LICENSE) 和 [mv3c/UPSTREAM_README.md](UPSTREAM_README.md)。原有 MIT 许可证及版权声明完整保留。mv3c 的名称、配置、图标及与 chat2api 的集成属于本仓库的定制内容。
+本项目基于 **LibreChat**，原作者及版权归属见 [LICENSE](LICENSE) 和 [mv3c/UPSTREAM_README.md](UPSTREAM_README.md)。原有 MIT 许可证及版权声明完整保留。mv3c 的名称、配置、图标及与 chat2api 的集成属于本仓库的定制内容。
 
 上游仓库：https://github.com/LibreChat-AI/LibreChat  
 生成后端：https://github.com/b8vipvip/chat2api
