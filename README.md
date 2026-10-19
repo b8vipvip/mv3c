@@ -79,7 +79,7 @@ docker compose -f docker-compose.mv3c.yml config --quiet
 
 ## 5. 开源来源与许可证
 
-本项目基于 **LibreChat**，原作者及版权归属见 [LICENSE](LICENSE) 和 [mv3c/UPSTREAM_README.md](UPSTREAM_README.md)。原有 MIT 许可证及版权声明完整保留。mv3c 的名称、配置、图标及与 chat2api 的集成属于本仓库的定制内容。
+本项目基于 **LibreChat**，原作者及版权归属见 [LICENSE](LICENSE) 和 [mv3c/UPSTREAM_README.md](mv3c/UPSTREAM_README.md)。原有 MIT 许可证及版权声明完整保留。mv3c 的名称、配置、图标及与 chat2api 的集成属于本仓库的定制内容。
 
 上游仓库：https://github.com/LibreChat-AI/LibreChat  
 生成后端：https://github.com/b8vipvip/chat2api
