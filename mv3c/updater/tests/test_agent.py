@@ -53,6 +53,37 @@ class HostUpdaterTests(unittest.TestCase):
             "checkRequestedAt": now, "config": {"intervalMinutes": 60},
         }))
 
+    def test_host_git_commands_enforce_noninteractive_ssh(self):
+        with patch.object(agent, "run", return_value="ok") as run:
+            self.assertEqual(agent.git(pathlib.Path("/tmp"), "fetch", "origin", "main"), "ok")
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], ["git", "fetch", "origin", "main"])
+        self.assertEqual(kwargs["env"]["GIT_SSH_COMMAND"], agent.SSH_COMMAND)
+        self.assertEqual(kwargs["env"]["GIT_TERMINAL_PROMPT"], "0")
+        self.assertIn("StrictHostKeyChecking=yes", agent.SSH_COMMAND)
+        self.assertIn("BatchMode=yes", agent.SSH_COMMAND)
+
+    def test_ssh_only_origin_validation(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            (repo / ".git").mkdir()
+            (repo / "docker-compose.yml").touch()
+            with patch.object(agent, "git", side_effect=[
+                "https://github.com/b8vipvip/mv3c.git", agent.SSH_ORIGIN,
+            ]):
+                with self.assertRaisesRegex(agent.UpdateError, "SSH"):
+                    agent.verify_repo(repo)
+            with patch.object(agent, "git", side_effect=[
+                agent.SSH_ORIGIN, "https://github.com/b8vipvip/mv3c.git",
+            ]):
+                with self.assertRaisesRegex(agent.UpdateError, "SSH"):
+                    agent.verify_repo(repo)
+            with patch.object(agent, "git", side_effect=[
+                agent.SSH_ORIGIN, agent.SSH_ORIGIN, "main", "", SHA1,
+            ]):
+                self.assertEqual(agent.verify_repo(repo), SHA1)
+
     def test_main_target_uses_only_pinned_origin(self):
         with patch.object(agent, "git", side_effect=[
             "", SHA2,
