@@ -25,6 +25,8 @@ API = "https://api.github.com/repos/" + REPO
 SHA = re.compile(r"^[a-f0-9]{40}$")
 TAG = re.compile(r"^v?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?$")
 SSH_ORIGIN = "git@github.com:b8vipvip/mv3c.git"
+HTTPS_ORIGIN = "https://github.com/b8vipvip/mv3c.git"
+TRUSTED_ORIGINS = {SSH_ORIGIN, HTTPS_ORIGIN, "https://github.com/b8vipvip/mv3c"}
 SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
 CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
 USER_AGENT = "mv3c-updater/1.0"
@@ -59,6 +61,35 @@ def git(repo: Path, *args: str, timeout: int = 120) -> str:
     env["GIT_SSH_COMMAND"] = SSH_COMMAND
     env["GIT_TERMINAL_PROMPT"] = "0"
     return run(["git", *args], repo, timeout=timeout, env=env)
+
+
+def fetch_from_origin(repo: Path, origin: str, *refspec: str) -> None:
+    """Fetch into origin's tracking refs from a pinned, explicitly selected URL."""
+    if origin not in (SSH_ORIGIN, HTTPS_ORIGIN):
+        raise UpdateError("Untrusted GitHub source")
+    override = "remote.origin.url=" + origin
+    # Reject global/local insteadOf rewrites that could redirect a trusted URL.
+    effective = git(repo, "-c", override, "remote", "get-url", "origin")
+    if effective != origin:
+        raise UpdateError("Git URL rewrite prevents the expected transport")
+    git(repo, "-c", override, "fetch", "--quiet", "--prune",
+        "origin", *refspec, timeout=120)
+
+
+def fetch_prefer_ssh(repo: Path, *refspec: str) -> str:
+    """Use SSH first for every update, retry HTTPS only when SSH fetch fails."""
+    try:
+        fetch_from_origin(repo, SSH_ORIGIN, *refspec)
+        return "SSH"
+    except UpdateError as ssh_error:
+        try:
+            fetch_from_origin(repo, HTTPS_ORIGIN, *refspec)
+            return "HTTPS 回退"
+        except UpdateError as https_error:
+            raise UpdateError(
+                "SSH 与 HTTPS 拉取均失败。SSH: " + str(ssh_error)[:600]
+                + "; HTTPS: " + str(https_error)[:600]
+            ) from https_error
 
 
 def bridge(repo: Path, command: str, data: dict | None = None) -> object:
@@ -122,10 +153,10 @@ def verify_repo(repo: Path) -> str:
         raise UpdateError("Expected a Git checkout with mv3c docker-compose.yml")
     raw_origin = git(repo, "config", "--local", "--get", "remote.origin.url")
     effective_origin = git(repo, "remote", "get-url", "origin")
-    if raw_origin != SSH_ORIGIN or effective_origin != SSH_ORIGIN:
+    if raw_origin not in TRUSTED_ORIGINS or effective_origin not in TRUSTED_ORIGINS:
         raise UpdateError(
-            "mv3c 自动更新只允许 GitHub SSH: " + SSH_ORIGIN
-            + "。请检查 git remote 和 URL rewrite 配置；不允许 HTTPS 回退。"
+            "mv3c 只允许固定的 GitHub SSH/HTTPS 仓库，"
+            "请检查 origin 与 Git URL rewrite 配置。"
         )
     branch = git(repo, "symbolic-ref", "--short", "HEAD")
     if branch != "main":
@@ -146,18 +177,18 @@ def is_descendant(repo: Path, previous: str, target: str) -> bool:
 def target_for_channel(repo: Path, channel: str) -> tuple[str, str]:
     if channel not in ("main", "release"):
         raise UpdateError("Unsupported update channel")
-    git(repo, "fetch", "--quiet", "--prune", "origin", "main", timeout=120)
+    transport = fetch_prefer_ssh(repo, "main")
     if channel == "main":
         sha = git(repo, "rev-parse", "refs/remotes/origin/main")
-        label = "main · " + sha[:12]
+        label = "main · " + sha[:12] + " · " + transport
     else:
         release = json_from_github(API + "/releases/latest")
         tag = release.get("tag_name", "")
         if not isinstance(tag, str) or not TAG.fullmatch(tag):
             raise UpdateError("GitHub release has an unsupported version tag")
-        git(repo, "fetch", "--quiet", "origin", "tag", tag, timeout=120)
+        tag_transport = fetch_prefer_ssh(repo, "tag", tag)
         sha = git(repo, "rev-list", "-n", "1", "refs/tags/" + tag)
-        label = tag
+        label = tag + " · " + tag_transport
     if not SHA.fullmatch(sha):
         raise UpdateError("Invalid Git commit from remote")
     return sha, label
