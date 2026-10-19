@@ -28,6 +28,8 @@ endpoints:
       modelDisplayLabel: mv3c
       # Critical: chat2api defaults to last_user, which would discard prior turns.
       addParams:
+        # chat2api supports /v1/chat/completions, not OpenAI /v1/responses.
+        useResponsesApi: false
         prompt_mode: full
       # Hide OpenAI-specific controls that are not guaranteed to work in chat2api.
       dropParams:
