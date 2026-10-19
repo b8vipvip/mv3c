@@ -517,7 +517,7 @@ export default function Mv3cAdmin() {
                       <label className="block space-y-2">
                         <span className="block text-sm font-medium">更新通道</span>
                         <select className={fieldClass} value={updateConfig.channel}
-                          onChange={(e) => setUpdateConfig((c) => ({
+                          onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, channel: e.target.value as 'main' | 'release',
                           })); }}>
                           <option value="main">main 分支（最新通过 CI 的提交）</option>
@@ -527,7 +527,7 @@ export default function Mv3cAdmin() {
                       <label className="block space-y-2">
                         <span className="block text-sm font-medium">自动检查间隔</span>
                         <select className={fieldClass} value={updateConfig.intervalMinutes}
-                          onChange={(e) => setUpdateConfig((c) => ({
+                          onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, intervalMinutes: Number(e.target.value),
                           })); }}>
                           {[5, 10, 15, 30, 60].map((n) => (
