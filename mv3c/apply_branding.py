@@ -107,6 +107,7 @@ def apply(root: Path) -> None:
         ("../librechat.yaml", "librechat.yaml"),
         ("../.mv3c-upstream-imported", ".mv3c-upstream-imported"),
         ("../LICENSE", "LICENSE"),
+        ("(UPSTREAM_README.md)", "(mv3c/UPSTREAM_README.md)"),
     ):
         root_docs = root_docs.replace(nested, root_link)
     readme.write_text(root_docs, encoding="utf-8")
