@@ -16,7 +16,7 @@
 git clone https://github.com/b8vipvip/mv3c.git
 cd mv3c
 
-# chat2api 必须已有可用的 API Key。运行时会交互式隐藏输入 Key。
+# chat2api 必须已有可用的 API Key，且 Key 必须同时具有 `models` 和 `chat` 权限范围。运行时会交互式隐藏输入 Key。
 python3 mv3c/setup.py \
   --base-url 'https://你的-chat2api-域名/v1' \
   --domain 'https://你的-mv3c-域名'
