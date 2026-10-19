@@ -1,11 +1,6 @@
-const path = require('path');
-const { loadYaml, redactConfigSecretMaps, createCustomConfigLoader } = require('@librechat/api');
-
-const projectRoot = path.resolve(__dirname, '..', '..', '..', '..');
-const defaultConfigPath = path.resolve(projectRoot, 'librechat.yaml');
-
-module.exports = createCustomConfigLoader({
-  loadLocal: loadYaml,
-  defaultConfigPath,
-  redactConfig: redactConfigSecretMaps,
-});
+// mv3c uses one authoritative MongoDB-backed configuration source.
+// The legacy librechat.yaml file is not loaded at runtime.
+const { buildRuntimeConfig } = require('./mv3cSettings');
+module.exports = async function loadCustomConfig() {
+  return buildRuntimeConfig();
+};
