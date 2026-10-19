@@ -1,0 +1,67 @@
+name: Import LibreChat into mv3c
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap-mv3c.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mv3c-source-import
+  cancel-in-progress: false
+
+jobs:
+  import-source:
+    if: github.repository == 'b8vipvip/mv3c'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UPSTREAM_SHA: e081b566a42d3a83b8102157bd7806cf4ff63b17
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check whether source is already imported
+        id: state
+        run: |
+          if test -f .mv3c-upstream-imported; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+            echo "Source already imported. Refusing to overwrite user modifications."
+          else
+            echo "required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import pinned LibreChat source, apply mv3c changes, and validate
+        if: steps.state.outputs.required == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/LibreChat-AI/LibreChat.git "$RUNNER_TEMP/librechat-upstream"
+          git -C "$RUNNER_TEMP/librechat-upstream" fetch --depth 1 origin "$UPSTREAM_SHA"
+          git -C "$RUNNER_TEMP/librechat-upstream" checkout --detach "$UPSTREAM_SHA"
+          test "$(git -C "$RUNNER_TEMP/librechat-upstream" rev-parse HEAD)" = "$UPSTREAM_SHA"
+
+          # Do not copy upstream CI/workflows; preserve mv3c's own trusted workflows.
+          git -C "$RUNNER_TEMP/librechat-upstream" archive HEAD | \
+            tar -xf - -C "$GITHUB_WORKSPACE" --exclude='.github/workflows/*'
+
+          python3 mv3c/apply_branding.py --root .
+          python3 mv3c/apply_branding.py --root . --check
+          python3 -m unittest discover -s mv3c/tests -v
+
+          cp .env.mv3c.example .env
+          docker compose -f docker-compose.mv3c.yml config --quiet
+          rm -f .env
+
+          printf '%s\n' "$UPSTREAM_SHA" > .mv3c-upstream-imported
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: import LibreChat source and integrate chat2api as mv3c'
+          git push origin HEAD:main
