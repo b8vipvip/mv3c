@@ -80,5 +80,5 @@ async function syncModels(actor) {
 
 module.exports = {
   readSettings, countRegisteredUsers, getPublicSettings, getSiteSettings,
-  buildRuntimeConfig, saveSettings, fetchModelsFromChat2api, syncModels,
+  buildRuntimeConfig, saveSettings, fetchModelsFromChat2api, syncModels, writeAudit,
 };
