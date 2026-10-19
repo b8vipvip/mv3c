@@ -1,5 +1,6 @@
 'use strict';
 const express = require('express');
+const mongoose = require('mongoose');
 const { SystemCapabilities, logger } = require('@librechat/data-schemas');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 const { requireJwtAuth } = require('~/server/middleware');
@@ -65,6 +66,21 @@ router.post('/models/sync', async (req, res) => {
     return failure(res, error);
   }
 });
+router.get('/audit', async (req, res) => {
+  try {
+    const rows = await mongoose.connection.db.collection('mv3c_settings_audit')
+      .find({}, { projection: { actor: 1, changedFields: 1, at: 1 } })
+      .sort({ at: -1 }).limit(100).toArray();
+    return res.json({ events: rows.map((row) => ({
+      id: String(row._id),
+      actor: row.actor,
+      changedFields: row.changedFields,
+      at: row.at,
+    })) });
+  } catch (error) {
+    return failure(res, error);
+  }
+});
 router.get('/users', async (req, res) => {
   try {
     const [users, total] = await Promise.all([
@@ -99,7 +115,7 @@ router.patch('/users/:id/role', async (req, res) => {
     }
     const user = await updateUser(id, { role }, {});
     if (!user) return res.status(404).json({ error: 'User not found' });
-    await settings.writeAudit?.(actorId(req), ['users.role']);
+    await settings.writeAudit(actorId(req), ['users.role']);
     return res.json({ id, role: user.role });
   } catch (error) {
     return failure(res, error);
