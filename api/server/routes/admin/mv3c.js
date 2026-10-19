@@ -7,6 +7,7 @@ const { requireJwtAuth } = require('~/server/middleware');
 const { findUsers, updateUser, countUsers } = require('~/models');
 const { invalidateConfigCaches } = require('~/server/services/Config/app');
 const settings = require('~/server/services/Config/mv3cSettings');
+const updater = require('~/server/services/Config/mv3cUpdater');
 
 const router = express.Router();
 // Require a JWT bearer header even when another authentication strategy is configured.
@@ -20,6 +21,7 @@ router.use((req, res, next) => {
 router.use(requireJwtAuth, requireCapability(SystemCapabilities.ACCESS_ADMIN));
 
 function failure(res, error) {
+  if (error?.status === 409) return res.status(409).json({ error: error.message });
   if (error instanceof TypeError || error instanceof SyntaxError) {
     return res.status(400).json({ error: error.message });
   }
@@ -83,6 +85,38 @@ router.get('/audit', async (req, res) => {
       changedFields: row.changedFields,
       at: row.at,
     })) });
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.get('/updates', async (req, res) => {
+  try {
+    return res.json(await updater.getState());
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.put('/updates/settings', async (req, res) => {
+  try {
+    const result = await updater.saveConfig(req.body, actorId(req));
+    await settings.writeAudit(actorId(req), ['updates.settings']);
+    return res.json(result);
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.post('/updates/check', async (req, res) => {
+  try {
+    return res.json(await updater.requestCheck(actorId(req)));
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.post('/updates/deploy', async (req, res) => {
+  try {
+    const result = await updater.queueJob(actorId(req), 'manual');
+    await settings.writeAudit(actorId(req), ['updates.manual_deploy']);
+    return res.status(202).json(result);
   } catch (error) {
     return failure(res, error);
   }
