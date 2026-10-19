@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const DEFAULT_SITE = Object.freeze({
   title: 'mv3c',
   welcome: '欢迎使用 mv3c',
+  publicUrl: '',
   registrationEnabled: false,
 });
 const DEFAULT_PROVIDER = Object.freeze({
@@ -60,6 +61,21 @@ function validatePatch(body) {
           throw new TypeError(name + ' must be a nonempty string up to ' + max + ' characters');
         }
         site[name] = value.trim();
+      } else if (name === 'publicUrl') {
+        if (typeof value !== 'string' || value.length > 2048) {
+          throw new TypeError('publicUrl must be a string');
+        }
+        if (value) {
+          const url = new URL(value);
+          if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password ||
+              url.search || url.hash || url.pathname !== '/' ||
+              (url.protocol === 'http:' && !['localhost', '127.0.0.1'].includes(url.hostname))) {
+            throw new TypeError('publicUrl must be an HTTPS origin (or local HTTP origin)');
+          }
+          site.publicUrl = url.origin;
+        } else {
+          site.publicUrl = '';
+        }
       } else if (name === 'registrationEnabled') {
         if (typeof value !== 'boolean') throw new TypeError(name + ' must be boolean');
         site[name] = value;
