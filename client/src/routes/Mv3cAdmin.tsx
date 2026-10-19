@@ -5,6 +5,7 @@ import { useAuthContext } from '~/hooks';
 type SiteSettings = {
   title: string;
   welcome: string;
+  publicUrl: string;
   registrationEnabled: boolean;
 };
 type ProviderSettings = {
@@ -60,7 +61,7 @@ export default function Mv3cAdmin() {
   const [tab, setTab] = useState<'provider' | 'site' | 'users'>('provider');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [site, setSite] = useState<SiteSettings>({
-    title: 'mv3c', welcome: '欢迎使用 mv3c', registrationEnabled: false,
+    title: 'mv3c', welcome: '欢迎使用 mv3c', publicUrl: '', registrationEnabled: false,
   });
   const [provider, setProvider] = useState<ProviderSettings>({
     enabled: true, baseURL: '', models: [], fetchModels: true,
@@ -335,6 +336,12 @@ export default function Mv3cAdmin() {
                   <span className="block text-sm font-medium">聊天欢迎语</span>
                   <input className={fieldClass} value={site.welcome}
                     onChange={(e) => setSite((s) => ({ ...s, welcome: e.target.value }))} />
+                </label>
+                <label className="block space-y-2">
+                  <span className="block text-sm font-medium">网站公网地址（HTTPS）</span>
+                  <input className={fieldClass} value={site.publicUrl}
+                    placeholder="https://chat.example.com"
+                    onChange={(e) => setSite((s) => ({ ...s, publicUrl: e.target.value }))} />
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={site.registrationEnabled}
