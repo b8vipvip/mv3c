@@ -1,0 +1,29 @@
+name: mv3c validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run mv3c regression tests
+        run: python3 -m unittest discover -s mv3c/tests -v
+      - name: Validate compose and endpoint configuration
+        run: |
+          cp .env.mv3c.example .env
+          docker compose -f docker-compose.mv3c.yml config --quiet
+      - name: Verify imported source branding
+        run: |
+          if [ -f client/index.html ]; then
+            python3 mv3c/apply_branding.py --check
+          else
+            echo "Source import pending; bootstrap workflow will add it."
+          fi
