@@ -63,6 +63,7 @@ async function fetchModelsFromChat2api() {
   const response = await fetch(config.baseURL + '/models', {
     headers: { Authorization: 'Bearer ' + apiKey, Accept: 'application/json' },
     signal: AbortSignal.timeout(10000),
+    redirect: 'error', // Never forward the API Key through an upstream redirect.
   });
   if (!response.ok) throw new Error('chat2api /models returned HTTP ' + response.status);
   const json = await response.json();
