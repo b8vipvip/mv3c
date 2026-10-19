@@ -36,6 +36,7 @@ const { hasCapability, hasConfigCapability } = require('~/server/middleware/role
 const { getLdapConfig } = require('~/server/services/Config/ldap');
 const { getRumConfig } = require('~/server/services/Config/rum');
 const { getAppConfig } = require('~/server/services/Config/app');
+const { getSiteSettings } = require('~/server/services/Config/mv3cSettings');
 
 const router = express.Router();
 const emailLoginEnabled =
@@ -70,7 +71,8 @@ function isBirthday() {
  *
  * See client consumers under `client/src/components/Auth/` and `client/src/routes/Layouts/Startup.tsx`.
  */
-function buildPreLoginPayload() {
+async function buildPreLoginPayload() {
+  const site = await getSiteSettings();
   const isOpenIdEnabled =
     !!process.env.OPENID_CLIENT_ID &&
     (isEnabled(process.env.OPENID_USE_PKCE) || !!process.env.OPENID_CLIENT_SECRET?.trim()) &&
@@ -87,7 +89,7 @@ function buildPreLoginPayload() {
 
   /** @type {Partial<TStartupConfig>} */
   const payload = {
-    appTitle: process.env.APP_TITLE || 'LibreChat',
+    appTitle: site.title,
     discordLoginEnabled: !!process.env.DISCORD_CLIENT_ID && !!process.env.DISCORD_CLIENT_SECRET,
     facebookLoginEnabled: !!process.env.FACEBOOK_CLIENT_ID && !!process.env.FACEBOOK_CLIENT_SECRET,
     githubLoginEnabled: !!process.env.GITHUB_CLIENT_ID && !!process.env.GITHUB_CLIENT_SECRET,
@@ -105,9 +107,9 @@ function buildPreLoginPayload() {
     samlLoginEnabled: !isOpenIdEnabled && isSamlEnabled,
     samlLabel: process.env.SAML_BUTTON_LABEL,
     samlImageUrl: process.env.SAML_IMAGE_URL,
-    serverDomain: process.env.DOMAIN_SERVER || 'http://localhost:3080',
+    serverDomain: site.publicUrl || 'http://localhost:3080',
     emailLoginEnabled,
-    registrationEnabled: !ldap?.enabled && isEnabled(process.env.ALLOW_REGISTRATION),
+    registrationEnabled: !ldap?.enabled && site.registrationEnabled,
     socialLoginEnabled: isEnabled(process.env.ALLOW_SOCIAL_LOGIN),
     emailEnabled: checkEmailConfig(),
     passwordResetEnabled,
@@ -227,7 +229,7 @@ function buildCloudFrontStartupConfig() {
 
 router.get('/', async function (req, res) {
   try {
-    const preLoginPayload = buildPreLoginPayload();
+    const preLoginPayload = await buildPreLoginPayload();
     const publicSharePayload = buildPublicSharePayload();
     const rum = getRumConfig();
 
@@ -364,7 +366,7 @@ router.get('/', async function (req, res) {
       payload.buildInfo = buildInfo;
     }
 
-    const adminPanelURL = process.env.ADMIN_PANEL_URL;
+    const adminPanelURL = '/admin';
     if (adminPanelURL || !payload.allowAccountDeletion) {
       try {
         const userId = req.user.id ?? req.user._id?.toString();

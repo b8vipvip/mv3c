@@ -53,12 +53,8 @@ const {
 } = require('~/models');
 const { registerSchema } = require('~/strategies/validators');
 const { getAppConfig } = require('~/server/services/Config');
+const { getSiteSettings } = require('~/server/services/Config/mv3cSettings');
 const { sendEmail } = require('~/server/utils');
-
-const domains = {
-  client: process.env.DOMAIN_CLIENT,
-  server: process.env.DOMAIN_SERVER,
-};
 
 const AuthTokenTypes = Object.freeze({
   EMAIL_VERIFICATION: 'email_verification',
@@ -273,13 +269,13 @@ const sendVerificationEmail = async (user) => {
   const email = user.email.toLowerCase();
 
   const verificationLink = `${
-    domains.client
+    (await getSiteSettings()).publicUrl
   }/verify?token=${verifyToken}&email=${encodeURIComponent(email)}`;
   await sendEmail({
     email,
     subject: 'Verify your email',
     payload: {
-      appName: process.env.APP_TITLE || 'LibreChat',
+      appName: (await getSiteSettings()).title,
       name: user.name || user.username || email,
       verificationLink: verificationLink,
       year: new Date().getFullYear(),
@@ -541,14 +537,14 @@ const requestPasswordReset = async (req) => {
     expiresIn: 900,
   });
 
-  const link = `${domains.client}/reset-password?token=${resetToken}&userId=${user._id}`;
+  const link = `${(await getSiteSettings()).publicUrl}/reset-password?token=${resetToken}&userId=${user._id}`;
 
   if (emailEnabled) {
     await sendEmail({
       email: user.email,
       subject: 'Password Reset Request',
       payload: {
-        appName: process.env.APP_TITLE || 'LibreChat',
+        appName: (await getSiteSettings()).title,
         name: user.name || user.username || user.email,
         link: link,
         year: new Date().getFullYear(),
@@ -598,7 +594,7 @@ const resetPassword = async (userId, token, password) => {
       email: user.email,
       subject: 'Password Reset Successfully',
       payload: {
-        appName: process.env.APP_TITLE || 'LibreChat',
+        appName: (await getSiteSettings()).title,
         name: user.name || user.username || user.email,
         year: new Date().getFullYear(),
       },
@@ -975,14 +971,14 @@ const resendVerificationEmail = async (req) => {
     const [verifyToken, hash] = createTokenHash();
 
     const verificationLink = `${
-      domains.client
+      (await getSiteSettings()).publicUrl
     }/verify?token=${verifyToken}&email=${encodeURIComponent(user.email)}`;
 
     await sendEmail({
       email: user.email,
       subject: 'Verify your email',
       payload: {
-        appName: process.env.APP_TITLE || 'LibreChat',
+        appName: (await getSiteSettings()).title,
         name: user.name || user.username || user.email,
         verificationLink: verificationLink,
         year: new Date().getFullYear(),

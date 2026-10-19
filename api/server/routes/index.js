@@ -3,6 +3,7 @@ const assistants = require('./assistants');
 const categories = require('./categories');
 const adminAuth = require('./admin/auth');
 const adminConfig = require('./admin/config');
+const mv3cAdmin = require('./admin/mv3c');
 const adminCodeEnvironments = require('./admin/code');
 const codeEnvironments = require('./code-environments');
 const adminLangfuse = require('./admin/langfuse');
@@ -53,6 +54,7 @@ module.exports = {
   auth,
   adminAuth,
   adminConfig,
+  mv3cAdmin,
   adminCodeEnvironments,
   codeEnvironments,
   adminLangfuse,
