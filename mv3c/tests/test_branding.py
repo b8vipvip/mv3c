@@ -33,15 +33,16 @@ class BrandingTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 brand.replace_literal(root, "sample.txt", "LibreChat", "mv3c")
 
-    def test_compose_and_endpoint_contract(self):
-        yaml = (ROOT.parent / "librechat.yaml").read_text(encoding="utf-8")
-        self.assertIn("prompt_mode: full", yaml)
-        self.assertIn("useResponsesApi: false", yaml)
-        self.assertIn("fetch: true", yaml)
-        self.assertIn("titleConvo: false", yaml)
-        self.assertIn("${CHAT2API_API_KEY}", yaml)
-        self.assertIn("${CHAT2API_BASE_URL}", yaml)
-        self.assertIn("name: chat2api", yaml)
+    def test_database_managed_endpoint_contract(self):
+        core = (ROOT.parent / "mv3c/settingsCore.cjs").read_text(encoding="utf-8")
+        self.assertIn("prompt_mode: 'full'", core)
+        self.assertIn("useResponsesApi: false", core)
+        self.assertIn("fetch: provider.fetchModels", core)
+        self.assertIn("titleConvo: false", core)
+        self.assertIn("decryptSecret(doc.chat2api.apiKeyCipher", core)
+        compose = (ROOT.parent / "docker-compose.mv3c.yml").read_text(encoding="utf-8")
+        self.assertNotIn("env_file:", compose)
+        self.assertIn("mv3c/entrypoint.sh", compose)
 
 if __name__ == "__main__":
     unittest.main()
