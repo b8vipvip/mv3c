@@ -293,6 +293,10 @@ def execute(repo: Path) -> None:
         return
 
     if not pending and state["config"]["autoEnabled"]:
+        if target == state.get("blockedSha"):
+            report(repo, status="blocked",
+                   lastError="此提交上次部署失败，已暂停自动重试；可手动重试或等待新的 GitHub 提交")
+            return
         bridge(repo, "queue-auto")
     job = bridge(repo, "claim")
     if not job:
@@ -302,6 +306,7 @@ def execute(repo: Path) -> None:
     bridge(repo, "complete", {
         "jobId": job["id"], "outcome": outcome, "log": log, "error": error,
         "sha": target if outcome == "success" else old,
+        "attemptedSha": target,
     })
     print("mv3c update:", outcome, flush=True)
 
