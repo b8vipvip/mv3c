@@ -51,6 +51,38 @@ jobs:
           fi
           curl --silent --fail http://127.0.0.1:3080/api/config > /tmp/mv3c-startup.json
           node -e "const x=require('/tmp/mv3c-startup.json'); if(x.appTitle!=='mv3c'||x.registrationEnabled!==true) process.exit(1); console.log('env-free startup and first-user registration are ready')"
+      - name: Exercise first admin login and persisted provider configuration
+        timeout-minutes: 3
+        run: |
+          curl --silent --show-error --fail -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"Smoke Admin","email":"smoke@example.test","password":"SmokePassword123!","confirm_password":"SmokePassword123!"}' \
+            http://127.0.0.1:3080/api/auth/register > /tmp/mv3c-register.json
+          curl --silent --show-error --fail -X POST \
+            -H 'Content-Type: application/json' \
+            -H 'Origin: http://127.0.0.1:3080' \
+            -d '{"email":"smoke@example.test","password":"SmokePassword123!"}' \
+            http://127.0.0.1:3080/api/auth/login > /tmp/mv3c-login.json
+          token=$(node -e "const x=require('/tmp/mv3c-login.json');if(!x.token)process.exit(1);process.stdout.write(x.token)")
+          curl --silent --show-error --fail -X PUT \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            -d '{"site":{"title":"mv3c CI","registrationEnabled":false},"chat2api":{"enabled":true,"baseURL":"https://example.com/v1","apiKey":"sk-ci-test","fetchModels":false,"models":["gpt-6-sol"]}}' \
+            http://127.0.0.1:3080/api/admin/mv3c > /tmp/mv3c-save.json
+          curl --silent --show-error --fail \
+            -H "Authorization: Bearer $token" \
+            http://127.0.0.1:3080/api/admin/mv3c > /tmp/mv3c-settings.json
+          curl --silent --show-error --fail \
+            http://127.0.0.1:3080/api/config > /tmp/mv3c-config-after.json
+          node -e "
+            const fs=require('fs');
+            const saved=JSON.parse(fs.readFileSync('/tmp/mv3c-settings.json'));
+            const config=JSON.parse(fs.readFileSync('/tmp/mv3c-config-after.json'));
+            if(!saved.chat2api.apiKeyConfigured || saved.chat2api.baseURL!=='https://example.com/v1')process.exit(1);
+            if(JSON.stringify(saved).includes('sk-ci-test'))process.exit(1);
+            if(config.appTitle!=='mv3c CI' || config.registrationEnabled!==false)process.exit(1);
+            console.log('Admin API, encrypted provider config and live site changes OK');
+          "
       - name: Dump runtime logs on failure
         if: failure()
         run: docker compose -f docker-compose.mv3c.yml logs --tail=250
