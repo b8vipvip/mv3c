@@ -30,6 +30,34 @@ type ManagedUser = {
 };
 type UsersResponse = { total: number; users: ManagedUser[] };
 type AuditEvent = { id: string; actor: string; changedFields: string[]; at: string };
+type UpdateConfig = { autoEnabled: boolean; channel: 'main' | 'release'; intervalMinutes: number };
+type UpdateJob = { id: string; mode: string; requestedAt: string; requestedBy: string };
+type UpdateHistory = { jobId: string; outcome: string; sha: string; error: string; finishedAt: string };
+type UpdateState = {
+  config: UpdateConfig;
+  agentOnline: boolean;
+  status: string;
+  currentSha: string;
+  latestSha: string;
+  latestLabel: string;
+  latestUrl: string;
+  updateAvailable: boolean;
+  checkedAt: string | null;
+  agentHeartbeat: string | null;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string;
+  lastLog: string;
+  lastOutcome: string;
+  pendingJob: UpdateJob | null;
+  activeJob: UpdateJob | null;
+  history: UpdateHistory[];
+};
+const updateStatusLabel: Record<string, string> = {
+  idle: '空闲', checking: '正在检查', queued: '等待执行',
+  updating: '正在更新部署', blocked: '等待 CI 通过',
+  success: '更新成功', failed: '更新失败', rolled_back: '已回滚上一版本',
+};
 
 async function adminRequest<T>(token: string, path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch('/api/admin/mv3c' + path, {
@@ -59,7 +87,7 @@ const subtleButton =
 
 export default function Mv3cAdmin() {
   const { token, isAuthenticated, user } = useAuthContext();
-  const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit'>('provider');
+  const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit' | 'updates'>('provider');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [site, setSite] = useState<SiteSettings>({
     title: 'mv3c', welcome: '欢迎使用 mv3c', publicUrl: '', registrationEnabled: false,
@@ -72,6 +100,10 @@ export default function Mv3cAdmin() {
   const [modelsText, setModelsText] = useState('');
   const [users, setUsers] = useState<UsersResponse | null>(null);
   const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [updates, setUpdates] = useState<UpdateState | null>(null);
+  const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
+    autoEnabled: true, channel: 'main', intervalMinutes: 10,
+  });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -124,6 +156,24 @@ export default function Mv3cAdmin() {
         .catch((err) => setError(err instanceof Error ? err.message : '审计记录加载失败'));
     }
   }, [token, tab]);
+
+  const loadUpdates = useCallback(async () => {
+    if (!token) return;
+    try {
+      const result = await adminRequest<UpdateState>(token, '/updates');
+      setUpdates(result);
+      setUpdateConfig((current) => current && result ? result.config : current);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新状态加载失败');
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || tab !== 'updates') return;
+    void loadUpdates();
+    const interval = window.setInterval(() => { void loadUpdates(); }, 8000);
+    return () => window.clearInterval(interval);
+  }, [token, tab, loadUpdates]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -184,6 +234,33 @@ export default function Mv3cAdmin() {
     setMessage('模型已同步并保存：' + data.syncedModels.length + ' 个。');
   });
 
+  const saveUpdateSettings = () => run(async () => {
+    if (!token) return;
+    const result = await adminRequest<UpdateState>(token, '/updates/settings', {
+      method: 'PUT', body: JSON.stringify(updateConfig),
+    });
+    setUpdates(result);
+    setUpdateConfig(result.config);
+    setMessage('版本更新策略已保存。自动检查由宿主机更新服务执行。');
+  });
+
+  const requestUpdateCheck = () => run(async () => {
+    if (!token) return;
+    await adminRequest<UpdateState>(token, '/updates/check', { method: 'POST' });
+    await loadUpdates();
+    setMessage('已请求检查 GitHub，新结果将在宿主机更新服务下一次运行后显示。');
+  });
+
+  const requestDeployment = () => {
+    if (!window.confirm('确定要执行更新吗？将先检查 GitHub CI，然后构建新镜像并重启 mv3c，期间服务可能短暂不可用。')) return;
+    void run(async () => {
+      if (!token) return;
+      await adminRequest(token, '/updates/deploy', { method: 'POST' });
+      await loadUpdates();
+      setMessage('已加入更新队列。宿主机更新服务将在约 1 分钟内开始处理。');
+    });
+  };
+
   const changeRole = (id: string, role: string) => run(async () => {
     if (!token) return;
     await adminRequest(token, '/users/' + encodeURIComponent(id) + '/role', {
@@ -240,6 +317,7 @@ export default function Mv3cAdmin() {
                 ['site', '站点与注册设置'],
                 ['users', '用户管理'],
                 ['audit', '操作审计'],
+                ['updates', '版本更新'],
               ] as const).map(([key, label]) => (
                 <button
                   key={key}
@@ -367,6 +445,144 @@ export default function Mv3cAdmin() {
                 <button className={buttonClass} disabled={busy} onClick={() => void saveSite()}>
                   保存站点设置
                 </button>
+              </section>
+            )}
+
+            {tab === 'updates' && (
+              <section className="space-y-6 rounded-xl border border-border-medium p-5">
+                <div>
+                  <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
+                  <p className="mt-1 text-sm text-text-secondary">
+                    来源：GitHub b8vipvip/mv3c。只部署 GitHub Actions 验证通过的提交。
+                  </p>
+                </div>
+                {!updates ? (
+                  <p>正在读取更新状态…</p>
+                ) : (
+                  <>
+                    {!updates.agentOnline && (
+                      <div role="alert" className="rounded-lg border border-amber-500 p-3 text-sm">
+                        宿主机更新服务未连接。需要在部署 mv3c 的服务器执行一次
+                        <code className="mx-1">sudo bash mv3c/updater/install.sh</code>
+                        才能自动检查和部署。网站容器不直接拥有 Docker 权限。
+                      </div>
+                    )}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="rounded-lg bg-surface-secondary p-4">
+                        <p className="text-xs text-text-secondary">当前已部署版本</p>
+                        <p className="mt-1 font-mono text-lg">
+                          {updates.currentSha ? updates.currentSha.slice(0, 12) : '等待更新服务上报'}
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-surface-secondary p-4">
+                        <p className="text-xs text-text-secondary">GitHub 最新版本</p>
+                        <p className="mt-1 font-mono text-lg">
+                          {updates.latestLabel || '尚未检查'}
+                        </p>
+                        {updates.latestUrl && (
+                          <a className="text-sm text-blue-500 underline"
+                            href={updates.latestUrl} target="_blank" rel="noopener noreferrer">
+                            查看 GitHub 提交
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      <p>更新服务：<strong>{updates.agentOnline ? '已连接' : '未连接'}</strong></p>
+                      <p>状态：<strong>{updateStatusLabel[updates.status] || updates.status}</strong></p>
+                      <p>新版本：<strong>{updates.updateAvailable ? '已发现' : '暂无或尚未检查'}</strong></p>
+                      <p>上次检查：{updates.checkedAt
+                        ? new Date(updates.checkedAt).toLocaleString() : '尚未检查'}</p>
+                      <p>最近成功更新：{updates.lastSuccessAt
+                        ? new Date(updates.lastSuccessAt).toLocaleString() : '暂无'}</p>
+                      {updates.pendingJob && <p>排队任务：{updates.pendingJob.id}</p>}
+                      {updates.activeJob && <p>正在执行：{updates.activeJob.id}</p>}
+                    </div>
+                    {updates.lastError && (
+                      <div role="alert" className="rounded-lg border border-red-500 p-3 text-sm text-red-500">
+                        {updates.lastError}
+                      </div>
+                    )}
+                    <div className="space-y-4 border-t border-border-medium pt-5">
+                      <h3 className="font-semibold">自动更新策略</h3>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={updateConfig.autoEnabled}
+                          onChange={(e) => setUpdateConfig((c) => ({
+                            ...c, autoEnabled: e.target.checked,
+                          }))} />
+                        GitHub 有新版本且 CI 通过时自动构建并部署
+                      </label>
+                      <label className="block space-y-2">
+                        <span className="block text-sm font-medium">更新通道</span>
+                        <select className={fieldClass} value={updateConfig.channel}
+                          onChange={(e) => setUpdateConfig((c) => ({
+                            ...c, channel: e.target.value as 'main' | 'release',
+                          }))}>
+                          <option value="main">main 分支（最新通过 CI 的提交）</option>
+                          <option value="release">正式版（GitHub 最新 Release）</option>
+                        </select>
+                      </label>
+                      <label className="block space-y-2">
+                        <span className="block text-sm font-medium">自动检查间隔</span>
+                        <select className={fieldClass} value={updateConfig.intervalMinutes}
+                          onChange={(e) => setUpdateConfig((c) => ({
+                            ...c, intervalMinutes: Number(e.target.value),
+                          }))}>
+                          {[5, 10, 15, 30, 60].map((n) => (
+                            <option key={n} value={n}>每 {n} 分钟</option>
+                          ))}
+                        </select>
+                      </label>
+                      <button className={buttonClass} disabled={busy}
+                        onClick={() => void saveUpdateSettings()}>
+                        保存更新策略
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 border-t border-border-medium pt-5">
+                      <button className={subtleButton} disabled={busy}
+                        onClick={() => void requestUpdateCheck()}>
+                        立即检查 GitHub
+                      </button>
+                      <button className={buttonClass}
+                        disabled={busy || !updates.agentOnline ||
+                          Boolean(updates.pendingJob || updates.activeJob)}
+                        onClick={requestDeployment}>
+                        立即更新并部署
+                      </button>
+                      <button className={subtleButton} disabled={busy}
+                        onClick={() => void loadUpdates()}>
+                        刷新状态
+                      </button>
+                    </div>
+                    <p className="text-xs text-text-secondary">
+                      更新会保留 MongoDB 与持久化数据卷。部署失败时尝试回滚应用代码和镜像；
+                      数据库迁移不保证可逆，请另行备份数据库。
+                    </p>
+                    <div className="border-t border-border-medium pt-5">
+                      <h3 className="mb-3 font-semibold">最近更新记录</h3>
+                      {updates.history.length === 0 ? (
+                        <p className="text-sm text-text-secondary">暂无更新记录</p>
+                      ) : (
+                        <div className="space-y-2 text-sm">
+                          {updates.history.map((entry) => (
+                            <div key={entry.jobId} className="rounded-lg bg-surface-secondary p-3">
+                              <p>{new Date(entry.finishedAt).toLocaleString()} ·
+                                {' '}{entry.outcome} · {entry.sha?.slice(0, 12)}</p>
+                              {entry.error && <p className="text-red-500">{entry.error}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {updates.lastLog && (
+                        <details className="mt-4">
+                          <summary className="cursor-pointer text-sm">查看最近一次部署日志</summary>
+                          <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all
+                            rounded-lg bg-surface-secondary p-3 text-xs">{updates.lastLog}</pre>
+                        </details>
+                      )}
+                    </div>
+                  </>
+                )}
               </section>
             )}
 
