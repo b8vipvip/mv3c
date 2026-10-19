@@ -49,6 +49,7 @@ type UpdateState = {
   lastError: string;
   lastLog: string;
   lastOutcome: string;
+  blockedSha: string;
   pendingJob: UpdateJob | null;
   activeJob: UpdateJob | null;
   history: UpdateHistory[];
@@ -497,6 +498,9 @@ export default function Mv3cAdmin() {
                         ? new Date(updates.checkedAt).toLocaleString() : '尚未检查'}</p>
                       <p>最近成功更新：{updates.lastSuccessAt
                         ? new Date(updates.lastSuccessAt).toLocaleString() : '暂无'}</p>
+                      {updates.blockedSha && (
+                        <p className="text-amber-600">自动重试已暂停的提交：{updates.blockedSha.slice(0, 12)}</p>
+                      )}
                       {updates.pendingJob && <p>排队任务：{updates.pendingJob.id}</p>}
                       {updates.activeJob && <p>正在执行：{updates.activeJob.id}</p>}
                     </div>
