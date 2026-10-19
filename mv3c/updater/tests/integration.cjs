@@ -6,16 +6,38 @@ const updates = require('../../../api/server/services/Config/mv3cUpdater');
 
 async function main() {
   await mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 10000 });
-  const initial = await updates.getState();
-  assert.equal(initial.config.channel, 'main');
-  const configured = await updates.saveConfig({
-    autoEnabled: false, channel: 'main', intervalMinutes: 15,
-  }, 'ci-admin');
+  const api = 'http://127.0.0.1:3080/api/admin/mv3c/updates';
+  const unauthorized = await fetch(api);
+  assert.equal(unauthorized.status, 401);
+  const login = await fetch('http://127.0.0.1:3080/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'http://127.0.0.1:3080' },
+    body: JSON.stringify({ email: 'smoke@example.test', password: 'SmokePassword123!' }),
+  });
+  assert.equal(login.status, 200);
+  const auth = await login.json();
+  assert.ok(auth.token);
+  const headers = {
+    Authorization: 'Bearer ' + auth.token,
+    'Content-Type': 'application/json',
+  };
+  const initial = await fetch(api, { headers });
+  assert.equal(initial.status, 200);
+  const configResponse = await fetch(api + '/settings', {
+    method: 'PUT', headers,
+    body: JSON.stringify({ autoEnabled: false, channel: 'main', intervalMinutes: 15 }),
+  });
+  assert.equal(configResponse.status, 200);
+  const configured = await configResponse.json();
   assert.equal(configured.config.autoEnabled, false);
-  await updates.requestCheck('ci-admin');
-  const queued = await updates.queueJob('ci-admin');
-  assert.equal(queued.state.pendingJob.id, queued.job.id);
-  await assert.rejects(() => updates.queueJob('ci-admin'), (err) => err.status === 409);
+  const check = await fetch(api + '/check', { method: 'POST', headers });
+  assert.equal(check.status, 200);
+  const queuedResponse = await fetch(api + '/deploy', { method: 'POST', headers });
+  assert.equal(queuedResponse.status, 202);
+  const queued = await queuedResponse.json();
+  assert.ok(queued.job.id);
+  const duplicate = await fetch(api + '/deploy', { method: 'POST', headers });
+  assert.equal(duplicate.status, 409);
   const job = await updates.claimJob();
   assert.equal(job.id, queued.job.id);
   await updates.report({
