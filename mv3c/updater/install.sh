@@ -44,7 +44,6 @@ ExecStart=/usr/bin/python3 $REPO/mv3c/updater/agent.py --repo $REPO
 TimeoutStartSec=90min
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectHome=true
 StandardOutput=journal
 StandardError=journal
 UNIT
