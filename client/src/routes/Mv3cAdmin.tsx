@@ -29,6 +29,7 @@ type ManagedUser = {
   createdAt?: string;
 };
 type UsersResponse = { total: number; users: ManagedUser[] };
+type AuditEvent = { id: string; actor: string; changedFields: string[]; at: string };
 
 async function adminRequest<T>(token: string, path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch('/api/admin/mv3c' + path, {
@@ -58,7 +59,7 @@ const subtleButton =
 
 export default function Mv3cAdmin() {
   const { token, isAuthenticated, user } = useAuthContext();
-  const [tab, setTab] = useState<'provider' | 'site' | 'users'>('provider');
+  const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit'>('provider');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [site, setSite] = useState<SiteSettings>({
     title: 'mv3c', welcome: '欢迎使用 mv3c', publicUrl: '', registrationEnabled: false,
@@ -70,6 +71,7 @@ export default function Mv3cAdmin() {
   const [apiKey, setApiKey] = useState('');
   const [modelsText, setModelsText] = useState('');
   const [users, setUsers] = useState<UsersResponse | null>(null);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -114,6 +116,14 @@ export default function Mv3cAdmin() {
   useEffect(() => {
     if (token && tab === 'users') void loadUsers();
   }, [token, tab, loadUsers]);
+
+  useEffect(() => {
+    if (token && tab === 'audit') {
+      void adminRequest<{ events: AuditEvent[] }>(token, '/audit')
+        .then((data) => setEvents(data.events))
+        .catch((err) => setError(err instanceof Error ? err.message : '审计记录加载失败'));
+    }
+  }, [token, tab]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -229,6 +239,7 @@ export default function Mv3cAdmin() {
                 ['provider', 'AI 供应商与模型'],
                 ['site', '站点与注册设置'],
                 ['users', '用户管理'],
+                ['audit', '操作审计'],
               ] as const).map(([key, label]) => (
                 <button
                   key={key}
@@ -356,6 +367,27 @@ export default function Mv3cAdmin() {
                 <button className={buttonClass} disabled={busy} onClick={() => void saveSite()}>
                   保存站点设置
                 </button>
+              </section>
+            )}
+
+            {tab === 'audit' && (
+              <section className="rounded-xl border border-border-medium p-5">
+                <h2 className="mb-4 text-xl font-semibold">最近 100 条管理操作</h2>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead><tr className="border-b border-border-medium">
+                      <th className="p-2">时间</th><th className="p-2">管理员 ID</th>
+                      <th className="p-2">修改字段</th>
+                    </tr></thead>
+                    <tbody>{events.map((event) => (
+                      <tr key={event.id} className="border-b border-border-medium">
+                        <td className="p-2">{new Date(event.at).toLocaleString()}</td>
+                        <td className="p-2">{event.actor}</td>
+                        <td className="p-2">{event.changedFields.join('、')}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
               </section>
             )}
 
