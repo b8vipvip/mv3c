@@ -71,6 +71,28 @@ class HostUpdaterTests(unittest.TestCase):
                     agent.target_for_channel(pathlib.Path("/tmp"), "release")
                 self.assertEqual(git.call_count, 1)
 
+    def test_failed_build_restores_previous_image_without_rebuilding(self):
+        commands = []
+
+        def fake_run(args, _repo, **_kwargs):
+            commands.append(args)
+            if args[:3] == ["docker", "compose", "build"]:
+                raise agent.UpdateError("Build failed")
+            return "OK"
+
+        with patch.object(agent, "run", side_effect=fake_run):
+            with patch.object(agent, "git") as git:
+                with patch.object(agent, "wait_healthy"):
+                    outcome, _log, error = agent.deploy(
+                        pathlib.Path("/tmp"), SHA1, SHA2)
+        self.assertEqual(outcome, "rolled_back")
+        self.assertIn("Build failed", error)
+        self.assertTrue(any(c[:4] == ["docker", "image", "tag", "mv3c:rollback"]
+                            for c in commands))
+        self.assertEqual(sum(c[:3] == ["docker", "compose", "build"]
+                             for c in commands), 1)
+        self.assertIn("reset", str(git.call_args_list))
+
     def test_only_fast_forward_is_allowed(self):
         with patch.object(agent.subprocess, "run") as run:
             run.return_value.returncode = 1
