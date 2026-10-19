@@ -107,7 +107,7 @@ async function buildPreLoginPayload() {
     samlLoginEnabled: !isOpenIdEnabled && isSamlEnabled,
     samlLabel: process.env.SAML_BUTTON_LABEL,
     samlImageUrl: process.env.SAML_IMAGE_URL,
-    serverDomain: process.env.DOMAIN_SERVER || 'http://localhost:3080',
+    serverDomain: site.publicUrl || 'http://localhost:3080',
     emailLoginEnabled,
     registrationEnabled: !ldap?.enabled && site.registrationEnabled,
     socialLoginEnabled: isEnabled(process.env.ALLOW_SOCIAL_LOGIN),
