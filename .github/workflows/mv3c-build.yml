@@ -3,17 +3,6 @@ name: mv3c source Docker build
 on:
   push:
     branches: [main]
-    paths:
-      - .github/workflows/mv3c-build.yml
-      - Dockerfile
-      - package.json
-      - package-lock.json
-      - client/**
-      - api/**
-      - packages/**
-      - mv3c/**
-      - docker-compose.mv3c.yml
-      - docker-compose.yml
   pull_request:
   workflow_dispatch:
 
