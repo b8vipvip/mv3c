@@ -226,10 +226,14 @@ def check_needed(state: dict) -> bool:
 
 
 def execute(repo: Path) -> None:
-    old = verify_repo(repo)
     state = bridge(repo, "state")
     if not isinstance(state, dict):
         raise UpdateError("Invalid update state")
+    try:
+        old = verify_repo(repo)
+    except Exception as error:
+        report(repo, status="blocked", lastError=str(error)[:1800])
+        raise
     report(repo, currentSha=old)
     if not check_needed(state) and not state.get("pendingJob"):
         return
