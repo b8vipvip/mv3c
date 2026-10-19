@@ -24,11 +24,8 @@ REPO = "b8vipvip/mv3c"
 API = "https://api.github.com/repos/" + REPO
 SHA = re.compile(r"^[a-f0-9]{40}$")
 TAG = re.compile(r"^v?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?$")
-ORIGINS = {
-    "https://github.com/b8vipvip/mv3c.git",
-    "https://github.com/b8vipvip/mv3c",
-    "git@github.com:b8vipvip/mv3c.git",
-}
+SSH_ORIGIN = "git@github.com:b8vipvip/mv3c.git"
+SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
 CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
 USER_AGENT = "mv3c-updater/1.0"
 
@@ -42,9 +39,9 @@ def utc_now() -> str:
 
 
 def run(args: list[str], cwd: Path, *, input_data: str | None = None,
-        timeout: int = 120) -> str:
+        timeout: int = 120, env: dict[str, str] | None = None) -> str:
     completed = subprocess.run(
-        args, cwd=cwd, input=input_data, text=True,
+        args, cwd=cwd, input=input_data, text=True, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
         check=False,
     )
@@ -56,7 +53,12 @@ def run(args: list[str], cwd: Path, *, input_data: str | None = None,
 
 
 def git(repo: Path, *args: str, timeout: int = 120) -> str:
-    return run(["git", *args], repo, timeout=timeout)
+    # All remote Git operations (both scheduled and admin-triggered) use SSH.
+    # Never prompt for a passphrase, accept unknown host keys, or fall back to HTTPS.
+    env = os.environ.copy()
+    env["GIT_SSH_COMMAND"] = SSH_COMMAND
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return run(["git", *args], repo, timeout=timeout, env=env)
 
 
 def bridge(repo: Path, command: str, data: dict | None = None) -> object:
@@ -118,9 +120,13 @@ def ci_is_green(sha: str, *, api_fetch=json_from_github) -> tuple[bool, str]:
 def verify_repo(repo: Path) -> str:
     if not (repo / ".git").exists() or not (repo / "docker-compose.yml").is_file():
         raise UpdateError("Expected a Git checkout with mv3c docker-compose.yml")
-    origin = git(repo, "remote", "get-url", "origin")
-    if origin not in ORIGINS:
-        raise UpdateError("Unexpected Git remote; refusing to update: " + origin[:160])
+    raw_origin = git(repo, "config", "--local", "--get", "remote.origin.url")
+    effective_origin = git(repo, "remote", "get-url", "origin")
+    if raw_origin != SSH_ORIGIN or effective_origin != SSH_ORIGIN:
+        raise UpdateError(
+            "mv3c 自动更新只允许 GitHub SSH: " + SSH_ORIGIN
+            + "。请检查 git remote 和 URL rewrite 配置；不允许 HTTPS 回退。"
+        )
     branch = git(repo, "symbolic-ref", "--short", "HEAD")
     if branch != "main":
         raise UpdateError("Host checkout must be on the main branch")

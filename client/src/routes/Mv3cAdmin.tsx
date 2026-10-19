@@ -456,7 +456,7 @@ export default function Mv3cAdmin() {
                 <div>
                   <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    来源：GitHub b8vipvip/mv3c。只部署 GitHub Actions 验证通过的提交。
+                    代码拉取：GitHub SSH（git@github.com:b8vipvip/mv3c.git）。自动更新和手动更新均强制使用 SSH，并只部署 GitHub Actions 验证通过的提交。
                   </p>
                 </div>
                 {!updates ? (

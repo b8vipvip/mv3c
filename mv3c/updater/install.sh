@@ -20,19 +20,40 @@ if [[ "$(stat -c %u "$REPO")" != "0" ]]; then
   echo "出于安全考虑，mv3c 代码目录必须由 root 拥有；请先把仓库移至 /opt/mv3c 并设置 root 所有权" >&2
   exit 1
 fi
-ORIGIN="$(git -C "$REPO" remote get-url origin)"
-if [[ "$ORIGIN" != "https://github.com/b8vipvip/mv3c.git" &&
-      "$ORIGIN" != "git@github.com:b8vipvip/mv3c.git" &&
-      "$ORIGIN" != "https://github.com/b8vipvip/mv3c" ]]; then
-  echo "Git origin 不是受信任的 b8vipvip/mv3c 仓库" >&2
-  exit 1
-fi
+SSH_ORIGIN="git@github.com:b8vipvip/mv3c.git"
+SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
+ORIGIN="$(git -C "$REPO" config --local --get remote.origin.url)"
+case "$ORIGIN" in
+  "$SSH_ORIGIN"|"https://github.com/b8vipvip/mv3c.git"|"https://github.com/b8vipvip/mv3c")
+    ;;
+  *)
+    echo "Git origin 不是受信任的 b8vipvip/mv3c 仓库" >&2
+    exit 1
+    ;;
+esac
 if [[ "$(git -C "$REPO" branch --show-current)" != "main" ]]; then
   echo "请先切换到 mv3c main 分支" >&2
   exit 1
 fi
 if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]]; then
   echo "工作区存在已跟踪文件修改；请先处理，避免自动更新覆盖更改" >&2
+  exit 1
+fi
+# Update operations run as root via systemd. Check root's GitHub SSH identity
+# before enabling the timer. Do not accept unknown host keys or password prompts.
+if ! HOME=/root GIT_SSH_COMMAND="$SSH_COMMAND" GIT_TERMINAL_PROMPT=0 \
+  git -C "$REPO" ls-remote "$SSH_ORIGIN" HEAD >/dev/null; then
+  echo "root 无法通过 SSH 读取 GitHub 仓库。请先为 root 配置 SSH Key 和 github.com 的已验证主机密钥。" >&2
+  echo "验证命令: sudo -H env GIT_SSH_COMMAND='$SSH_COMMAND' git ls-remote $SSH_ORIGIN HEAD" >&2
+  exit 1
+fi
+# Convert legacy HTTPS checkout only after the SSH preflight succeeded.
+if [[ "$ORIGIN" != "$SSH_ORIGIN" ]]; then
+  git -C "$REPO" remote set-url origin "$SSH_ORIGIN"
+  echo "已将 Git origin 切换为 SSH: $SSH_ORIGIN"
+fi
+if [[ "$(git -C "$REPO" remote get-url origin)" != "$SSH_ORIGIN" ]]; then
+  echo "Git URL rewrite 导致实际远端不是 SSH；请检查 Git 配置，拒绝安装" >&2
   exit 1
 fi
 cat >/etc/systemd/system/mv3c-updater.service <<UNIT
@@ -43,6 +64,7 @@ After=docker.service network-online.target
 [Service]
 Type=oneshot
 User=root
+Environment=HOME=/root
 WorkingDirectory=$REPO
 ExecStart=/usr/bin/python3 $REPO/mv3c/updater/agent.py --repo $REPO
 TimeoutStartSec=90min
