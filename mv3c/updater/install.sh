@@ -39,21 +39,30 @@ if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]]; then
   echo "工作区存在已跟踪文件修改；请先处理，避免自动更新覆盖更改" >&2
   exit 1
 fi
-# Update operations run as root via systemd. Check root's GitHub SSH identity
-# before enabling the timer. Do not accept unknown host keys or password prompts.
-if ! HOME=/root GIT_SSH_COMMAND="$SSH_COMMAND" GIT_TERMINAL_PROMPT=0 \
-  git -C "$REPO" ls-remote "$SSH_ORIGIN" HEAD >/dev/null; then
-  echo "root 无法通过 SSH 读取 GitHub 仓库。请先为 root 配置 SSH Key 和 github.com 的已验证主机密钥。" >&2
-  echo "验证命令: sudo -H env GIT_SSH_COMMAND='$SSH_COMMAND' git ls-remote $SSH_ORIGIN HEAD" >&2
+# systemd runs as root. Prefer root's SSH identity; if unavailable,
+# allow the same trusted public repository over HTTPS without credentials.
+# Never disable SSH host-key verification or allow interactive prompts.
+HTTPS_ORIGIN="https://github.com/b8vipvip/mv3c.git"
+if [[ "$(git -C "$REPO" ls-remote --get-url "$SSH_ORIGIN")" == "$SSH_ORIGIN" ]] &&
+   HOME=/root GIT_SSH_COMMAND="$SSH_COMMAND" GIT_TERMINAL_PROMPT=0 \
+     git -C "$REPO" ls-remote "$SSH_ORIGIN" HEAD >/dev/null 2>&1; then
+  SELECTED_ORIGIN="$SSH_ORIGIN"
+  echo "GitHub SSH 连接成功，优先使用 SSH"
+elif [[ "$(git -C "$REPO" ls-remote --get-url "$HTTPS_ORIGIN")" == "$HTTPS_ORIGIN" ]] &&
+     HOME=/root GIT_TERMINAL_PROMPT=0 \
+       git -C "$REPO" ls-remote "$HTTPS_ORIGIN" HEAD >/dev/null 2>&1; then
+  SELECTED_ORIGIN="$HTTPS_ORIGIN"
+  echo "GitHub SSH 不可用，已验证 HTTPS 可拉取；运行时仍会先重试 SSH"
+else
+  echo "GitHub SSH 和 HTTPS 均不可用，或 Git URL rewrite 指向非预期地址；无法安装更新服务" >&2
   exit 1
 fi
-# Convert legacy HTTPS checkout only after the SSH preflight succeeded.
-if [[ "$ORIGIN" != "$SSH_ORIGIN" ]]; then
-  git -C "$REPO" remote set-url origin "$SSH_ORIGIN"
-  echo "已将 Git origin 切换为 SSH: $SSH_ORIGIN"
+if [[ "$ORIGIN" != "$SELECTED_ORIGIN" ]]; then
+  git -C "$REPO" remote set-url origin "$SELECTED_ORIGIN"
+  echo "已更新 Git origin: $SELECTED_ORIGIN"
 fi
-if [[ "$(git -C "$REPO" remote get-url origin)" != "$SSH_ORIGIN" ]]; then
-  echo "Git URL rewrite 导致实际远端不是 SSH；请检查 Git 配置，拒绝安装" >&2
+if [[ "$(git -C "$REPO" remote get-url origin)" != "$SELECTED_ORIGIN" ]]; then
+  echo "Git URL rewrite 导致实际远端不是预期地址；拒绝安装" >&2
   exit 1
 fi
 cat >/etc/systemd/system/mv3c-updater.service <<UNIT
