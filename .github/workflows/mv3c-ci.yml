@@ -16,10 +16,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run mv3c regression tests
         run: python3 -m unittest discover -s mv3c/tests -v
-      - name: Validate compose and endpoint configuration
-        run: |
-          cp .env.mv3c.example .env
-          docker compose -f docker-compose.mv3c.yml config --quiet
+      - name: Validate encrypted settings and bootstrap
+        run: node --test mv3c/tests/settings.test.cjs
+      - name: Validate env-free Compose configuration
+        run: docker compose -f docker-compose.mv3c.yml config --quiet
       - name: Verify imported source branding
         run: |
           if [ -f client/index.html ]; then
