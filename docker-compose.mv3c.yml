@@ -1,4 +1,5 @@
-# Build the rebranded mv3c source locally; do NOT use the upstream prebuilt UI.
+# mv3c application settings and chat2api credentials live in MongoDB.
+# The only non-database secrets are generated automatically in mv3c-data on first boot.
 name: mv3c
 
 services:
@@ -8,23 +9,18 @@ services:
       dockerfile: Dockerfile
     image: mv3c:local
     restart: unless-stopped
-    env_file:
-      - .env
+    entrypoint: ["/bin/sh", "/app/mv3c/entrypoint.sh"]
     environment:
       HOST: 0.0.0.0
       PORT: "3080"
       NODE_ENV: production
-      APP_TITLE: mv3c
       MONGO_URI: mongodb://mongodb:27017/mv3c
-      CONFIG_PATH: /app/librechat.yaml
       SEARCH: "false"
     ports:
-      # Reverse proxy through Nginx/Caddy with TLS for public access.
-      - "127.0.0.1:${MV3C_PORT:-3080}:3080"
+      - "127.0.0.1:\${MV3C_PORT:-3080}:3080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./librechat.yaml:/app/librechat.yaml:ro
       - mv3c-images:/app/client/public/images
       - mv3c-uploads:/app/uploads
       - mv3c-logs:/app/api/logs
@@ -44,7 +40,7 @@ services:
     command: mongod --noauth
     volumes:
       - mv3c-mongodb:/data/db
-    # Intentionally no host port; only the mv3c container can access MongoDB.
+    # MongoDB is intentionally private to the Compose network.
 
 volumes:
   mv3c-mongodb:
