@@ -47,6 +47,7 @@ function format(doc) {
     lastError: doc?.lastError || '',
     lastLog: doc?.lastLog || '',
     lastOutcome: doc?.lastOutcome || '',
+    blockedSha: doc?.blockedSha || '',
     pendingJob: doc?.pendingJob || null,
     activeJob: doc?.activeJob || null,
     history: (doc?.history || []).slice(-15).reverse(),
@@ -164,7 +165,10 @@ async function completeJob(payload) {
   const log = String(payload.log || '').slice(-12000);
   const error = String(payload.error || '').slice(0, 2000);
   const sha = String(payload.sha || '');
-  if (sha && !SHA.test(sha)) throw new TypeError('Invalid commit SHA');
+  const attemptedSha = String(payload.attemptedSha || '');
+  if ((sha && !SHA.test(sha)) || (attemptedSha && !SHA.test(attemptedSha))) {
+    throw new TypeError('Invalid commit SHA');
+  }
   const now = new Date();
   const result = await collection().updateOne({
     _id: ID, 'activeJob.id': payload.jobId,
@@ -177,8 +181,10 @@ async function completeJob(payload) {
       agentHeartbeat: now,
       ...(payload.outcome === 'success' ? { currentSha: sha, lastSuccessAt: now,
         updateAvailable: false } : {}),
+      ...(['failed', 'rolled_back'].includes(payload.outcome) && attemptedSha
+        ? { blockedSha: attemptedSha } : {}),
     },
-    $unset: { activeJob: '' },
+    $unset: { activeJob: '', ...(payload.outcome === 'success' ? { blockedSha: '' } : {}) },
     $push: {
       history: {
         $each: [{ jobId: payload.jobId, outcome: payload.outcome,
