@@ -77,6 +77,24 @@ docker compose -f docker-compose.mv3c.yml up -d --build
 
 不要运行 docker compose down -v，否则可能删除 MongoDB 用户数据和自动生成的根密钥。备份时必须**同时备份** mv3c-mongodb 和 mv3c-data 两个卷，缺少后者将无法解密已保存的 chat2api API Key。
 
+## 4.1 版本更新（自动 + 手动）
+
+后台新增「**版本更新**」页面，显示当前版本、GitHub 最新版本、CI 验证状态、自动更新开关、手动更新、部署进度与日志。
+
+**首次需要在 Docker 宿主机安装更新服务（一次性操作）：**
+
+~~~bash
+cd /opt/mv3c
+sudo bash mv3c/updater/install.sh
+sudo systemctl status mv3c-updater.timer
+~~~
+
+建议将 Git 仓库放在 **root 所有的 /opt/mv3c**；安装脚本会检查来源仓库、分支和工作区是否干净。安装后，管理员在 /admin →「版本更新」管理策略，无需在 .env 中设置版本更新选项。
+
+默认启用自动更新、每 10 分钟检查 GitHub main 分支；只有 mv3c validation 和 mv3c source Docker build 两项 GitHub Actions **均成功**，才会构建并更新 Docker 容器。也可切换到 GitHub Release 通道（仓库必须先发布 Release），或关闭自动更新并手动触发。部署失败时会尝试回滚代码和镜像，**不会回滚数据库迁移**。
+
+**网页容器没有 Docker Socket 权限**；更新实际由宿主机 systemd 服务执行。详细安装、排错与回滚说明：[版本更新文档](mv3c/updater/README.md)。
+
 ## 5. 从旧版 .env 部署升级
 
 如果你**已经**用旧版 Python 初始化脚本创建 .env 并在生产环境使用了 mv3c，请不要直接无备份地切换新 Compose：旧版 JWT/CREDS 密钥在 .env 中，新版默认会自动生成新密钥，导致现有会话失效、旧加密数据不可解密。
