@@ -18,6 +18,12 @@ jobs:
         run: python3 -m unittest discover -s mv3c/tests -v
       - name: Validate encrypted settings and bootstrap
         run: node --test mv3c/tests/settings.test.cjs
+      - name: Validate host-side update agent and installer
+        run: |
+          python3 -m unittest discover -s mv3c/updater/tests -p 'test_*.py' -v
+          python3 -m py_compile mv3c/updater/agent.py
+          bash -n mv3c/updater/install.sh
+          node --check mv3c/updater/bridge.cjs
       - name: Validate env-free Compose configuration
         run: |
           docker compose config --quiet
