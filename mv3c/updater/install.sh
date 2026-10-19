@@ -16,6 +16,10 @@ if [[ ! "$REPO" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
   echo "请把 mv3c 仓库放在不含空格或特殊字符的目录，例如 /opt/mv3c" >&2
   exit 1
 fi
+if [[ "$(stat -c %u "$REPO")" != "0" ]]; then
+  echo "出于安全考虑，mv3c 代码目录必须由 root 拥有；请先把仓库移至 /opt/mv3c 并设置 root 所有权" >&2
+  exit 1
+fi
 ORIGIN="$(git -C "$REPO" remote get-url origin)"
 if [[ "$ORIGIN" != "https://github.com/b8vipvip/mv3c.git" &&
       "$ORIGIN" != "git@github.com:b8vipvip/mv3c.git" &&
