@@ -23,6 +23,12 @@ function failure(res, error) {
   if (error instanceof TypeError || error instanceof SyntaxError) {
     return res.status(400).json({ error: error.message });
   }
+  if (/^chat2api \/models returned HTTP [0-9]{3}$/.test(error?.message || '')) {
+    return res.status(502).json({ error: error.message });
+  }
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+    return res.status(504).json({ error: 'chat2api connection timed out' });
+  }
   logger.error('[mv3c-admin] Operation failed', { type: error?.name });
   return res.status(502).json({ error: 'Operation failed; check the server logs' });
 }
