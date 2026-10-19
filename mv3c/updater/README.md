@@ -32,6 +32,8 @@ sudo systemctl status mv3c-updater.timer
 sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 ~~~
 
+首次克隆如果 SSH 不可用，可以改用 `sudo -H git clone https://github.com/b8vipvip/mv3c.git`；安装后更新器仍会优先尝试 SSH。
+
 若已经安装旧版 mv3c，先升级仓库到包含此功能的版本并确认站点正常，再执行上述安装脚本。无需创建 .env，也无需将 Docker Socket 暴露给网站容器。
 
 安装脚本会验证 Git origin、main 分支、仓库目录的 root 所有权以及已跟踪文件没有未提交修改；先测试 root 的 SSH 访问，失败时测试固定的 HTTPS 地址。SSH 成功则优先将 origin 设为 SSH；仅 HTTPS 成功时设为 HTTPS。两者都失败才中止安装。如果仓库不是 root 拥有，请确认是正确的仓库后修改所有权（例如在 /opt 目录执行 sudo chown -R root:root /opt/mv3c）。
