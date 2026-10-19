@@ -5,7 +5,7 @@
 - 管理员在 /admin →「版本更新」管理自动更新、通道、检查间隔，查看版本、任务、日志；数据保存在 MongoDB。
 - Linux 宿主机 systemd timer 每分钟检查是否有管理员任务；按后台配置的 5–60 分钟间隔检查 GitHub。
 - 网站容器不挂载 Docker Socket，不直接执行 Git、Docker 或任意 shell 命令。
-- **自动更新与后台手动更新均只通过 SSH 拉取 Git 代码**：固定远端 git@github.com:b8vipvip/mv3c.git，禁止 HTTPS 回退；目标提交必须是已部署版本的快进后代，且 GitHub Actions 中 mv3c validation 和 mv3c source Docker build 两项都成功。GitHub API 的版本/CI 元数据查询仍通过 HTTPS 完成，不用于拉取源码。
+- **自动更新与后台手动更新均优先通过 SSH 拉取 Git 代码**：首先使用 git@github.com:b8vipvip/mv3c.git；若 SSH 连接失败或超时，自动回退至 https://github.com/b8vipvip/mv3c.git。两种协议都失败才报错；禁止重定向到其他 Git 仓库。目标提交必须是已部署版本的快进后代，且 GitHub Actions 中 mv3c validation 和 mv3c source Docker build 两项都成功。GitHub API 的版本/CI 元数据查询仍通过 HTTPS 完成。
 - 部署：Git 快进 → Docker Compose 构建 → 更新网站容器 → 健康检查；失败则尝试恢复上一提交并重新构建。
 - 不删除 MongoDB、密钥和上传文件的数据卷；数据库 schema 迁移无法保证回滚，需单独备份。
 
@@ -20,7 +20,7 @@ sudo -H git clone git@github.com:b8vipvip/mv3c.git
 cd /opt/mv3c
 sudo docker compose up -d --build
 
-# 先确认 systemd 使用的 root 身份可通过 SSH 访问 GitHub
+# 可选：验证 systemd 使用的 root 身份能否通过 SSH 访问 GitHub
 sudo -H env GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15' \
   git ls-remote git@github.com:b8vipvip/mv3c.git HEAD
 
@@ -34,9 +34,9 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 
 若已经安装旧版 mv3c，先升级仓库到包含此功能的版本并确认站点正常，再执行上述安装脚本。无需创建 .env，也无需将 Docker Socket 暴露给网站容器。
 
-安装脚本会验证 Git origin、main 分支、仓库目录的 root 所有权以及已跟踪文件没有未提交修改；**强制测试 root 的 SSH Key 与 github.com 主机密钥**。如果原来是本仓库的 HTTPS origin，SSH 验证成功后安装脚本会自动将其改成 git@github.com:b8vipvip/mv3c.git；无法通过 SSH 时直接报错，不回退 HTTPS。如果仓库不是 root 拥有，请确认是正确的仓库后修改所有权（例如在 /opt 目录执行 sudo chown -R root:root /opt/mv3c）。
+安装脚本会验证 Git origin、main 分支、仓库目录的 root 所有权以及已跟踪文件没有未提交修改；先测试 root 的 SSH 访问，失败时测试固定的 HTTPS 地址。SSH 成功则优先将 origin 设为 SSH；仅 HTTPS 成功时设为 HTTPS。两者都失败才中止安装。如果仓库不是 root 拥有，请确认是正确的仓库后修改所有权（例如在 /opt 目录执行 sudo chown -R root:root /opt/mv3c）。
 
-如果 SSH Key 配在 ubuntu 用户而不是 root 用户，后台自动更新可能无法读取；请为 root 配置独立的只读 GitHub Deploy Key（或确保 root 可使用现有已授权 SSH 身份），并提前核验 github.com 的主机密钥。不要禁用 StrictHostKeyChecking，也不要将私钥存进网页后台或 .env。
+如果 SSH Key 配在 ubuntu 用户而不是 root 用户，宿主机更新服务会自动尝试 HTTPS 回退；若希望优先 SSH 成功，请为 root 配置独立的只读 GitHub Deploy Key（或确保 root 可使用现有已授权 SSH 身份），并提前核验 github.com 的主机密钥。不要禁用 StrictHostKeyChecking，也不要将私钥存进网页后台或 .env。私有仓库的 HTTPS 回退需要可用凭据；公开仓库通常无需凭据。
 
 ## 后台使用
 
@@ -61,6 +61,7 @@ sudo docker compose logs --tail=200 mv3c
 ~~~
 
 - 更新服务未连接：确认 timer 已启用、Docker Compose 可运行、网站容器和数据库正常。
+- SSH 拉取失败：自动尝试 HTTPS；若两种方式均失败，后台展示组合错误。版本标签和 main 分支均适用，最新版本标签会标注 SSH 或 HTTPS 回退。
 - 等待 CI 通过：GitHub 最新目标提交的两项 Actions 尚未成功，自动/手动更新都会被阻止。
 - 本地文件有修改：先提交或撤销 Git 已跟踪文件的本地更改。
 - 已回滚上一版本：新版本部署失败并尝试恢复旧应用。失败的提交会暂停自动重试，直到 GitHub 出现新的提交或管理员主动手动重试。**数据库迁移不回滚**。
