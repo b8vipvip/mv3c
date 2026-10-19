@@ -63,44 +63,96 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertIn("StrictHostKeyChecking=yes", agent.SSH_COMMAND)
         self.assertIn("BatchMode=yes", agent.SSH_COMMAND)
 
-    def test_ssh_only_origin_validation(self):
+    def test_trusted_ssh_and_https_origin_validation(self):
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
             repo = pathlib.Path(directory)
             (repo / ".git").mkdir()
             (repo / "docker-compose.yml").touch()
+            for origin in (agent.SSH_ORIGIN, agent.HTTPS_ORIGIN):
+                with patch.object(agent, "git", side_effect=[
+                    origin, origin, "main", "", SHA1,
+                ]):
+                    self.assertEqual(agent.verify_repo(repo), SHA1)
             with patch.object(agent, "git", side_effect=[
-                "https://github.com/b8vipvip/mv3c.git", agent.SSH_ORIGIN,
+                "https://evil.example/repo.git", agent.SSH_ORIGIN,
             ]):
-                with self.assertRaisesRegex(agent.UpdateError, "SSH"):
+                with self.assertRaisesRegex(agent.UpdateError, "固定"):
                     agent.verify_repo(repo)
             with patch.object(agent, "git", side_effect=[
-                agent.SSH_ORIGIN, "https://github.com/b8vipvip/mv3c.git",
+                agent.SSH_ORIGIN, "https://evil.example/repo.git",
             ]):
-                with self.assertRaisesRegex(agent.UpdateError, "SSH"):
+                with self.assertRaisesRegex(agent.UpdateError, "固定"):
                     agent.verify_repo(repo)
-            with patch.object(agent, "git", side_effect=[
-                agent.SSH_ORIGIN, agent.SSH_ORIGIN, "main", "", SHA1,
-            ]):
-                self.assertEqual(agent.verify_repo(repo), SHA1)
 
     def test_main_target_uses_only_pinned_origin(self):
-        with patch.object(agent, "git", side_effect=[
-            "", SHA2,
-        ]) as git:
-            sha, label = agent.target_for_channel(pathlib.Path("/tmp"), "main")
+        with patch.object(agent, "fetch_prefer_ssh", return_value="HTTPS 回退") as fetch:
+            with patch.object(agent, "git", return_value=SHA2):
+                sha, label = agent.target_for_channel(pathlib.Path("/tmp"), "main")
         self.assertEqual(sha, SHA2)
         self.assertIn(SHA2[:12], label)
-        self.assertEqual(git.call_args_list[0].args[1:4], ("fetch", "--quiet", "--prune"))
+        self.assertIn("HTTPS 回退", label)
+        fetch.assert_called_once_with(
+            pathlib.Path("/tmp"), "refs/heads/main:refs/remotes/origin/main")
         with self.assertRaises(agent.UpdateError):
             agent.target_for_channel(pathlib.Path("/tmp"), "evil")
 
     def test_release_tag_is_validated_before_git_fetch(self):
         with patch.object(agent, "json_from_github", return_value={"tag_name": "../../evil"}):
-            with patch.object(agent, "git", return_value="") as git:
+            with patch.object(agent, "fetch_prefer_ssh", return_value="SSH") as fetch:
                 with self.assertRaises(agent.UpdateError):
                     agent.target_for_channel(pathlib.Path("/tmp"), "release")
-                self.assertEqual(git.call_count, 1)
+                fetch.assert_called_once_with(
+                    pathlib.Path("/tmp"), "refs/heads/main:refs/remotes/origin/main")
+
+    def test_release_tag_fetch_prefers_ssh(self):
+        with patch.object(agent, "json_from_github", return_value={"tag_name": "v1.2.3"}):
+            with patch.object(agent, "fetch_prefer_ssh", return_value="SSH") as fetch:
+                with patch.object(agent, "git", return_value=SHA2):
+                    sha, label = agent.target_for_channel(pathlib.Path("/tmp"), "release")
+        self.assertEqual(sha, SHA2)
+        self.assertEqual(label, "v1.2.3 · SSH")
+        self.assertEqual(fetch.call_args_list[1].args[1:], ("tag", "v1.2.3"))
+
+    def test_fetch_prefers_ssh_and_falls_back_to_https(self):
+        repo = pathlib.Path("/tmp")
+        with patch.object(agent, "fetch_from_origin", return_value=None) as fetch:
+            self.assertEqual(agent.fetch_prefer_ssh(repo, "main"), "SSH")
+            fetch.assert_called_once_with(repo, agent.SSH_ORIGIN, "main")
+        with patch.object(agent, "fetch_from_origin", side_effect=[
+            agent.UpdateError("SSH unavailable"), None,
+        ]) as fetch:
+            self.assertEqual(agent.fetch_prefer_ssh(repo, "main"), "HTTPS 回退")
+            self.assertEqual(fetch.call_args_list[0].args[1], agent.SSH_ORIGIN)
+            self.assertEqual(fetch.call_args_list[1].args[1], agent.HTTPS_ORIGIN)
+        with patch.object(agent, "fetch_from_origin", side_effect=[
+            agent.UpdateError("SSH unavailable"), agent.UpdateError("HTTPS unavailable"),
+        ]):
+            with self.assertRaisesRegex(agent.UpdateError, "SSH 与 HTTPS"):
+                agent.fetch_prefer_ssh(repo, "main")
+
+    def test_explicit_fetch_blocks_url_rewrite(self):
+        repo = pathlib.Path("/tmp")
+        with patch.object(agent, "git", side_effect=[
+            agent.SSH_ORIGIN, "",
+        ]) as git:
+            agent.fetch_from_origin(
+                repo, agent.SSH_ORIGIN, "refs/heads/main:refs/remotes/origin/main")
+            self.assertEqual(git.call_args_list[0].args[1:],
+                             ("ls-remote", "--get-url", agent.SSH_ORIGIN))
+            self.assertEqual(git.call_args_list[1].args[1:4],
+                             ("fetch", "--quiet", "--prune"))
+            self.assertEqual(git.call_args_list[1].args[4], agent.SSH_ORIGIN)
+        with patch.object(agent, "git", return_value="https://evil.example/repo.git") as git:
+            with self.assertRaisesRegex(agent.UpdateError, "rewrite"):
+                agent.fetch_from_origin(repo, agent.SSH_ORIGIN, "main")
+            self.assertEqual(git.call_count, 1)
+
+    def test_git_timeout_becomes_fallback_eligible_error(self):
+        with patch.object(agent.subprocess, "run",
+                          side_effect=agent.subprocess.TimeoutExpired(["git"], 5)):
+            with self.assertRaisesRegex(agent.UpdateError, "timed out"):
+                agent.run(["git", "fetch"], pathlib.Path("/tmp"), timeout=5)
 
     def test_failed_build_restores_previous_image_without_rebuilding(self):
         commands = []
