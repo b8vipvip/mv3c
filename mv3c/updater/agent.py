@@ -182,11 +182,15 @@ def wait_healthy(repo: Path, timeout: int = 210) -> None:
 def deploy(repo: Path, old: str, target: str) -> tuple[str, str, str]:
     """Return outcome, log, error. Never remove Docker volumes."""
     log = []
+    previous_image_saved = False
     try:
+        # Preserve the exact known-good image before a source build can replace its tag.
+        run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"], repo, timeout=30)
+        previous_image_saved = True
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
         log.append(run(["docker", "compose", "build", "mv3c"], repo, timeout=3600)[-5000:])
-        log.append(run(["docker", "compose", "up", "-d", "--no-deps", "mv3c"],
+        log.append(run(["docker", "compose", "up", "-d", "--no-deps", "--force-recreate", "mv3c"],
                        repo, timeout=240)[-3000:])
         wait_healthy(repo)
         return "success", "\n".join(log)[-12000:], ""
@@ -195,10 +199,14 @@ def deploy(repo: Path, old: str, target: str) -> tuple[str, str, str]:
         log.append("Deployment failed: " + failure)
         try:
             git(repo, "reset", "--hard", old, timeout=60)
-            log.append(run(["docker", "compose", "build", "mv3c"], repo,
-                           timeout=3600)[-4000:])
-            log.append(run(["docker", "compose", "up", "-d", "--no-deps", "mv3c"],
-                           repo, timeout=240)[-2000:])
+            if previous_image_saved:
+                log.append(run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
+                               repo, timeout=30)[-1000:])
+            else:
+                log.append(run(["docker", "compose", "build", "mv3c"], repo,
+                               timeout=3600)[-4000:])
+            log.append(run(["docker", "compose", "up", "-d", "--no-deps",
+                            "--force-recreate", "mv3c"], repo, timeout=240)[-2000:])
             wait_healthy(repo)
             log.append("Previous application version restored")
             return "rolled_back", "\n".join(log)[-12000:], failure
