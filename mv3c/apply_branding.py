@@ -101,7 +101,15 @@ def apply(root: Path) -> None:
     upstream_copy = root / "mv3c/UPSTREAM_README.md"
     if not upstream_copy.exists() and "LibreChat" in original:
         upstream_copy.write_text(original, encoding="utf-8")
-    readme.write_text((root / "mv3c/README.md").read_text(encoding="utf-8"), encoding="utf-8")
+    root_docs = (root / "mv3c/README.md").read_text(encoding="utf-8")
+    # The source guide lives under mv3c/, while the root README is copied one level up.
+    for nested, root_link in (
+        ("../librechat.yaml", "librechat.yaml"),
+        ("../.mv3c-upstream-imported", ".mv3c-upstream-imported"),
+        ("../LICENSE", "LICENSE"),
+    ):
+        root_docs = root_docs.replace(nested, root_link)
+    readme.write_text(root_docs, encoding="utf-8")
 
 def check(root: Path) -> None:
     anchors = {
