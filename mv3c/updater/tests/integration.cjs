@@ -53,6 +53,24 @@ async function main() {
   assert.equal(done.activeJob, null);
   assert.equal(done.history[0].outcome, 'skipped');
   assert.equal(done.agentOnline, true);
+  const second = await updates.queueJob('ci-admin');
+  await updates.claimJob();
+  await updates.completeJob({
+    jobId: second.job.id, outcome: 'rolled_back',
+    sha: 'a'.repeat(40), attemptedSha: 'b'.repeat(40),
+    error: 'CI simulated failure', log: 'Previous image restored',
+  });
+  assert.equal((await updates.getState()).blockedSha, 'b'.repeat(40));
+  const third = await updates.queueJob('ci-admin');
+  await updates.claimJob();
+  await updates.completeJob({
+    jobId: third.job.id, outcome: 'success',
+    sha: 'b'.repeat(40), attemptedSha: 'b'.repeat(40),
+    error: '', log: 'CI simulated recovery',
+  });
+  const recovered = await updates.getState();
+  assert.equal(recovered.blockedSha, '');
+  assert.equal(recovered.currentSha, 'b'.repeat(40));
   await mongoose.disconnect();
   console.log('mv3c update settings, exclusive queue, claims and history: OK');
 }
