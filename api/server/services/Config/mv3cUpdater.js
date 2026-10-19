@@ -40,6 +40,7 @@ function format(doc) {
     latestUrl: doc?.latestUrl || '',
     updateAvailable: Boolean(doc?.updateAvailable),
     checkedAt: doc?.checkedAt || null,
+    checkRequestedAt: doc?.checkRequestedAt || null,
     agentHeartbeat: doc?.agentHeartbeat || null,
     lastAttemptAt: doc?.lastAttemptAt || null,
     lastSuccessAt: doc?.lastSuccessAt || null,
