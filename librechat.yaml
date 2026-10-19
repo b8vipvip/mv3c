@@ -1,39 +1,5 @@
-# mv3c - LibreChat user frontend; chat2api is the ONLY generation provider.
-# See https://github.com/b8vipvip/chat2api for the compatible /v1 API.
+# mv3c compatibility placeholder. NOT loaded at runtime.
+# Site and AI provider settings are exclusively managed through /admin and MongoDB.
+# See mv3c/README.md for setup and migration instructions.
 version: 1.3.17
 cache: true
-
-interface:
-  customWelcome: "欢迎使用 mv3c"
-  landingHeading: greeting
-  modelSelect: true
-  endpointsMenu: true
-  parameters: false
-  fileSearch: false
-
-endpoints:
-  custom:
-    - name: chat2api
-      apiKey: "${CHAT2API_API_KEY}"
-      baseURL: "${CHAT2API_BASE_URL}"
-      iconURL: /assets/logo.svg
-      models:
-        # Initial fallbacks only; the actual available models come from chat2api /v1/models.
-        default:
-          - gpt-6-sol
-          - gpt-5.6-sol
-        fetch: true
-      titleConvo: false
-      summarize: false
-      modelDisplayLabel: mv3c
-      # Critical: chat2api defaults to last_user, which would discard prior turns.
-      addParams:
-        # chat2api supports /v1/chat/completions, not OpenAI /v1/responses.
-        useResponsesApi: false
-        prompt_mode: full
-      # Hide OpenAI-specific controls that are not guaranteed to work in chat2api.
-      dropParams:
-        - temperature
-        - top_p
-        - presence_penalty
-        - frequency_penalty
