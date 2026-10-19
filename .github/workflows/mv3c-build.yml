@@ -11,6 +11,9 @@ on:
       - client/**
       - api/**
       - packages/**
+      - mv3c/**
+      - docker-compose.mv3c.yml
+  pull_request:
   workflow_dispatch:
 
 permissions:
