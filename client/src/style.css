@@ -2463,3 +2463,104 @@ html[data-input-modality='keyboard']
 ::view-transition-group(chat-form) {
   z-index: 2;
 }
+
+
+/* mv3c chat layout. Scoped to the user chat surface/sidebar so the admin,
+ * auth, themes and third-party widgets keep their own styles. The host app
+ * still owns every chat action; none of these selectors replace behavior. */
+[data-mv3c-sidebar='expanded'] {
+  min-width: 0;
+}
+[data-mv3c-sidebar='expanded'] nav {
+  scrollbar-width: thin;
+}
+[data-mv3c-sidebar] [data-testid='new-chat-button'] {
+  outline-offset: 2px;
+}
+[data-mv3c-sidebar='expanded'] [data-testid='nav-user'] {
+  min-height: 3rem;
+}
+.mv3c-chat-ui [data-testid='model-selector-button'] {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  padding-inline: 0.75rem;
+  box-shadow: none;
+}
+.mv3c-chat-ui [data-testid='model-selector-button']:hover {
+  background: rgb(var(--surface-hover));
+}
+.mv3c-chat-ui [data-mv3c-landing] {
+  width: min(100%, 54rem);
+  margin-inline: auto;
+}
+.mv3c-chat-ui [data-mv3c-landing][data-generic-welcome='true'] [data-mv3c-welcome-icon] {
+  display: none;
+}
+.mv3c-chat-ui [data-mv3c-landing] .text-text-primary.font-medium {
+  font-size: clamp(1.55rem, 2.5vw, 2.125rem);
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+  font-weight: 550;
+}
+.mv3c-chat-ui [data-testid='composer-surface'] {
+  border: 1px solid rgb(var(--border-medium) / 0.65);
+  border-radius: 1.625rem;
+  background-color: rgb(var(--surface-primary));
+  box-shadow: 0 3px 16px rgb(0 0 0 / 0.065);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.mv3c-chat-ui [data-testid='composer-surface']:focus-within {
+  border-color: rgb(var(--border-medium));
+  box-shadow: 0 5px 22px rgb(0 0 0 / 0.085);
+}
+.mv3c-chat-ui [data-testid='text-input'] {
+  font-size: 1rem;
+  line-height: 1.55;
+}
+.mv3c-chat-ui [data-testid='send-button'] {
+  border-radius: 999px;
+  width: 2.15rem;
+  height: 2.15rem;
+}
+.mv3c-chat-ui .message-render {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+.mv3c-chat-ui .mv3c-composer-disclaimer {
+  color: rgb(var(--text-muted));
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  text-align: center;
+  padding: 0.4rem 0.5rem 0.7rem;
+}
+html:not(.dark):not(.high-contrast) [data-mv3c-sidebar] {
+  background: #f9f9f9;
+}
+html:not(.dark):not(.high-contrast) .mv3c-chat-ui,
+html:not(.dark):not(.high-contrast) .mv3c-chat-ui .bg-surface-canvas {
+  background-color: #fff;
+}
+html.dark:not(.high-contrast) [data-mv3c-sidebar] {
+  background: #171717;
+}
+html.dark:not(.high-contrast) .mv3c-chat-ui,
+html.dark:not(.high-contrast) .mv3c-chat-ui .bg-surface-canvas {
+  background-color: #212121;
+}
+@media (max-width: 639px) {
+  .mv3c-chat-ui [data-testid='composer-surface'] {
+    border-radius: 1.375rem 1.375rem 0 0;
+    box-shadow: 0 -2px 12px rgb(0 0 0 / 0.05);
+  }
+  .mv3c-chat-ui [data-mv3c-landing] .text-text-primary.font-medium {
+    font-size: 1.55rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mv3c-chat-ui [data-testid='composer-surface'] {
+    transition: none;
+  }
+}
