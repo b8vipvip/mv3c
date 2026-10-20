@@ -235,7 +235,9 @@ export const getDisplayValue = ({
 
   if (selectedValues.endpoint) {
     const endpoint = mappedEndpoints.find((e) => e.value === selectedValues.endpoint);
-    return endpoint?.label || localize('com_ui_select_model');
+    return isAgentsEndpoint(selectedValues.endpoint)
+      ? localize('com_agents_my_agents')
+      : endpoint?.label || localize('com_ui_select_model');
   }
 
   return localize('com_ui_select_model');
