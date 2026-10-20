@@ -156,6 +156,19 @@ const useNewConvo = (index = 0) => {
           // Skip this check for existing agent conversations (they have agent_id set)
           // Also check localStorage for new conversations restored after refresh
           const { lastConversationSetup } = getLocalStorageItems();
+          // mv3c's standard new-chat entry must open a configured chat2api
+          // model, not LibreChat's agent endpoint without an agent ID.
+          // Preserve an explicitly chosen agent (including agent presets).
+          const explicitAgentId = conversation.agent_id || activePreset?.agent_id;
+          if (
+            conversation.conversationId === Constants.NEW_CONVO &&
+            endpointsConfig?.chat2api &&
+            !explicitAgentId &&
+            (!defaultEndpoint || isAgentsEndpoint(defaultEndpoint))
+          ) {
+            defaultEndpoint = 'chat2api' as EModelEndpoint;
+            conversation.agent_id = undefined;
+          }
           const storedAgentId =
             isAgentsEndpoint(lastConversationSetup?.endpoint) && lastConversationSetup?.agent_id;
           const isExistingAgentConvo =
