@@ -218,7 +218,7 @@ export function normalizeLocale(locale?: string | null): SupportedLocale {
 export function detectInitialLanguage() {
   const cookieLang = readCookie('lang');
   const storedLang = readStoredLanguage();
-  return normalizeLocale(cookieLang || storedLang || getNavigatorLanguage());
+  return normalizeLocale(cookieLang || storedLang || 'zh-Hans');
 }
 
 export async function ensureLocale(locale?: string | null): Promise<SupportedLocale> {
