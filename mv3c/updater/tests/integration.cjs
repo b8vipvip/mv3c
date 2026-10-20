@@ -21,6 +21,21 @@ async function main() {
     Authorization: 'Bearer ' + auth.token,
     'Content-Type': 'application/json',
   };
+  const logApi = 'http://127.0.0.1:3080/api/admin/mv3c/runtime-logs';
+  assert.equal((await fetch(logApi)).status, 401);
+  const statsResponse = await fetch(logApi, { headers });
+  assert.equal(statsResponse.status, 200);
+  const stats = await statsResponse.json();
+  assert.equal(stats.maxBytes, 10 * 1024 * 1024);
+  assert.ok(stats.usedBytes >= 0);
+  const exported = await fetch(logApi + '/export?range=1h', { headers });
+  assert.equal(exported.status, 200);
+  assert.match(exported.headers.get('content-disposition'), /attachment/);
+  const runtimeReport = await exported.text();
+  assert.match(runtimeReport, /mv3c server runtime log export/);
+  assert.equal((await fetch(logApi + '/export?range=1h')).status, 401);
+  assert.equal((await fetch(logApi + '/export?range=everything', { headers })).status, 400);
+
   const initial = await fetch(api, { headers });
   assert.equal(initial.status, 200);
   const configResponse = await fetch(api + '/settings', {
