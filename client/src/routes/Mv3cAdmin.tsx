@@ -30,6 +30,11 @@ type ManagedUser = {
 };
 type UsersResponse = { total: number; users: ManagedUser[] };
 type AuditEvent = { id: string; actor: string; changedFields: string[]; at: string };
+type LogRange = '15m' | '1h' | '6h' | '24h' | '3d' | '7d';
+type RuntimeLogStats = {
+  usedBytes: number; maxBytes: number; fileCount: number; ranges: LogRange[];
+  capture: string;
+};
 type UpdateConfig = { autoEnabled: boolean; channel: 'main' | 'release'; intervalMinutes: number };
 type UpdateProgress = {
   stage: string; percent: number; message: string; updatedAt: string;
@@ -100,7 +105,7 @@ const subtleButton =
 
 export default function Mv3cAdmin() {
   const { token, isAuthenticated, user } = useAuthContext();
-  const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit' | 'updates'>('provider');
+  const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit' | 'updates' | 'logs'>('provider');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [site, setSite] = useState<SiteSettings>({
     title: 'mv3c', welcome: '欢迎使用 mv3c', publicUrl: '', registrationEnabled: false,
@@ -113,6 +118,9 @@ export default function Mv3cAdmin() {
   const [modelsText, setModelsText] = useState('');
   const [users, setUsers] = useState<UsersResponse | null>(null);
   const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [logRange, setLogRange] = useState<LogRange>('1h');
+  const [logStats, setLogStats] = useState<RuntimeLogStats | null>(null);
+  const [logDownloading, setLogDownloading] = useState(false);
   const [updates, setUpdates] = useState<UpdateState | null>(null);
   const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
@@ -171,6 +179,50 @@ export default function Mv3cAdmin() {
         .catch((err) => setError(err instanceof Error ? err.message : '审计记录加载失败'));
     }
   }, [token, tab]);
+
+  const loadRuntimeLogs = useCallback(async () => {
+    if (!token) return;
+    try {
+      setLogStats(await adminRequest<RuntimeLogStats>(token, '/runtime-logs'));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '日志信息加载失败');
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (token && tab === 'logs') void loadRuntimeLogs();
+  }, [token, tab, loadRuntimeLogs]);
+
+  const downloadRuntimeLogs = async () => {
+    if (!token || logDownloading) return;
+    setLogDownloading(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/mv3c/runtime-logs/export?range=' + logRange, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || '下载运行日志失败（HTTP ' + response.status + '）');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'mv3c-runtime-' + logRange + '-' +
+        new Date().toISOString().replace(/[:.]/g, '-') + '.log';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await loadRuntimeLogs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '运行日志下载失败');
+    } finally {
+      setLogDownloading(false);
+    }
+  };
 
   const loadUpdates = useCallback(async () => {
     if (!token) return;
@@ -366,6 +418,7 @@ export default function Mv3cAdmin() {
                 ['site', '站点与注册设置'],
                 ['users', '用户管理'],
                 ['audit', '操作审计'],
+                ['logs', '运行日志'],
                 ['updates', '版本更新'],
               ] as const).map(([key, label]) => (
                 <button
@@ -717,6 +770,63 @@ export default function Mv3cAdmin() {
                     </div>
                   </>
                 )}
+              </section>
+            )}
+
+            {tab === 'logs' && (
+              <section className="space-y-5 rounded-xl border border-border-medium p-5">
+                <div>
+                  <h2 className="text-xl font-semibold">服务端运行日志</h2>
+                  <p className="mt-1 text-sm text-text-secondary">
+                    保存应用运行信息、警告、错误及 API 请求摘要，不包含请求或回复正文。
+                    日志轮转时优先淘汰最早记录，受容量限制的历史不能恢复。
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg bg-surface-secondary p-4">
+                    <p className="text-xs text-text-secondary">当前日志占用</p>
+                    <p className="mt-1 font-mono font-semibold">
+                      {logStats ? (logStats.usedBytes / 1024 / 1024).toFixed(2) + ' MB' : '读取中…'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-surface-secondary p-4">
+                    <p className="text-xs text-text-secondary">容量上限</p>
+                    <p className="mt-1 font-mono font-semibold">
+                      {logStats ? (logStats.maxBytes / 1024 / 1024).toFixed(0) + ' MB' : '10 MB'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-surface-secondary p-4">
+                    <p className="text-xs text-text-secondary">日志分片数量</p>
+                    <p className="mt-1 font-mono font-semibold">{logStats?.fileCount ?? '…'}</p>
+                  </div>
+                </div>
+                <label className="block max-w-sm space-y-2">
+                  <span className="block text-sm font-medium">导出最近时间段</span>
+                  <select className={fieldClass} value={logRange}
+                    onChange={(event) => setLogRange(event.target.value as LogRange)}>
+                    <option value="15m">最近 15 分钟</option>
+                    <option value="1h">最近 1 小时</option>
+                    <option value="6h">最近 6 小时</option>
+                    <option value="24h">最近 24 小时</option>
+                    <option value="3d">最近 3 天</option>
+                    <option value="7d">最近 7 天</option>
+                  </select>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button className={buttonClass} disabled={logDownloading}
+                    onClick={() => void downloadRuntimeLogs()}>
+                    {logDownloading ? '正在导出…' : '导出运行日志 (.log)'}
+                  </button>
+                  <button className={subtleButton} disabled={logDownloading}
+                    onClick={() => void loadRuntimeLogs()}>
+                    刷新日志统计
+                  </button>
+                </div>
+                <p className="text-xs text-text-secondary">
+                  仅管理员可导出，文件总容量上限 10 MB。选择的时间范围内如果没有记录，
+                  会下载包含范围说明的空报告；日志被轮转删除后不再可导出。
+                  Docker 自身的标准输出日志另设单容器 10 MB 轮转限制。
+                </p>
               </section>
             )}
 

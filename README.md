@@ -103,6 +103,14 @@ sudo systemctl status mv3c-updater.timer
 
 **网页容器没有 Docker Socket 权限**；更新实际由宿主机 systemd 服务执行。详细安装、排错与回滚说明：[版本更新文档](mv3c/updater/README.md)。
 
+## 4.2 Docker 依赖缓存与运行日志
+
+- 后台自动更新和手动更新都复用同一套 Docker BuildKit 缓存。依赖清单（根 `package-lock.json`、根和各 workspace 的 `package.json`）不变时直接使用已安装依赖层；依赖清单变化时才重新运行 `npm ci`，并通过共享的 npm 缓存优先使用本地包。**不会每次清空缓存，也不使用 `--no-cache`**。源码变化仍需要重新编译前端，首次构建和基础镜像缺失时仍可能联网。
+- 管理后台新增「**运行日志**」：实时写入脱敏应用日志和 API 请求摘要（不保存请求/响应正文），最多约 10 MiB；采用小文件轮转，超过阈值先淘汰最旧的内容，保存在已有 `mv3c-logs` Docker 数据卷。
+- 后台选择 **最近 15 分钟 / 1 小时 / 6 小时 / 24 小时 / 3 天 / 7 天** 下载 `.log`，仅管理员能操作。由于总量受限，日志轮转后可能不足所选择的时间段。
+- 为避免 Docker 自身标准输出日志无限增长，`mv3c` 与 `mongodb` 的 Docker `local` 日志驱动各自按 2 MB × 5 文件轮转。它们与后台导出的应用运行日志**属于不同的日志集合**。升级前已保存的旧 LibreChat 日志不会被自动删除或合并进新报告。
+- 如需检查 Docker 构建缓存使用情况：`docker builder du`。不要使用 `docker builder prune -a` 或 `docker system prune -a` 清除缓存，否则后续升级可能需要重新下载依赖。
+
 ## 5. 从旧版 .env 部署升级
 
 如果你**已经**用旧版 Python 初始化脚本创建 .env 并在生产环境使用了 mv3c，请不要直接无备份地切换新 Compose：旧版 JWT/CREDS 密钥在 .env 中，新版默认会自动生成新密钥，导致现有会话失效、旧加密数据不可解密。

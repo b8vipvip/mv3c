@@ -16,8 +16,14 @@ services:
       NODE_ENV: production
       MONGO_URI: mongodb://mongodb:27017/mv3c
       SEARCH: "false"
+      LOG_TO_FILE: "false" # Replace upstream long-lived 20MB/error logs with bounded mv3c log
     ports:
       - "127.0.0.1:${MV3C_PORT:-3080}:3080"
+    logging:
+      driver: local
+      options:
+        max-size: "2m"
+        max-file: "5"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -38,6 +44,11 @@ services:
     image: mongo:8.0.20
     restart: unless-stopped
     command: mongod --noauth
+    logging:
+      driver: local
+      options:
+        max-size: "2m"
+        max-file: "5"
     volumes:
       - mv3c-mongodb:/data/db
     # MongoDB is intentionally private to the Compose network.
