@@ -178,8 +178,10 @@ export default function Mv3cAdmin() {
       const result = await adminRequest<UpdateState>(token, '/updates');
       setUpdates(result);
       if (!updateConfigTouched) setUpdateConfig(result.config);
+      setError((previous) => previous.startsWith('更新服务短暂不可用：') ? '' : previous);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新状态加载失败');
+      setError('更新服务短暂不可用：' +
+        (err instanceof Error ? err.message : '更新状态加载失败') + '（将自动重试）');
     }
   }, [token, updateConfigTouched]);
 
