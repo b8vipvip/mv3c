@@ -331,68 +331,92 @@ def execute(repo: Path) -> None:
     if not check_needed(state) and not state.get("pendingJob"):
         return
 
-    pending = state.get("pendingJob")
+    # Claim manual work before GitHub checks: progress should say what the
+    # worker is doing instead of reporting "queued" for a long fetch.
+    job = bridge(repo, "claim") if state.get("pendingJob") else None
+    def progress(stage: str, percent: int, message: str) -> None:
+        if job:
+            bridge(repo, "progress", {
+                "jobId": job["id"], "stage": stage,
+                "percent": percent, "message": message,
+            })
+
+    def complete(outcome: str, *, log: str, error: str = "",
+                 sha: str = old, attempted: str = "", verification: str = "") -> None:
+        if not job:
+            return
+        progress("complete", 100, {
+            "success": "部署和部署后验证成功",
+            "skipped": "当前已经是最新版本，无需重启",
+            "rolled_back": "部署失败，已回滚并验证旧版服务",
+            "failed": "更新失败，请下载报告排查",
+        }[outcome])
+        bridge(repo, "complete", {
+            "jobId": job["id"], "outcome": outcome, "log": log,
+            "error": error, "sha": sha, "fromSha": old,
+            "attemptedSha": attempted, "verification": verification,
+        })
+
     try:
+        progress("checking", 8, "检查当前 Git 状态与更新通道")
+        progress("fetching", 16, "优先 SSH 获取 GitHub 提交（失败回退 HTTPS）")
         target, label = target_for_channel(repo, state["config"]["channel"])
         if not is_descendant(repo, old, target):
             raise UpdateError("Target commit is not a fast-forward descendant of deployed version")
         available = target != old
+        progress("ci", 26, "校验 GitHub Actions 两项 CI")
         good, reason = ci_is_green(target) if available else (True, "")
         report(repo, currentSha=old, latestSha=target, latestLabel=label,
                latestUrl="https://github.com/" + REPO + "/commit/" + target,
                checkedAt=utc_now(), updateAvailable=available,
                **({"status": "blocked", "lastError": reason}
-                  if available and not good and not pending
+                  if available and not good and not job
                   else {"status": "idle", "lastError": ""}
-                  if not available and not pending else {}))
+                  if not available and not job else {}))
     except Exception as error:
         message = str(error)[:1800]
         report(repo, checkedAt=utc_now(), lastError=message,
-               **({"status": "blocked"} if not pending else {}))
-        if pending:
-            job = bridge(repo, "claim")
-            if job:
-                bridge(repo, "complete", {
-                    "jobId": job["id"], "outcome": "failed", "error": message,
-                    "log": "Unable to resolve or verify GitHub update", "sha": old,
-                })
+               **({"status": "blocked"} if not job else {}))
+        complete("failed", error=message,
+                 log="Unable to resolve or verify the GitHub commit: " + message,
+                 verification="Pre-deployment verification FAILED")
         raise
 
     if not available:
-        if pending:
-            job = bridge(repo, "claim")
-            if job:
-                bridge(repo, "complete", {
-                    "jobId": job["id"], "outcome": "skipped",
-                    "error": "", "log": "Already running the latest commit", "sha": old,
-                })
+        complete("skipped", log="Already running the latest commit " + old,
+                 sha=old, attempted=target,
+                 verification="Skipped: current version already matches target")
         return
     if not good:
-        if pending:
-            job = bridge(repo, "claim")
-            if job:
-                bridge(repo, "complete", {
-                    "jobId": job["id"], "outcome": "failed",
-                    "error": reason, "log": "GitHub CI gate blocked deployment", "sha": old,
-                })
+        complete("failed", error=reason,
+                 log="GitHub CI gate blocked deployment: " + reason,
+                 attempted=target, verification="CI gate FAILED")
         return
 
-    if not pending and state["config"]["autoEnabled"]:
+    if not job and state["config"]["autoEnabled"]:
         if target == state.get("blockedSha"):
             report(repo, status="blocked",
                    lastError="此提交上次部署失败，已暂停自动重试；可手动重试或等待新的 GitHub 提交")
             return
         bridge(repo, "queue-auto")
-    job = bridge(repo, "claim")
+        job = bridge(repo, "claim")
+        if job:
+            progress("checking", 8, "自动更新已通过 GitHub 版本检查")
+            progress("fetching", 16, "GitHub 代码已拉取")
+            progress("ci", 26, "两项 GitHub Actions 已通过")
     if not job:
         return
+
     print("Deploying verified commit", target, flush=True)
-    outcome, log, error = deploy(repo, old, target)
-    bridge(repo, "complete", {
-        "jobId": job["id"], "outcome": outcome, "log": log, "error": error,
-        "sha": target if outcome == "success" else old,
-        "attemptedSha": target,
-    })
+    outcome, log, error = deploy(repo, old, target, on_progress=progress)
+    validation_line = next(
+        (line for line in log.splitlines()
+         if line.startswith(("Post-deploy validation PASSED", "Rollback validation PASSED"))),
+        "Verification failed" if outcome == "failed" else "Deployment failed; recovered old version",
+    )
+    complete(outcome, log=log, error=error,
+             sha=target if outcome == "success" else old, attempted=target,
+             verification=validation_line)
     print("mv3c update:", outcome, flush=True)
 
 
