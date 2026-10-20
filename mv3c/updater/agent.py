@@ -143,8 +143,12 @@ def ci_is_green(sha: str, *, api_fetch=json_from_github) -> tuple[bool, str]:
     missing = CI_NAMES - set(latest)
     if missing:
         return False, "GitHub CI 尚未完成：" + ", ".join(sorted(missing))
+    waiting = [name for name, item in latest.items()
+               if item.get("status") != "completed"]
+    if waiting:
+        return False, "GitHub CI 正在运行：" + ", ".join(sorted(waiting))
     bad = [name for name, item in latest.items()
-           if item.get("status") != "completed" or item.get("conclusion") != "success"]
+           if item.get("conclusion") != "success"]
     if bad:
         return False, "GitHub CI 未通过：" + ", ".join(sorted(bad))
     return True, ""
@@ -440,13 +444,19 @@ def execute(repo: Path) -> None:
         available = target != old
         progress("ci", 26, "校验 GitHub Actions 两项 CI", target_sha=target)
         good, reason = ci_is_green(target) if available else (True, "")
+        ci_pending = not good and reason.startswith(
+            ("GitHub CI 尚未完成：", "GitHub CI 正在运行："))
         report(repo, currentSha=old, latestSha=target, latestLabel=label,
                latestUrl="https://github.com/" + REPO + "/commit/" + target,
                checkedAt=utc_now(), updateAvailable=available,
-               **({"status": "blocked", "lastError": reason}
-                  if available and not good and not job
-                  else {"status": "idle", "lastError": ""}
-                  if not available and not job else {}))
+               ciMessage=reason if ci_pending else "",
+               **({"status": "checking", "lastError": ""}
+                  if available and ci_pending and not job else
+                  {"status": "blocked", "lastError": reason}
+                  if available and not good and not job else
+                  {"status": "idle", "lastError": ""}
+                  if not available and not job else
+                  {"lastError": ""} if good and not job else {}))
     except Exception as error:
         message = str(error)[:1800]
         report(repo, checkedAt=utc_now(), lastError=message,
