@@ -57,7 +57,10 @@ const localStorageAtoms = {
   chatTitleInTab: atomWithLocalStorage(CHAT_TITLE_IN_TAB_KEY, true),
 
   // Chat settings
-  enterToSend: atomWithLocalStorage('enterToSend', true),
+  // New mv3c key: legacy LibreChat stored false as its default. Migrating to a
+  // fresh key enables Enter-to-send for existing and new users, while the
+  // chat preference remains user-configurable after migration.
+  enterToSend: atomWithLocalStorage('mv3cEnterToSend', true),
   maximizeChatSpace: atomWithLocalStorage('maximizeChatSpace', false),
   chatDirection: atomWithLocalStorage('chatDirection', 'LTR'),
   autoExpandTools: atomWithLocalStorage(LocalStorageKeys.AUTO_EXPAND_TOOLS, false),
