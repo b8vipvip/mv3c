@@ -10,6 +10,11 @@ const DEFAULT_CONFIG = Object.freeze({
   intervalMinutes: 10,
 });
 const SHA = /^[0-9a-f]{40}$/i;
+const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const STAGE_SET = new Set([
+  'queued', 'checking', 'fetching', 'ci', 'backup', 'merging',
+  'building', 'restarting', 'verifying', 'rollback', 'complete',
+]);
 
 function collection() {
   if (!mongoose.connection.db) throw new Error('MongoDB is not ready');
@@ -96,6 +101,7 @@ async function queueJob(actor, mode = 'manual') {
     requestedAt: new Date(),
     requestedBy: String(actor),
     mode,
+    progress: { stage: 'queued', percent: 0, message: '等待宿主机执行', updatedAt: new Date(), steps: [] },
   };
   const result = await collection().findOneAndUpdate({
     _id: ID,
@@ -122,6 +128,73 @@ async function claimJob() {
   }], { returnDocument: 'after' });
   return result?.activeJob || null;
 }
+function validateProgress(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+      !JOB_ID.test(payload.jobId || '') || !STAGE_SET.has(payload.stage) ||
+      !Number.isInteger(payload.percent) || payload.percent < 0 || payload.percent > 100 ||
+      typeof payload.message !== 'string' || payload.message.length > 300 ||
+      Object.keys(payload).some((key) => !['jobId', 'stage', 'percent', 'message'].includes(key))) {
+    throw new TypeError('Invalid update progress');
+  }
+  return { stage: payload.stage, percent: payload.percent, message: payload.message };
+}
+async function progressJob(payload) {
+  const progress = validateProgress(payload);
+  const now = new Date();
+  const result = await collection().updateOne({
+    _id: ID, 'activeJob.id': payload.jobId,
+    'activeJob.progress.percent': { $lte: progress.percent },
+  }, {
+    $set: {
+      'activeJob.progress.stage': progress.stage,
+      'activeJob.progress.percent': progress.percent,
+      'activeJob.progress.message': progress.message,
+      'activeJob.progress.updatedAt': now, agentHeartbeat: now,
+    },
+    $push: { 'activeJob.progress.steps': {
+      $each: [{ stage: progress.stage, percent: progress.percent,
+        message: progress.message, at: now }], $slice: -32,
+    } },
+  });
+  if (!result.matchedCount) throw new Error('Update job not active or progress regressed');
+  return true;
+}
+function renderReport(entry) {
+  if (!entry) throw new Error('Update report not found');
+  const lines = [
+    'mv3c deployment diagnostic report',
+    '================================',
+    'Job ID: ' + entry.jobId,
+    'Mode: ' + (entry.mode || 'unknown'),
+    'Requested by: ' + (entry.requestedBy || 'unknown'),
+    'Requested at: ' + (entry.requestedAt ? new Date(entry.requestedAt).toISOString() : '-'),
+    'Started at: ' + (entry.startedAt ? new Date(entry.startedAt).toISOString() : '-'),
+    'Finished at: ' + new Date(entry.finishedAt).toISOString(),
+    'Duration (ms): ' + (entry.durationMs ?? '-'),
+    'Result: ' + entry.outcome,
+    'Old SHA: ' + (entry.fromSha || '-'),
+    'Target SHA: ' + (entry.attemptedSha || '-'),
+    'Installed SHA: ' + (entry.sha || '-'),
+    'Verification: ' + (entry.verification || '-'),
+    'Error: ' + (entry.error || '-'),
+    '',
+    'Progress timeline', '-----------------',
+    ...(entry.steps || []).map((step) =>
+      new Date(step.at).toISOString() + ' | ' + step.percent + '% | ' +
+      step.stage + ' | ' + step.message),
+    '', 'Deployment log', '--------------', entry.log || '(no log)', '',
+  ];
+  return lines.join('\n');
+}
+async function getReport(jobId) {
+  if (!JOB_ID.test(jobId || '')) throw new TypeError('Invalid update job ID');
+  await initialize();
+  const doc = await collection().findOne(
+    { _id: ID, 'history.jobId': jobId }, { projection: { history: 1 } },
+  );
+  return renderReport((doc?.history || []).find((entry) => entry.jobId === jobId));
+}
+
 function validateReport(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new TypeError('Invalid updater report');
@@ -159,17 +232,28 @@ async function report(payload) {
 async function completeJob(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
       !['success', 'failed', 'rolled_back', 'skipped'].includes(payload.outcome) ||
-      typeof payload.jobId !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.jobId)) {
+      typeof payload.jobId !== 'string' || !JOB_ID.test(payload.jobId)) {
     throw new TypeError('Invalid job completion');
   }
-  const log = String(payload.log || '').slice(-12000);
+  const log = String(payload.log || '').slice(-24000);
+  const verification = String(payload.verification || '').slice(0, 1200);
+  const fromSha = String(payload.fromSha || '');
   const error = String(payload.error || '').slice(0, 2000);
   const sha = String(payload.sha || '');
   const attemptedSha = String(payload.attemptedSha || '');
-  if ((sha && !SHA.test(sha)) || (attemptedSha && !SHA.test(attemptedSha))) {
+  if ((sha && !SHA.test(sha)) || (attemptedSha && !SHA.test(attemptedSha)) ||
+      (fromSha && !SHA.test(fromSha))) {
     throw new TypeError('Invalid commit SHA');
   }
   const now = new Date();
+  const record = await collection().findOne(
+    { _id: ID, 'activeJob.id': payload.jobId },
+    { projection: { activeJob: 1 } },
+  );
+  if (!record?.activeJob) throw new Error('No matching active update job');
+  const active = record.activeJob;
+  const startedAt = active.progress?.steps?.[0]?.at || active.requestedAt || now;
+  const durationMs = Math.max(0, now.getTime() - new Date(startedAt).getTime());
   const result = await collection().updateOne({
     _id: ID, 'activeJob.id': payload.jobId,
   }, {
@@ -187,8 +271,13 @@ async function completeJob(payload) {
     $unset: { activeJob: '', ...(payload.outcome === 'success' ? { blockedSha: '' } : {}) },
     $push: {
       history: {
-        $each: [{ jobId: payload.jobId, outcome: payload.outcome,
-          sha, error, finishedAt: now }],
+        $each: [{
+          jobId: payload.jobId, outcome: payload.outcome,
+          mode: active.mode, requestedBy: active.requestedBy,
+          requestedAt: active.requestedAt, startedAt, finishedAt: now, durationMs,
+          fromSha, attemptedSha, sha, error, verification, log,
+          steps: active.progress?.steps || [],
+        }],
         $slice: -20,
       },
     },
@@ -198,6 +287,6 @@ async function completeJob(payload) {
 }
 
 module.exports = {
-  DEFAULT_CONFIG, format, validateConfig, validateReport,
-  getState, saveConfig, requestCheck, queueJob, claimJob, report, completeJob,
+  DEFAULT_CONFIG, format, validateConfig, validateReport, validateProgress, renderReport,
+  getState, saveConfig, requestCheck, queueJob, claimJob, report, progressJob, completeJob, getReport,
 };
