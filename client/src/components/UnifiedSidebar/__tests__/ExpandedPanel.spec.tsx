@@ -139,7 +139,7 @@ function renderPanel({
   );
 
   if (expanded && openAdvancedTools) {
-    fireEvent.click(screen.getByText('更多工具'));
+    fireEvent.click(screen.getByText('com_ui_mv3c_tools_more'));
   }
   return { ...result, onCollapse, onExpand };
 }
@@ -155,7 +155,7 @@ describe('ExpandedPanel', () => {
       renderPanel({ expanded: true, openAdvancedTools: false });
       const more = screen.getByTestId('mv3c-more-tools');
       expect(more).not.toHaveAttribute('open');
-      fireEvent.click(screen.getByText('更多工具'));
+      fireEvent.click(screen.getByText('com_ui_mv3c_tools_more'));
       expect(more).toHaveAttribute('open');
       expect(screen.getByRole('button', { name: 'com_ui_prompts' })).toBeInTheDocument();
     });
