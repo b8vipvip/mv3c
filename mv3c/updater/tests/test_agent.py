@@ -228,15 +228,25 @@ class HostUpdaterTests(unittest.TestCase):
                 agent.verify_deployment(pathlib.Path("/tmp"), SHA2)
 
     def test_interrupted_job_is_reconciled_with_validation(self):
-        active = {"id": "22222222-2222-4222-8222-222222222222"}
+        active = {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "fromSha": SHA1, "targetSha": SHA2,
+        }
         with patch.object(agent, "verify_deployment", return_value="verified"):
             with patch.object(agent, "bridge", return_value=True) as bridge:
-                agent.recover_interrupted_job(pathlib.Path("/tmp"), active, SHA2, SHA2)
+                agent.recover_interrupted_job(pathlib.Path("/tmp"), active, SHA2)
         self.assertEqual(bridge.call_args_list[-1].args[1], "complete")
         self.assertEqual(bridge.call_args_list[-1].args[2]["outcome"], "success")
         with patch.object(agent, "verify_deployment", return_value="verified"):
             with patch.object(agent, "bridge", return_value=True) as bridge:
-                agent.recover_interrupted_job(pathlib.Path("/tmp"), active, SHA1, SHA2)
+                agent.recover_interrupted_job(pathlib.Path("/tmp"), active, SHA1)
+        self.assertEqual(bridge.call_args_list[-1].args[2]["outcome"], "failed")
+        # A global latest SHA is not evidence that this particular interrupted
+        # job reached its target; jobs without a pinned target cannot succeed.
+        without_target = {"id": active["id"], "fromSha": SHA1}
+        with patch.object(agent, "verify_deployment", return_value="verified"):
+            with patch.object(agent, "bridge", return_value=True) as bridge:
+                agent.recover_interrupted_job(pathlib.Path("/tmp"), without_target, SHA1)
         self.assertEqual(bridge.call_args_list[-1].args[2]["outcome"], "failed")
 
     def test_only_fast_forward_is_allowed(self):
