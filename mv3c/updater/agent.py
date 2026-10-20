@@ -264,7 +264,7 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
         repo, timeout=20,
     )
     if running_image != tagged_image:
-        raise UpdateError("Running container image does not match newly built image")
+        raise UpdateError("Running container image does not match the pulled deployment image")
     for url in ("http://127.0.0.1:3080/readyz",
                 "http://127.0.0.1:3080/api/config"):
         try:
@@ -296,7 +296,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
                 # deployment into a rollback. The final report retries later.
                 log.append("Progress transport warning: " + str(exc)[:300])
     try:
-        # Preserve the exact known-good image before a source build can replace its tag.
+        # Preserve the exact known-good local image before switching the tag to the registry image.
         advance("backup", 35, "保存旧版 Docker 镜像")
         run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"], repo, timeout=30)
         previous_image_saved = True
