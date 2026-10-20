@@ -5,8 +5,9 @@
 - 管理员在 /admin →「版本更新」管理自动更新、通道、检查间隔，查看版本、任务、日志；数据保存在 MongoDB。
 - Linux 宿主机 systemd timer 每分钟检查是否有管理员任务；按后台配置的 5–60 分钟间隔检查 GitHub。
 - 网站容器不挂载 Docker Socket，不直接执行 Git、Docker 或任意 shell 命令。
-- **自动更新与后台手动更新均优先通过 SSH 拉取 Git 代码**：首先使用 git@github.com:b8vipvip/mv3c.git；若 SSH 连接失败或超时，自动回退至 https://github.com/b8vipvip/mv3c.git。两种协议都失败才报错；禁止重定向到其他 Git 仓库。目标提交必须是已部署版本的快进后代，且 GitHub Actions 中 mv3c validation 和 mv3c source Docker build 两项都成功。GitHub API 的版本/CI 元数据查询仍通过 HTTPS 完成。
-- 部署：Git 快进 → Docker Compose 构建 → 更新网站容器 → 健康检查；失败则尝试恢复上一提交并重新构建。
+- **GitHub Actions 负责构建**：`mv3c source Docker build` 使用 Buildx GitHub Actions 缓存，构建并集成测试通过后，将同一个镜像发布到 `ghcr.io/b8vipvip/mv3c:sha-<完整提交 SHA>`，并更新 `:main` 标签。PR 只构建和测试，不发布镜像。
+- **服务器只负责部署预构建镜像**：自动更新与后台手动更新仍优先通过 SSH 拉取 Git 代码（SSH 失败回退固定 HTTPS），验证目标提交是快进后代并且 `mv3c validation` 与 `mv3c source Docker build` 两项 Actions 都成功，然后拉取与目标完整 SHA 对应的 GHCR 镜像、切换容器并验证健康状态。GitHub API 元数据查询仍通过 HTTPS。
+- 失败时恢复更新前保存的本地镜像并重新验证；服务器部署过程不执行 `docker compose build`，也不在服务器重新安装 npm 依赖。
 - 不删除 MongoDB、密钥和上传文件的数据卷；数据库 schema 迁移无法保证回滚，需单独备份。
 
 ## 一次性安装
@@ -18,7 +19,9 @@ sudo mkdir -p /opt
 cd /opt
 sudo -H git clone git@github.com:b8vipvip/mv3c.git
 cd /opt/mv3c
-sudo docker compose up -d --build
+sudo docker pull ghcr.io/b8vipvip/mv3c:main
+sudo docker tag ghcr.io/b8vipvip/mv3c:main mv3c:local
+sudo docker compose up -d --no-build
 
 # 可选：验证 systemd 使用的 root 身份能否通过 SSH 访问 GitHub
 sudo -H env GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15' \
@@ -33,6 +36,8 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 ~~~
 
 首次克隆如果 SSH 不可用，可以改用 `sudo -H git clone https://github.com/b8vipvip/mv3c.git`；安装后更新器仍会优先尝试 SSH。
+
+**GHCR 首次启用需要一次性设置**：首次 GitHub Actions 成功发布镜像后，打开 GitHub 账号 `b8vipvip` 的 Packages，进入 `mv3c` 容器包的 Package settings，将包可见性设为 **Public**。公开镜像可让服务器免密拉取。如果不希望公开镜像，则必须先以 root 身份配置具备 `read:packages` 权限的 GHCR 凭据。若自动更新在包仍为 Private 时失败，改为 Public 后在后台手动重新触发更新。
 
 若已经安装旧版 mv3c，先升级仓库到包含此功能的版本并确认站点正常，再执行上述安装脚本。无需创建 .env，也无需将 Docker Socket 暴露给网站容器。
 
@@ -73,7 +78,8 @@ sudo docker compose logs --tail=200 mv3c
 
 - 更新服务未连接：确认 timer 已启用、Docker Compose 可运行、网站容器和数据库正常。
 - SSH 拉取失败：自动尝试 HTTPS；若两种方式均失败，后台展示组合错误。版本标签和 main 分支均适用，最新版本标签会标注 SSH 或 HTTPS 回退。
-- 等待 CI 通过：GitHub 最新目标提交的两项 Actions 尚未成功，自动/手动更新都会被阻止。
+- 等待 CI / 镜像发布：GitHub 最新目标提交的两项 Actions 尚未成功并发布镜像，自动/手动更新都会被阻止。
+- GHCR 拉取被拒绝：检查 `ghcr.io/b8vipvip/mv3c` 是否已设为 Public，或为 root 配置 `read:packages` 凭据。
 - 本地文件有修改：先提交或撤销 Git 已跟踪文件的本地更改。
 - 已回滚上一版本：新版本部署失败并尝试恢复旧应用。失败的提交会暂停自动重试，直到 GitHub 出现新的提交或管理员主动手动重试。**数据库迁移不回滚**。
 - GitHub Release 不存在：选择 main 通道，或在 GitHub 先发布正式 Release。
