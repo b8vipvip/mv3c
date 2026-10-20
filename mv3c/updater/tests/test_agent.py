@@ -224,7 +224,7 @@ class HostUpdaterTests(unittest.TestCase):
                              for c in commands))
         check.assert_called_once_with(pathlib.Path("/tmp"), SHA2)
         self.assertEqual([phase[0] for phase in phases],
-                         ["backup", "merging", "pulling", "restarting",
+                         ["backup", "merging", "building", "restarting",
                           "verifying", "verifying"])
         self.assertEqual(sorted(phase[1] for phase in phases),
                          [phase[1] for phase in phases])
