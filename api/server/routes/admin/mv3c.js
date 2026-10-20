@@ -96,6 +96,18 @@ router.get('/updates', async (req, res) => {
     return failure(res, error);
   }
 });
+router.get('/updates/reports/:jobId', async (req, res) => {
+  try {
+    const report = await updater.getReport(req.params.jobId);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition',
+      'attachment; filename="mv3c-update-' + req.params.jobId + '.log"');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(report);
+  } catch (error) {
+    return failure(res, error);
+  }
+});
 router.put('/updates/settings', async (req, res) => {
   try {
     const result = await updater.saveConfig(req.body, actorId(req));
