@@ -195,8 +195,10 @@ class HostUpdaterTests(unittest.TestCase):
                             for c in commands))
         self.assertFalse(any(c[:3] == ["docker", "compose", "build"]
                              for c in commands))
-        self.assertTrue(any(c[:3] == ["docker", "compose", "up"]
-                            and "--no-build" in c for c in commands))
+        self.assertFalse(any(c[:3] == ["docker", "compose", "up"]
+                             for c in commands),
+                         "a failed image pull must not restart the existing service")
+        self.assertIn("not switched", _log)
         self.assertIn("reset", str(git.call_args_list))
 
     def test_successful_deployment_pulls_prebuilt_image_and_verifies(self):
