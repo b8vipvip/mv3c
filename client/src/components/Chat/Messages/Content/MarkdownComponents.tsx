@@ -10,6 +10,7 @@ import Mermaid, { MermaidErrorBoundary } from '~/components/Messages/Content/Mer
 import { useMessagePartsHost } from '~/Providers/MessagePartsHostContext';
 import { useCodeBlockContext, useMediaContext } from '~/Providers';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
+import { isSafeRasterImageDataUrl } from './inlineImageUrl';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
 import { useFileDownload } from '~/data-provider';
 import { useLocalize } from '~/hooks';
@@ -231,6 +232,9 @@ export const img: React.ElementType = memo(function MarkdownImage({
 
   const fixedSrc = useMemo(() => {
     if (!src) return src;
+    // Already validated by Markdown URL policy. Never reinterpret an inline
+    // raster image as a local file path or prepend the mv3c API base URL.
+    if (isSafeRasterImageDataUrl(src)) return src;
     const resolved = resolveInlineMedia(src, attachmentsByName)?.filepath ?? src;
     return toAbsoluteFilePath(resolved, baseURL);
   }, [src, baseURL, attachmentsByName]);
