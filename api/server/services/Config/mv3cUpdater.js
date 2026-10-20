@@ -143,7 +143,10 @@ async function progressJob(payload) {
   const now = new Date();
   const result = await collection().updateOne({
     _id: ID, 'activeJob.id': payload.jobId,
-    'activeJob.progress.percent': { $lte: progress.percent },
+    $or: [
+      { 'activeJob.progress.percent': { $lte: progress.percent } },
+      { 'activeJob.progress.percent': { $exists: false } },
+    ],
   }, {
     $set: {
       'activeJob.progress.stage': progress.stage,
