@@ -13,6 +13,8 @@ const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
+const { installRuntimeLogCapture } = require('./services/Config/mv3cRuntimeLogs');
+installRuntimeLogCapture(logger);
 const {
   isEnabled,
   issueCsp,
@@ -359,6 +361,25 @@ const startServer = async () => {
 
   /* Middleware */
   app.use(requestContextMiddleware);
+  // Record only request metadata (no tokens, query strings or message bodies).
+  // Never log the polling/export endpoint itself or health probes.
+  app.use((req, res, next) => {
+    const route = req.path;
+    if (!route.startsWith('/api/') ||
+        route.startsWith('/api/admin/mv3c/runtime-logs') ||
+        route === '/api/admin/mv3c/updates') return next();
+    const started = Date.now();
+    res.once('finish', () => {
+      const safePath = route.slice(0, 180)
+        .replace(/[0-9a-f]{24,}/gi, ':id')
+        .replace(/[A-Za-z0-9_-]{80,}/g, ':value');
+      const message = '[mv3c-http] ' + req.method + ' ' + safePath +
+        ' HTTP ' + res.statusCode + ' ' + (Date.now() - started) + 'ms';
+      if (res.statusCode >= 400) logger.warn(message);
+      else logger.info(message);
+    });
+    next();
+  });
   app.use('/api/agents/chat', agentStartupIngressMiddleware);
   app.use(metricsMiddleware);
   app.use(noIndex);
