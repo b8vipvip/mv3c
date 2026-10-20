@@ -8,17 +8,17 @@ const updates = require('../../api/server/services/Config/mv3cUpdater');
 
 async function main() {
   const command = process.argv[2];
-  if (!['state', 'claim', 'report', 'complete', 'queue-auto'].includes(command)) {
+  if (!['state', 'claim', 'report', 'progress', 'complete', 'queue-auto'].includes(command)) {
     throw new Error('Unknown updater bridge command');
   }
   if (!process.env.MONGO_URI) throw new Error('MONGO_URI is required');
   await mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 8000 });
   let payload = {};
-  if (['report', 'complete'].includes(command)) {
+  if (['report', 'progress', 'complete'].includes(command)) {
     const chunks = [];
     for await (const chunk of process.stdin) {
       chunks.push(chunk);
-      if (Buffer.concat(chunks).length > 16000) throw new Error('Updater payload too large');
+      if (Buffer.concat(chunks).length > 45000) throw new Error('Updater payload too large');
     }
     payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   }
@@ -32,6 +32,9 @@ async function main() {
       break;
     case 'report':
       result = await updates.report(payload);
+      break;
+    case 'progress':
+      result = await updates.progressJob(payload);
       break;
     case 'complete':
       result = await updates.completeJob(payload);
