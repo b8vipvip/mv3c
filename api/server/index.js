@@ -12,7 +12,7 @@ const passport = require('passport');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
-const { logger, runAsSystem } = require('@librechat/data-schemas');
+const { logger, runAsSystem, createMv3cRequestRecordStore } = require('@librechat/data-schemas');
 const { installRuntimeLogCapture } = require('./services/Config/mv3cRuntimeLogs');
 installRuntimeLogCapture(logger);
 const {
@@ -67,6 +67,7 @@ const {
   waitForKeyvRedisClient,
   warnOnUnreachableDeliveryPaths,
   createCodeApiUploadRegistry,
+  createMv3cRequestRecorder,
 } = require('@librechat/api');
 const { connectDb, indexSync } = require('~/db');
 const {
@@ -361,6 +362,9 @@ const startServer = async () => {
 
   /* Middleware */
   app.use(requestContextMiddleware);
+  // Database-backed diagnostics record each API lifecycle exactly once. Headers,
+  // URL queries, prompts and response bodies are never persisted.
+  app.use(createMv3cRequestRecorder(createMv3cRequestRecordStore(mongoose.connection)));
   // Record only request metadata (no tokens, query strings or message bodies).
   // Never log the polling/export endpoint itself or health probes.
   app.use((req, res, next) => {
