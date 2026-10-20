@@ -4,6 +4,8 @@ name: mv3c
 
 services:
   mv3c:
+    # Keep the build stanza for a safe one-time transition from the already
+    # installed legacy updater. The new updater always uses --no-build and GHCR.
     build:
       context: .
       dockerfile: Dockerfile

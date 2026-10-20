@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   docker-build:
@@ -19,12 +20,24 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Build mv3c from modified source
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build mv3c with persistent GitHub Actions layer cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: mv3c:ci
+          cache-from: type=gha,scope=mv3c-image
+          cache-to: type=gha,mode=max,scope=mv3c-image
+          build-args: |
+            NODE_MAX_OLD_SPACE_SIZE=4096
+            NPM_CI_TIMEOUT_SECONDS=1800
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_BRANCH=${{ github.ref_name }}
+      - name: Report final runtime image size
         run: |
-          docker build --progress=plain \
-            --build-arg NODE_MAX_OLD_SPACE_SIZE=4096 \
-            --build-arg NPM_CI_TIMEOUT_SECONDS=1800 \
-            -t mv3c:ci .
+          docker image inspect mv3c:ci --format 'Final runtime image size: {{.Size}} bytes'
       - name: Start env-free mv3c and verify public startup
         timeout-minutes: 10
         run: |
@@ -84,6 +97,23 @@ jobs:
           docker compose exec -T mv3c node /app/mv3c/updater/tests/integration.cjs
           docker compose exec -T mv3c node /app/mv3c/updater/bridge.cjs state > /tmp/mv3c-updater-state.json
           node -e "const x=require('/tmp/mv3c-updater-state.json');if(!x.config||x.config.channel!=='main')process.exit(1);console.log('Updater database bridge ready')"
+      - name: Log in to GitHub Container Registry
+        if: github.repository == 'b8vipvip/mv3c' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exact image that passed integration tests
+        if: github.repository == 'b8vipvip/mv3c' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          docker tag mv3c:ci "${IMAGE}:sha-${COMMIT_SHA}"
+          docker tag mv3c:ci "${IMAGE}:main"
+          docker push "${IMAGE}:sha-${COMMIT_SHA}"
+          docker push "${IMAGE}:main"
       - name: Dump runtime logs on failure
         if: failure()
         run: docker compose -f docker-compose.mv3c.yml logs --tail=250
