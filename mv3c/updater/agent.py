@@ -216,7 +216,7 @@ def pull_prebuilt_image(repo: Path, sha: str) -> str:
     image = registry_image(sha)
     output = run(["docker", "pull", image], repo, timeout=1800)
     tagged = run(["docker", "image", "tag", image, "mv3c:local"], repo, timeout=60)
-    return (output + "\\n" + tagged).strip()
+    return (output + "\n" + tagged).strip()
 
 
 def wait_healthy(repo: Path, timeout: int = 210) -> None:
@@ -303,7 +303,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         advance("merging", 43, "Git 快进到验证通过的提交")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
-        advance("pulling", 50, "从 GHCR 拉取 GitHub Actions 已验证的镜像")
+        advance("building", 50, "从 GHCR 拉取 GitHub Actions 已验证的镜像；服务器不再本地构建")
         log.append(pull_prebuilt_image(repo, target)[-9500:])
         advance("restarting", 75, "正在重新创建 mv3c 服务")
         log.append(run(["docker", "compose", "up", "-d", "--no-deps", "--force-recreate",
