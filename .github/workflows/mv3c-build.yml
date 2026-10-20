@@ -33,6 +33,8 @@ jobs:
           build-args: |
             NODE_MAX_OLD_SPACE_SIZE=4096
             NPM_CI_TIMEOUT_SECONDS=1800
+            BUILD_COMMIT=${{ github.sha }}
+            BUILD_BRANCH=${{ github.ref_name }}
       - name: Start env-free mv3c and verify public startup
         timeout-minutes: 10
         run: |
