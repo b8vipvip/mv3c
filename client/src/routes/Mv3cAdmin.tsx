@@ -64,6 +64,7 @@ type UpdateState = {
   lastAttemptAt: string | null;
   lastSuccessAt: string | null;
   lastError: string;
+  ciMessage?: string;
   lastLog: string;
   lastOutcome: string;
   blockedSha: string;
@@ -76,6 +77,13 @@ const updateStatusLabel: Record<string, string> = {
   updating: '正在更新部署', blocked: '等待 CI 通过',
   success: '更新成功', failed: '更新失败', rolled_back: '已回滚上一版本',
 };
+
+class AdminApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'AdminApiError';
+  }
+}
 
 async function adminRequest<T>(token: string, path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch('/api/admin/mv3c' + path, {
@@ -90,8 +98,10 @@ async function adminRequest<T>(token: string, path: string, options: RequestInit
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.error || (response.status === 403
-      ? '没有管理员权限' : '请求失败 (HTTP ' + response.status + ')'));
+    throw new AdminApiError(response.status,
+      response.status === 401 ? '管理员登录凭证已失效，请重新登录。' :
+      body.error || (response.status === 403
+        ? '没有管理员权限' : '请求失败 (HTTP ' + response.status + ')'));
   }
   return body as T;
 }
@@ -104,7 +114,7 @@ const subtleButton =
   'rounded-lg border border-border-medium px-4 py-2 text-text-primary hover:bg-surface-secondary disabled:opacity-50';
 
 export default function Mv3cAdmin() {
-  const { token, isAuthenticated, user } = useAuthContext();
+  const { token, isAuthenticated, user, logout } = useAuthContext();
   const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit' | 'updates' | 'logs'>('provider');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [site, setSite] = useState<SiteSettings>({
@@ -130,6 +140,8 @@ export default function Mv3cAdmin() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [allowed, setAllowed] = useState(true);
+  const [adminAuthExpired, setAdminAuthExpired] = useState(false);
+  useEffect(() => setAdminAuthExpired(false), [token]);
   const [testModels, setTestModels] = useState<string[] | null>(null);
   const [downloadingReport, setDownloadingReport] = useState<string | null>(null);
 
@@ -150,6 +162,7 @@ export default function Mv3cAdmin() {
       setError('');
     } catch (err) {
       const text = err instanceof Error ? err.message : '加载失败';
+      if (err instanceof AdminApiError && err.status === 401) setAdminAuthExpired(true);
       if (text.includes('403') || text.includes('权限')) setAllowed(false);
       setError(text);
     }
@@ -185,6 +198,7 @@ export default function Mv3cAdmin() {
     try {
       setLogStats(await adminRequest<RuntimeLogStats>(token, '/runtime-logs'));
     } catch (err) {
+      if (err instanceof AdminApiError && err.status === 401) setAdminAuthExpired(true);
       setError(err instanceof Error ? err.message : '日志信息加载失败');
     }
   }, [token]);
@@ -225,24 +239,29 @@ export default function Mv3cAdmin() {
   };
 
   const loadUpdates = useCallback(async () => {
-    if (!token) return;
+    if (!token || adminAuthExpired) return;
     try {
       const result = await adminRequest<UpdateState>(token, '/updates');
       setUpdates(result);
       if (!updateConfigTouched) setUpdateConfig(result.config);
       setError((previous) => previous.startsWith('更新服务短暂不可用：') ? '' : previous);
     } catch (err) {
+      if (err instanceof AdminApiError && err.status === 401) {
+        setAdminAuthExpired(true);
+        setError(err.message);
+        return;
+      }
       setError('更新服务短暂不可用：' +
         (err instanceof Error ? err.message : '更新状态加载失败') + '（将自动重试）');
     }
-  }, [token, updateConfigTouched]);
+  }, [token, updateConfigTouched, adminAuthExpired]);
 
   useEffect(() => {
-    if (!token || tab !== 'updates') return;
+    if (!token || tab !== 'updates' || adminAuthExpired) return;
     void loadUpdates();
     const interval = window.setInterval(() => { void loadUpdates(); }, 3000);
     return () => window.clearInterval(interval);
-  }, [token, tab, loadUpdates]);
+  }, [token, tab, loadUpdates, adminAuthExpired]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -251,6 +270,7 @@ export default function Mv3cAdmin() {
     try {
       await action();
     } catch (err) {
+      if (err instanceof AdminApiError && err.status === 401) setAdminAuthExpired(true);
       setError(err instanceof Error ? err.message : '操作失败');
     } finally {
       setBusy(false);
@@ -397,6 +417,12 @@ export default function Mv3cAdmin() {
         {error && (
           <div role="alert" className="mb-4 rounded-lg border border-red-500 p-3 text-red-500">
             {error}
+            {adminAuthExpired && (
+              <button type="button" className={subtleButton + ' ml-3'}
+                onClick={() => logout('/login?redirect_to=%2Fadmin')}>
+                退出并重新登录
+              </button>
+            )}
           </div>
         )}
         {message && (
@@ -591,6 +617,11 @@ export default function Mv3cAdmin() {
                     </div>
                     <div className="space-y-1 text-sm">
                       <p>更新服务：<strong>{updates.agentOnline ? '已连接' : '未连接'}</strong></p>
+                      {updates.ciMessage && (
+                        <p role="status" className="text-sm text-amber-600">
+                          {updates.ciMessage}（等待下一次自动检查）
+                        </p>
+                      )}
                       <p>状态：<strong>{updateStatusLabel[updates.status] || updates.status}</strong></p>
                       <p>新版本：<strong>{updates.updateAvailable ? '已发现' : '暂无或尚未检查'}</strong></p>
                       <p>上次检查：{updates.checkedAt
