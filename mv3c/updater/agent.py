@@ -257,7 +257,12 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
     def advance(stage: str, percent: int, detail: str) -> None:
         log.append("[{}] {}% {}".format(stage, percent, detail))
         if on_progress:
-            on_progress(stage, percent, detail)
+            try:
+                on_progress(stage, percent, detail)
+            except Exception as exc:
+                # Status transport failure must not turn an otherwise healthy
+                # deployment into a rollback. The final report retries later.
+                log.append("Progress transport warning: " + str(exc)[:300])
     try:
         # Preserve the exact known-good image before a source build can replace its tag.
         advance("backup", 35, "保存旧版 Docker 镜像")
@@ -341,10 +346,13 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str, target
         error = "Interrupted update verification failed: " + str(exc)[:1400]
         validation = "Interrupted update: live service verification FAILED"
         message = error
-    bridge(repo, "progress", {
-        "jobId": job_id, "stage": "complete", "percent": 100,
-        "message": message[:300],
-    })
+    try:
+        bridge(repo, "progress", {
+            "jobId": job_id, "stage": "complete", "percent": 100,
+            "message": message[:300],
+        })
+    except Exception as exc:
+        print("Recovery progress reporting warning:", str(exc)[:200], flush=True)
     bridge(repo, "complete", {
         "jobId": job_id, "outcome": outcome, "error": error,
         "log": "Recovery after interrupted updater: " + message +
@@ -384,12 +392,15 @@ def execute(repo: Path) -> None:
                  sha: str = old, attempted: str = "", verification: str = "") -> None:
         if not job:
             return
-        progress("complete", 100, {
-            "success": "部署和部署后验证成功",
-            "skipped": "当前已经是最新版本，无需重启",
-            "rolled_back": "部署失败，已回滚并验证旧版服务",
-            "failed": "更新失败，请下载报告排查",
-        }[outcome])
+        try:
+            progress("complete", 100, {
+                "success": "部署和部署后验证成功",
+                "skipped": "当前已经是最新版本，无需重启",
+                "rolled_back": "部署失败，已回滚并验证旧版服务",
+                "failed": "更新失败，请下载报告排查",
+            }[outcome])
+        except Exception as exc:
+            print("Terminal progress reporting warning:", str(exc)[:200], flush=True)
         bridge(repo, "complete", {
             "jobId": job["id"], "outcome": outcome, "log": log,
             "error": error, "sha": sha, "fromSha": old,
