@@ -145,6 +145,22 @@ describe('ExpandedPanel', () => {
     localStorage.clear();
   });
 
+  describe('ChatGPT-style chat sidebar', () => {
+    it('keeps history as the primary area and shows a full-width new chat action', () => {
+      renderPanel({ expanded: true });
+      expect(screen.getByText('mv3c')).toBeInTheDocument();
+      expect(screen.getByRole('navigation', { name: 'com_ui_chat_history' })).toBeInTheDocument();
+      expect(screen.getByTestId('new-chat-button')).toHaveTextContent('com_ui_new_chat');
+      expect(screen.getByTestId('account-settings')).toBeInTheDocument();
+    });
+
+    it('keeps the collapsed rail available with working navigation', () => {
+      renderPanel({ expanded: false });
+      expect(screen.getByTestId('open-sidebar-button')).toBeInTheDocument();
+      expect(screen.queryByRole('navigation', { name: 'com_ui_chat_history' })).toBeNull();
+    });
+  });
+
   describe('NavIconButton collapse toggle', () => {
     it('collapses sidebar when clicking the active icon while expanded', () => {
       const { onCollapse } = renderPanel({ expanded: true });
