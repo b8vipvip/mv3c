@@ -44,8 +44,8 @@ export function createMv3cRequestRecordStore(connection: Connection): Mv3cReques
         const col = collection();
         await Promise.all([
           col.createIndex({ id: 1 }, { unique: true }),
-          col.createIndex({ at: -1 }),
-          col.createIndex({ at: 1 }, { expireAfterSeconds: RETENTION_SECONDS }),
+          // A single descending TTL index supports list sorting and expiry.
+          col.createIndex({ at: -1 }, { expireAfterSeconds: RETENTION_SECONDS }),
         ]);
       })().catch((error: unknown) => {
         ready = undefined;
