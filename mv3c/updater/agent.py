@@ -220,25 +220,67 @@ def wait_healthy(repo: Path, timeout: int = 210) -> None:
     raise UpdateError("mv3c failed its health check: " + last[:300])
 
 
-def deploy(repo: Path, old: str, target: str) -> tuple[str, str, str]:
+def verify_deployment(repo: Path, expected_sha: str) -> str:
+    """Verify the running app, not merely whether Docker Compose exited 0."""
+    actual = git(repo, "rev-parse", "HEAD")
+    if actual != expected_sha:
+        raise UpdateError("Git checkout SHA mismatch after deployment")
+    cid = run(["docker", "compose", "ps", "-q", "mv3c"], repo, timeout=20)
+    if not cid:
+        raise UpdateError("mv3c container is missing")
+    container_id = cid.splitlines()[0]
+    health = run(["docker", "inspect", "--format",
+                  "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}",
+                  container_id], repo, timeout=20)
+    if health != "healthy":
+        raise UpdateError("Container post-deploy health is " + health)
+    for url in ("http://127.0.0.1:3080/readyz",
+                "http://127.0.0.1:3080/api/config"):
+        try:
+            with urllib.request.urlopen(url, timeout=15) as response:
+                if response.status != 200:
+                    raise UpdateError("HTTP smoke verification failed: " + url)
+                data = response.read(200_000)
+                if url.endswith("/api/config") and not isinstance(json.loads(data), dict):
+                    raise UpdateError("Startup configuration is not a JSON object")
+        except (urllib.error.URLError, ValueError) as error:
+            raise UpdateError("HTTP smoke verification failed: " + url + " " +
+                              str(error)[:200]) from error
+    return ("Post-deploy validation PASSED: git SHA=" + actual[:12]
+            + "; container healthy; /readyz HTTP 200; /api/config HTTP 200")
+
+
+def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str, str, str]:
     """Return outcome, log, error. Never remove Docker volumes."""
     log = []
     previous_image_saved = False
+    def advance(stage: str, percent: int, detail: str) -> None:
+        log.append("[{}] {}% {}".format(stage, percent, detail))
+        if on_progress:
+            on_progress(stage, percent, detail)
     try:
         # Preserve the exact known-good image before a source build can replace its tag.
+        advance("backup", 35, "保存旧版 Docker 镜像")
         run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"], repo, timeout=30)
         previous_image_saved = True
+        advance("merging", 43, "Git 快进到验证通过的提交")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
-        log.append(run(["docker", "compose", "build", "mv3c"], repo, timeout=3600)[-5000:])
+        advance("building", 50, "正在构建 Docker 镜像；此阶段可能需要数分钟")
+        log.append(run(["docker", "compose", "build", "mv3c"], repo, timeout=3600)[-9500:])
+        advance("restarting", 75, "正在重新创建 mv3c 服务")
         log.append(run(["docker", "compose", "up", "-d", "--no-deps", "--force-recreate", "mv3c"],
                        repo, timeout=240)[-3000:])
+        advance("verifying", 86, "检查 Docker 健康状态")
         wait_healthy(repo)
-        return "success", "\n".join(log)[-12000:], ""
+        advance("verifying", 93, "验证 Git 提交、readyz 和应用配置 API")
+        log.append(verify_deployment(repo, target))
+        return "success", "\n".join(log)[-24000:], ""
     except Exception as error:
         failure = str(error)[:1600]
         log.append("Deployment failed: " + failure)
         try:
+            advance("rollback", 94, "更新失败，开始恢复旧版本")
             git(repo, "reset", "--hard", old, timeout=60)
             if previous_image_saved:
                 log.append(run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
@@ -249,11 +291,13 @@ def deploy(repo: Path, old: str, target: str) -> tuple[str, str, str]:
             log.append(run(["docker", "compose", "up", "-d", "--no-deps",
                             "--force-recreate", "mv3c"], repo, timeout=240)[-2000:])
             wait_healthy(repo)
+            validation = verify_deployment(repo, old)
+            log.append("Rollback validation PASSED: " + validation)
             log.append("Previous application version restored")
-            return "rolled_back", "\n".join(log)[-12000:], failure
+            return "rolled_back", "\n".join(log)[-24000:], failure
         except Exception as rollback_error:
             log.append("Rollback failed: " + str(rollback_error)[:1500])
-            return "failed", "\n".join(log)[-12000:], failure + "; rollback failed"
+            return "failed", "\n".join(log)[-24000:], failure + "; rollback failed"
 
 
 def check_needed(state: dict) -> bool:
