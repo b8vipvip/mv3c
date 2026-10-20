@@ -209,6 +209,7 @@ function ExpandedPanel({
         <div className="border-border-light shrink-0 border-t px-3 py-2">
           <p className="text-text-secondary px-2 pb-2 text-xs">其他功能</p>
           <div className="flex max-h-[7.5rem] flex-wrap items-center gap-1 overflow-y-auto">
+            <AgentMarketplaceButton />
             {panelButtons}
           </div>
         </div>
