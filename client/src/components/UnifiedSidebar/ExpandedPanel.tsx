@@ -1,5 +1,6 @@
 import { memo, useCallback, Suspense } from 'react';
 import { SquarePen } from 'lucide-react';
+import SidePanelNav from '~/components/SidePanel/Nav';
 import { useLocation } from 'react-router-dom';
 import { Skeleton, Sidebar, Button, TooltipAnchor } from '@librechat/client';
 import type { NavLink } from '~/common';
@@ -16,9 +17,11 @@ const AccountSettings = lazyWithRecovery(() => import('~/components/Nav/AccountS
 const NewChatButton = memo(function NewChatButton({
   setActive,
   switchToHistory,
+  expanded = false,
 }: {
   setActive: (id: string) => void;
   switchToHistory: boolean;
+  expanded?: boolean;
 }) {
   const localize = useLocalize();
   const tooltipDescription = useShortcutHint('newChat', localize('com_ui_new_chat'));
@@ -42,10 +45,13 @@ const NewChatButton = memo(function NewChatButton({
           data-testid="new-chat-button"
           aria-label={localize('com_ui_new_chat')}
           aria-keyshortcuts={ariaKey}
-          className="hover:bg-surface-nav-hover flex h-9 w-9 items-center justify-center rounded-lg transition-colors"
+          className={expanded
+            ? 'hover:bg-surface-nav-hover flex h-10 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors'
+            : 'hover:bg-surface-nav-hover flex h-9 w-9 items-center justify-center rounded-lg transition-colors'}
           onClick={handleNewChatClick}
         >
-          <SquarePen className="text-text-primary h-5 w-5" />
+          <SquarePen className="text-text-primary h-5 w-5 shrink-0" />
+          {expanded && <span>{localize('com_ui_new_chat')}</span>}
         </a>
       }
     />
@@ -146,50 +152,83 @@ function ExpandedPanel({
   const toggleSidebarHint = useShortcutHint('toggleSidebar', localize(toggleLabel));
   const toggleSidebarAriaKey = useShortcutAriaKey('toggleSidebar');
 
-  return (
-    <div className="border-border-inset bg-surface-sidebar flex h-full shrink-0 flex-col gap-2 border-r px-2 py-2">
-      <TooltipAnchor
-        side="right"
-        description={toggleSidebarHint}
-        render={
-          <Button
-            id={expanded ? CLOSE_SIDEBAR_ID : undefined}
-            data-testid={expanded ? 'close-sidebar-button' : 'open-sidebar-button'}
-            size="icon"
-            variant="nav"
-            aria-label={localize(toggleLabel)}
-            aria-expanded={expanded}
-            aria-keyshortcuts={toggleSidebarAriaKey}
-            className="h-9 w-9"
-            onClick={toggleClick}
-          >
-            <Sidebar aria-hidden="true" className="text-text-primary h-5 w-5" />
-          </Button>
-        }
-      />
-      <NewChatButton setActive={setActive} switchToHistory={switchToHistory} />
-      <AgentMarketplaceButton />
-      <div className="border-border-inset mx-2 border-b" />
-      <div className="flex flex-col gap-1 overflow-y-auto">
-        {links.map((link) => (
-          <NavIconButton
-            key={link.id}
-            link={link}
-            isActive={
-              link.id === 'insights'
-                ? isInsightsRoute
-                : !isInsightsRoute && link.id === effectiveActive
-            }
-            expanded={expanded ?? true}
-            setActive={setActive}
-            onExpand={onExpand}
-            onCollapse={onCollapse}
-            onNavigate={onNavigate}
-            onLeaveInsights={isInsightsRoute ? onLeaveInsights : undefined}
-          />
-        ))}
-      </div>
+  const toggleControl = (
+    <TooltipAnchor
+      side="right"
+      description={toggleSidebarHint}
+      render={
+        <Button
+          id={expanded ? CLOSE_SIDEBAR_ID : undefined}
+          data-testid={expanded ? 'close-sidebar-button' : 'open-sidebar-button'}
+          size="icon"
+          variant="nav"
+          aria-label={localize(toggleLabel)}
+          aria-expanded={expanded}
+          aria-keyshortcuts={toggleSidebarAriaKey}
+          className="hover:bg-surface-nav-hover h-9 w-9 shrink-0 rounded-lg"
+          onClick={toggleClick}
+        >
+          <Sidebar aria-hidden="true" className="text-text-primary h-5 w-5" />
+        </Button>
+      }
+    />
+  );
 
+  const panelButtons = links.map((link) => (
+    <NavIconButton
+      key={link.id}
+      link={link}
+      isActive={
+        link.id === 'insights' ? isInsightsRoute : !isInsightsRoute && link.id === effectiveActive
+      }
+      expanded={expanded}
+      setActive={setActive}
+      onExpand={onExpand}
+      onCollapse={onCollapse}
+      onNavigate={onNavigate}
+      onLeaveInsights={isInsightsRoute ? onLeaveInsights : undefined}
+    />
+  ));
+
+  // On a wide screen the full-width sidebar is one surface, like ChatGPT:
+  // primary creation/search/history above, secondary workspace tools below.
+  // The existing panel controls stay mounted so no functionality disappears.
+  if (expanded) {
+    return (
+      <div data-mv3c-sidebar="expanded" className="border-border-light bg-surface-sidebar flex h-full min-h-0 w-full flex-col border-r">
+        <div className="flex shrink-0 items-center justify-between px-3 pt-3 pb-4">
+          <span className="text-text-primary px-2 text-[18px] font-semibold tracking-tight">mv3c</span>
+          {toggleControl}
+        </div>
+        <div className="px-3 pb-2">
+          <NewChatButton setActive={setActive} switchToHistory={switchToHistory} expanded />
+        </div>
+        <nav className="min-h-0 flex-1 overflow-hidden" aria-label={localize('com_ui_chat_history')}>
+          <SidePanelNav links={links} />
+        </nav>
+        <div className="border-border-light shrink-0 border-t px-3 py-2">
+          <p className="text-text-secondary px-2 pb-2 text-xs">其他功能</p>
+          <div className="flex max-h-[7.5rem] flex-wrap items-center gap-1 overflow-y-auto">
+            {panelButtons}
+          </div>
+        </div>
+        <div className="border-border-light shrink-0 border-t px-2 py-2">
+          <Suspense fallback={<Skeleton className="h-10 rounded-xl" />}>
+            <AccountSettings />
+          </Suspense>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div data-mv3c-sidebar="collapsed" className="border-border-light bg-surface-sidebar flex h-full w-full shrink-0 flex-col items-center gap-2 border-r px-1 py-3">
+      {toggleControl}
+      <NewChatButton setActive={setActive} switchToHistory={switchToHistory} />
+      <div className="border-border-light mx-1 w-7 border-t" />
+      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">
+        {panelButtons}
+      </div>
       <div className="mt-auto">
         <Suspense fallback={<Skeleton className="h-9 w-9 rounded-lg" />}>
           <AccountSettings collapsed />
