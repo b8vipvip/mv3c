@@ -21,7 +21,9 @@ router.use((req, res, next) => {
 router.use(requireJwtAuth, requireCapability(SystemCapabilities.ACCESS_ADMIN));
 
 function failure(res, error) {
-  if (error?.status === 409) return res.status(409).json({ error: error.message });
+  if (error?.status === 409 || error?.status === 404) {
+    return res.status(error.status).json({ error: error.message });
+  }
   if (error instanceof TypeError || error instanceof SyntaxError) {
     return res.status(400).json({ error: error.message });
   }
