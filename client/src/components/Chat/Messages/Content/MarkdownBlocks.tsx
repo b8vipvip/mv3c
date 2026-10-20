@@ -1,11 +1,21 @@
 import React, { memo, useMemo, useState, useLayoutEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
 import type { ElementType } from 'react';
 import type { MarkdownSplitter } from './splitMarkdown';
+import { isSafeRasterImageDataUrl } from './inlineImageUrl';
 import { ArtifactProvider, CodeBlockProvider } from '~/Providers';
 import { createMarkdownSplitter } from './splitMarkdown';
 import { createFadePlugin } from './animate';
+
+/** Keep react-markdown's URL policy for every link. Only raster images
+ * produced by the ChatGPT Worker may use a bounded base64 data URI. */
+const markdownUrlTransform = (url: string, key: string, node: { tagName?: string }): string => {
+  if (key === 'src' && node.tagName === 'img' && isSafeRasterImageDataUrl(url)) {
+    return url;
+  }
+  return defaultUrlTransform(url);
+};
 
 type SharedProps = {
   remarkPlugins: PluggableList;
@@ -69,6 +79,7 @@ const MarkdownBlock = memo(
             /** @ts-ignore */
             rehypePlugins={blockRehypePlugins}
             components={components}
+            urlTransform={markdownUrlTransform}
           >
             {content}
           </ReactMarkdown>
