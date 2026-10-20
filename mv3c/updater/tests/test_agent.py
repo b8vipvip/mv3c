@@ -250,6 +250,7 @@ class HostUpdaterTests(unittest.TestCase):
         with patch.object(agent, "verify_deployment", return_value="verified"):
             with patch.object(agent, "bridge", return_value=True) as bridge:
                 agent.recover_interrupted_job(pathlib.Path("/tmp"), without_target, SHA1)
+        self.assertEqual(bridge.call_args_list[-1].args[2]["outcome"], "failed")
         not_restarted = dict(active)
         not_restarted["progress"] = {"stage": "building", "percent": 50}
         with patch.object(agent, "verify_deployment", return_value="verified"):
