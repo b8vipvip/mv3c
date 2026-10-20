@@ -342,7 +342,7 @@ export default function Mv3cAdmin() {
   });
 
   const requestDeployment = () => {
-    if (!window.confirm('确定要执行更新吗？将先检查 GitHub CI，然后构建新镜像并重启 mv3c，期间服务可能短暂不可用。')) return;
+    if (!window.confirm('确定要执行更新吗？将先检查 GitHub CI，再从 GHCR 拉取已验证的 Docker 镜像并重启 mv3c，期间服务可能短暂不可用。')) return;
     void run(async () => {
       if (!token) return;
       await adminRequest(token, '/updates/deploy', { method: 'POST' });
@@ -581,7 +581,7 @@ export default function Mv3cAdmin() {
                 <div>
                   <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    代码拉取：优先 GitHub SSH（git@github.com:b8vipvip/mv3c.git）；SSH 不可用时自动回退至固定的 GitHub HTTPS 地址。自动与手动更新策略一致，只部署 GitHub Actions 验证通过的提交。
+                    代码拉取：优先 GitHub SSH（git@github.com:b8vipvip/mv3c.git）；SSH 不可用时回退至固定的 GitHub HTTPS 地址。GitHub Actions 负责构建、测试并发布镜像，服务器只拉取与目标提交 SHA 对应的 GHCR 镜像，不在本机编译。
                   </p>
                 </div>
                 {!updates ? (
@@ -675,7 +675,7 @@ export default function Mv3cAdmin() {
                             </details>
                           ) : null}
                           <p className="text-xs text-text-secondary">
-                            百分比表示当前进入的部署阶段，不是按时间估算。Docker 镜像构建期间可能停留在同一百分比。
+                            百分比表示当前进入的部署阶段，不是按时间估算。服务器部署时会拉取 GHCR 镜像；首次拉取或镜像较大时仍可能需要一些时间。
                           </p>
                         </div>
                       );
@@ -715,7 +715,7 @@ export default function Mv3cAdmin() {
                           onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, autoEnabled: e.target.checked,
                           })); }} />
-                        GitHub 有新版本且 CI 通过时自动构建并部署
+                        GitHub 有新版本且 CI 通过并发布镜像后自动拉取部署
                       </label>
                       <label className="block space-y-2">
                         <span className="block text-sm font-medium">更新通道</span>
