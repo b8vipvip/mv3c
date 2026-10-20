@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import type { NavLink } from '~/common';
 import ExpandedPanel from './ExpandedPanel';
+import { cn } from '~/utils';
 
 function Sidebar({
   links,
@@ -38,7 +39,6 @@ function Sidebar({
           onLeaveInsights={onLeaveInsights}
           switchToHistory={switchToHistory}
         />
-
       </div>
       <div
         role="separator"
