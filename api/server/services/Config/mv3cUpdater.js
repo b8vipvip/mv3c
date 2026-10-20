@@ -60,7 +60,7 @@ function format(doc) {
 }
 async function getState() {
   await initialize();
-  return format(await collection().findOne({ _id: ID }));
+  return format(await collection().findOne({ _id: ID }, { projection: { 'history.log': 0 } }));
 }
 function validateConfig(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -192,7 +192,13 @@ async function getReport(jobId) {
   const doc = await collection().findOne(
     { _id: ID, 'history.jobId': jobId }, { projection: { history: 1 } },
   );
-  return renderReport((doc?.history || []).find((entry) => entry.jobId === jobId));
+  const entry = (doc?.history || []).find((row) => row.jobId === jobId);
+  if (!entry) {
+    const error = new Error('Update report not found or no longer retained');
+    error.status = 404;
+    throw error;
+  }
+  return renderReport(entry);
 }
 
 function validateReport(payload) {
