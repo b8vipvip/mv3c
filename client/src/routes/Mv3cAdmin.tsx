@@ -591,7 +591,7 @@ export default function Mv3cAdmin() {
                             </details>
                           ) : null}
                           <p className="text-xs text-text-secondary">
-                            进度是实际完成的部署阶段，不是按时间估算。Docker 镜像构建期间可能停留在同一百分比。
+                            百分比表示当前进入的部署阶段，不是按时间估算。Docker 镜像构建期间可能停留在同一百分比。
                           </p>
                         </div>
                       );
