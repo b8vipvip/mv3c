@@ -64,7 +64,12 @@ RUN --mount=type=cache,id=mv3c-npm-cache,target=/home/node/.npm,uid=1000,gid=100
 FROM runtime-base AS runtime
 
 WORKDIR /app
-COPY --from=build --chown=node:node /app /app
+# Keep dependencies in their own reusable image layer. Source-only updates then
+# transfer only the changed application layer instead of the full node_modules.
+COPY --from=build --chown=node:node /app/node_modules /app/node_modules
+RUN --mount=type=bind,from=build,source=/app,target=/mnt/mv3c-build,ro \
+    find /mnt/mv3c-build -mindepth 1 -maxdepth 1 ! -name node_modules \
+      -exec cp -a {} /app/ \\;
 
 ARG BUILD_COMMIT=
 ARG BUILD_BRANCH=
