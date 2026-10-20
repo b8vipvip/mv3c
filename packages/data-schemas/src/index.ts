@@ -5,6 +5,8 @@ export * from './crypto';
 export * from './schema';
 export * from './utils';
 export { createModels } from './models';
+export { createMv3cRequestRecordStore } from './methods/mv3cRequestRecords';
+export type { Mv3cRequestRecord, Mv3cRequestRecordFilter, Mv3cRequestRecordStore } from './methods/mv3cRequestRecords';
 export {
   createMethods,
   createSkillDeletionPersistenceAdapter,
