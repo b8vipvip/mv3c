@@ -169,7 +169,7 @@ export default function Presentation({
   const panelElement = (isUndocked ? null : artifactsElement) ?? subagentElement;
 
   return (
-    <DragDropWrapper className="bg-surface-canvas relative flex w-full grow overflow-hidden">
+    <DragDropWrapper className="mv3c-chat-ui bg-surface-canvas relative flex w-full grow overflow-hidden">
       <AppChatSurface>
         {/* The editor buffer belongs to the pane's session, not to the window
             it happens to be in: hoisted, an undock keeps unsaved edits. */}

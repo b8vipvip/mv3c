@@ -153,7 +153,9 @@ function ChatView({
 
   /** The welcome screen carries the full footer unless the deployment turned it
    *  off; otherwise a footer bar renders only for configured content. */
-  const fullFooter = isLandingPage && landingFooter;
+  // Keep an operator-configured footer, but replace LibreChat's generic branding
+  // with mv3c's compact chat disclaimer below the composer.
+  const fullFooter = isLandingPage && landingFooter && configuredFooter;
   const footerBelow = fullFooter || configuredFooter;
   const isNavigating = (!messagesTree || messagesTree.length === 0) && conversationId != null;
   const isProjectLandingPage = isLandingPage && project != null;
@@ -277,6 +279,11 @@ function ChatView({
                                 footerBelow={footerBelow}
                                 centerFormOnLanding={centerFormOnLanding}
                               />
+                            )}
+                            {isLandingPage && !configuredFooter && (
+                              <p className="mv3c-composer-disclaimer">
+                                mv3c 可能会出错，请核实重要信息。
+                              </p>
                             )}
                             {/* The generic disclaimer and the policy links are the
                               welcome screen's; a deployment's own footer stays

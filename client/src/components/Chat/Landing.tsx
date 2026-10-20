@@ -139,13 +139,15 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
 
   return (
     <div
+      data-mv3c-landing
+      data-generic-welcome={!isTemporary && !name && !selectedAgent}
       className={`flex h-full transform-gpu flex-col items-center justify-center pb-16 transition-all duration-200 ${centerFormOnLanding ? 'max-h-full sm:max-h-0' : 'max-h-full'} ${getDynamicMargin}`}
     >
       <div ref={contentRef} className="flex flex-col items-center gap-0 p-2">
         <div
           className={`flex ${textHasMultipleLines ? 'flex-col' : 'flex-col md:flex-row'} items-center justify-center gap-2`}
         >
-          <div className={`relative size-10 justify-center ${textHasMultipleLines ? 'mb-2' : ''}`}>
+          <div data-mv3c-welcome-icon className={`relative size-10 justify-center ${textHasMultipleLines ? 'mb-2' : ''}`}>
             <div className="avatar-stroke size-full rounded-full dark:after:shadow-none">
               {isTemporary ? (
                 <div className={containerClassName}>
