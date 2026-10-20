@@ -7,6 +7,7 @@ export { createAdminSkillsSyncAccess, createAdminSkillsSyncHandlers } from './sk
 export { createAdminUsersHandlers } from './users';
 export { createAdminAuditLogHandlers } from './auditLog';
 export { createAdminCodeEnvironmentHandlers } from './code';
+export { createMv3cRequestRecorder, createMv3cRequestRecordHandlers } from './mv3cRequestRecords';
 export { buildAuditContext } from './context';
 export { cascadeStep, runCascade } from './cascade';
 export {
