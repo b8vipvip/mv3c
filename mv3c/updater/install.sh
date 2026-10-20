@@ -67,13 +67,13 @@ if [[ "$(git -C "$REPO" remote get-url origin)" != "$SELECTED_ORIGIN" ]]; then
 fi
 
 # Fresh installations use the prebuilt public GHCR image; never build on the host.
-if ! docker compose -C "$REPO" ps --status running --services 2>/dev/null | grep -qx mv3c; then
+if ! docker compose --project-directory "$REPO" -f "$REPO/docker-compose.yml" -p mv3c ps --status running --services 2>/dev/null | grep -qx mv3c; then
   if ! docker image inspect mv3c:local >/dev/null 2>&1; then
     echo "本地没有 mv3c 镜像，拉取 GitHub Actions 构建的镜像..."
     docker pull ghcr.io/b8vipvip/mv3c:main
     docker image tag ghcr.io/b8vipvip/mv3c:main mv3c:local
   fi
-  docker compose -f "$REPO/docker-compose.yml" -p mv3c up -d --no-build
+  docker compose --project-directory "$REPO" -f "$REPO/docker-compose.yml" -p mv3c up -d --no-build
 fi
 cat >/etc/systemd/system/mv3c-updater.service <<UNIT
 [Unit]
