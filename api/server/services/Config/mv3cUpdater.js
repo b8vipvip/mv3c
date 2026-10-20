@@ -133,7 +133,11 @@ function validateProgress(payload) {
       !JOB_ID.test(payload.jobId || '') || !STAGE_SET.has(payload.stage) ||
       !Number.isInteger(payload.percent) || payload.percent < 0 || payload.percent > 100 ||
       typeof payload.message !== 'string' || payload.message.length > 300 ||
-      Object.keys(payload).some((key) => !['jobId', 'stage', 'percent', 'message'].includes(key))) {
+      (payload.fromSha !== undefined && !SHA.test(payload.fromSha)) ||
+      (payload.targetSha !== undefined && !SHA.test(payload.targetSha)) ||
+      Object.keys(payload).some((key) => ![
+        'jobId', 'stage', 'percent', 'message', 'fromSha', 'targetSha',
+      ].includes(key))) {
     throw new TypeError('Invalid update progress');
   }
   return { stage: payload.stage, percent: payload.percent, message: payload.message };
@@ -153,6 +157,8 @@ async function progressJob(payload) {
       'activeJob.progress.percent': progress.percent,
       'activeJob.progress.message': progress.message,
       'activeJob.progress.updatedAt': now, agentHeartbeat: now,
+      ...(payload.fromSha ? { 'activeJob.fromSha': payload.fromSha } : {}),
+      ...(payload.targetSha ? { 'activeJob.targetSha': payload.targetSha } : {}),
     },
     $push: { 'activeJob.progress.steps': {
       $each: [{ stage: progress.stage, percent: progress.percent,
