@@ -35,6 +35,8 @@ jobs:
             NPM_CI_TIMEOUT_SECONDS=1800
             BUILD_COMMIT=${{ github.sha }}
             BUILD_BRANCH=${{ github.ref_name }}
+      - name: Report final runtime image size
+        run: docker image inspect mv3c:ci --format 'Final runtime image size: {{.Size}} bytes'
       - name: Start env-free mv3c and verify public startup
         timeout-minutes: 10
         run: |
