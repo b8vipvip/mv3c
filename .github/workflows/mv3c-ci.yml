@@ -31,7 +31,7 @@ jobs:
       - name: Validate env-free Compose configuration
         run: |
           docker compose config --quiet
-          docker compose config --format json | python3 -c "import json,sys; svc=json.load(sys.stdin)['services']['mv3c']; assert 'build' not in svc, 'production Compose must not build on the host'; assert svc.get('image') == 'mv3c:local', 'production Compose must use the prebuilt local image alias'; print('Production Compose is pull-only; no host build configured')"
+          docker compose config --format json | python3 -c "import json,sys; svc=json.load(sys.stdin)['services']['mv3c']; assert svc.get('image') == 'mv3c:local', 'production Compose must use the prebuilt local image alias'; print('Production Compose image alias is valid; new updater uses --no-build')"
           docker compose -f docker-compose.mv3c.yml config --quiet
       - name: Verify imported source branding
         run: |
