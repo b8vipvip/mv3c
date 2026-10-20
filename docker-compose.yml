@@ -4,9 +4,8 @@ name: mv3c
 
 services:
   mv3c:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # The host updater pulls the CI-tested GHCR image and tags it locally.
+    # Keep the local alias so rollback can restore the previously known-good image.
     image: mv3c:local
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/app/mv3c/entrypoint.sh"]
