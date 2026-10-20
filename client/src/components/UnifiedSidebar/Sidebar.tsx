@@ -43,7 +43,7 @@ function Sidebar({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize sidebar"
+        aria-label="调整侧边栏宽度"
         aria-valuenow={Math.round(width)}
         aria-valuemin={Math.round(minWidth)}
         aria-valuemax={Math.round(maxWidth)}
