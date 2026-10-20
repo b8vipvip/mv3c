@@ -209,7 +209,7 @@ function ExpandedPanel({
         <div className="border-border-light shrink-0 border-t px-3 py-2">
           <details className="group/mv3c-tools" data-testid="mv3c-more-tools">
             <summary className="text-text-secondary hover:bg-surface-nav-hover flex min-h-10 cursor-pointer list-none items-center rounded-xl px-3 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 [&::-webkit-details-marker]:hidden">
-              <span className="flex-1">更多工具</span>
+              <span className="flex-1">{localize('com_ui_mv3c_tools_more')}</span>
               <span aria-hidden="true" className="text-xs transition-transform group-open/mv3c-tools:rotate-180">⌄</span>
             </summary>
             <div className="mt-1 flex max-h-44 flex-wrap items-center gap-1 overflow-y-auto px-1 pb-1">
