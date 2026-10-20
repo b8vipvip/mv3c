@@ -115,6 +115,11 @@ export function UnclassifiedError({ json, text, message }: UnclassifiedErrorProp
   const withoutPayload =
     jsonString !== '' ? text.replace(jsonString, () => payloadProse ?? '') : text;
   const prose = stripLangChainTroubleshootingUrl(withoutPayload).trim() || payloadProse;
+  // Bare HTTP status phrases are not actionable upstream diagnostics.
+  // Translate only these known generic phrases, preserve all meaningful
+  // provider explanations in their original form for debugging.
+  const localizedProse =
+    prose === 'Bad Request' ? localize('com_error_bad_request') : prose;
   if (
     prose != null &&
     /^This turn exceeds the configured (attachment count|total attachment size|extracted document text) limit \(/.test(
@@ -139,7 +144,7 @@ export function UnclassifiedError({ json, text, message }: UnclassifiedErrorProp
   return (
     <ErrorWithDetail
       headline={headline}
-      detail={prose}
+      detail={localizedProse}
       label={localize('com_error_details_provider')}
     />
   );

@@ -3676,5 +3676,7 @@
   "com_ui_analytics_consent_label": "Analytics consent",
   "com_ui_analytics_consent_message": "This site can use Google Tag Manager to measure how it is used. Analytics stay off unless you allow them, and you can change this later in Settings.",
   "com_ui_analytics_consent_setting": "Allow analytics",
-  "com_ui_analytics_consent_setting_description": "Lets this site load Google Tag Manager. Turning this off takes full effect after you reload the page."
+  "com_ui_analytics_consent_setting_description": "Lets this site load Google Tag Manager. Turning this off takes full effect after you reload the page.",
+  "com_error_bad_request": "Invalid request (HTTP 400). Check the selected model or agent and its parameters.",
+  "com_ui_mv3c_tools_more": "More tools"
 }

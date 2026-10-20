@@ -21,10 +21,9 @@ const readStoredLang = () => {
 };
 
 const defaultLang = () => {
-  const userLang =
-    (typeof navigator !== 'undefined' ? navigator.language || navigator.languages?.[0] : null) ??
-    'en';
-  return Cookies.get('lang') || readStoredLang() || userLang;
+  // mv3c's primary audience uses Simplified Chinese. Honor a deliberate
+  // cookie/localStorage language choice, but don't default to browser English.
+  return Cookies.get('lang') || readStoredLang() || 'zh-Hans';
 };
 
 const lang = atomWithLocalStorage('lang', defaultLang());

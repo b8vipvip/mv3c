@@ -22,6 +22,8 @@ jobs:
         run: python3 -m unittest discover -s mv3c/tests -v
       - name: Validate encrypted settings and bootstrap
         run: node --test mv3c/tests/settings.test.cjs
+      - name: Audit Simplified Chinese core chat translations
+        run: node --test mv3c/tests/i18n_coverage.test.cjs
       - name: Validate host-side update agent and installer
         run: |
           python3 -m unittest discover -s mv3c/updater/tests -p 'test_*.py' -v
