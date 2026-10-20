@@ -1,7 +1,8 @@
 'use strict';
 const express = require('express');
 const mongoose = require('mongoose');
-const { SystemCapabilities, logger } = require('@librechat/data-schemas');
+const { SystemCapabilities, logger, createMv3cRequestRecordStore } = require('@librechat/data-schemas');
+const { createMv3cRequestRecordHandlers } = require('@librechat/api');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 const { requireJwtAuth } = require('~/server/middleware');
 const { findUsers, updateUser, countUsers } = require('~/models');
@@ -117,6 +118,15 @@ router.get('/runtime-logs/export', async (req, res) => {
     return failure(res, error);
   }
 });
+
+// Administrator-only request diagnostics; specific exports before the dynamic :id.
+const requestRecords = createMv3cRequestRecordHandlers(
+  createMv3cRequestRecordStore(mongoose.connection),
+);
+router.get('/requests', requestRecords.list);
+router.get('/requests/export', requestRecords.export);
+router.get('/requests/:id/report', requestRecords.report);
+router.get('/requests/:id', requestRecords.detail);
 
 router.get('/updates', async (req, res) => {
   try {
