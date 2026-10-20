@@ -323,7 +323,7 @@ def check_needed(state: dict) -> bool:
         return True
 
 
-def recover_interrupted_job(repo: Path, active: dict, installed_sha: str, target_sha: str) -> None:
+def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> None:
     """Reconcile a job abandoned when systemd or the server restarts.
 
     This runs only under the host updater's exclusive flock. It never resets
@@ -332,6 +332,10 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str, target
     job_id = active.get("id")
     if not job_id:
         return
+    # Only a target pinned to this specific claimed job is authoritative.
+    # A global latestSha from a prior check could equal the old version and
+    # falsely report success for an update interrupted before its fetch.
+    target_sha = active.get("targetSha", "")
     attempted = target_sha if isinstance(target_sha, str) and SHA.fullmatch(target_sha) else ""
     old = installed_sha
     try:
@@ -356,8 +360,8 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str, target
     bridge(repo, "complete", {
         "jobId": job_id, "outcome": outcome, "error": error,
         "log": "Recovery after interrupted updater: " + message +
-               "\\n" + validation,
-        "sha": old, "fromSha": "", "attemptedSha": attempted,
+               "\n" + validation,
+        "sha": old, "fromSha": active.get("fromSha", ""), "attemptedSha": attempted,
         "verification": validation,
     })
 
@@ -373,7 +377,7 @@ def execute(repo: Path) -> None:
         raise
     report(repo, currentSha=old)
     if state.get("activeJob"):
-        recover_interrupted_job(repo, state["activeJob"], old, state.get("latestSha", ""))
+        recover_interrupted_job(repo, state["activeJob"], old)
         return
     if not check_needed(state) and not state.get("pendingJob"):
         return
@@ -381,11 +385,14 @@ def execute(repo: Path) -> None:
     # Claim manual work before GitHub checks: progress should say what the
     # worker is doing instead of reporting "queued" for a long fetch.
     job = bridge(repo, "claim") if state.get("pendingJob") else None
-    def progress(stage: str, percent: int, message: str) -> None:
+    def progress(stage: str, percent: int, message: str, *,
+                 from_sha: str = "", target_sha: str = "") -> None:
         if job:
             bridge(repo, "progress", {
                 "jobId": job["id"], "stage": stage,
                 "percent": percent, "message": message,
+                **({"fromSha": from_sha} if from_sha else {}),
+                **({"targetSha": target_sha} if target_sha else {}),
             })
 
     def complete(outcome: str, *, log: str, error: str = "",
@@ -408,13 +415,13 @@ def execute(repo: Path) -> None:
         })
 
     try:
-        progress("checking", 8, "检查当前 Git 状态与更新通道")
+        progress("checking", 8, "检查当前 Git 状态与更新通道", from_sha=old)
         progress("fetching", 16, "优先 SSH 获取 GitHub 提交（失败回退 HTTPS）")
         target, label = target_for_channel(repo, state["config"]["channel"])
         if not is_descendant(repo, old, target):
             raise UpdateError("Target commit is not a fast-forward descendant of deployed version")
         available = target != old
-        progress("ci", 26, "校验 GitHub Actions 两项 CI")
+        progress("ci", 26, "校验 GitHub Actions 两项 CI", target_sha=target)
         good, reason = ci_is_green(target) if available else (True, "")
         report(repo, currentSha=old, latestSha=target, latestLabel=label,
                latestUrl="https://github.com/" + REPO + "/commit/" + target,
@@ -451,9 +458,9 @@ def execute(repo: Path) -> None:
         bridge(repo, "queue-auto")
         job = bridge(repo, "claim")
         if job:
-            progress("checking", 8, "自动更新已通过 GitHub 版本检查")
+            progress("checking", 8, "自动更新已通过 GitHub 版本检查", from_sha=old)
             progress("fetching", 16, "GitHub 代码已拉取")
-            progress("ci", 26, "两项 GitHub Actions 已通过")
+            progress("ci", 26, "两项 GitHub Actions 已通过", target_sha=target)
     if not job:
         return
 
