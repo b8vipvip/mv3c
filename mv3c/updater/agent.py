@@ -318,6 +318,42 @@ def check_needed(state: dict) -> bool:
         return True
 
 
+def recover_interrupted_job(repo: Path, active: dict, installed_sha: str, target_sha: str) -> None:
+    """Reconcile a job abandoned when systemd or the server restarts.
+
+    This runs only under the host updater's exclusive flock. It never resets
+    data or guesses that an unfinished deployment succeeded without checks.
+    """
+    job_id = active.get("id")
+    if not job_id:
+        return
+    attempted = target_sha if isinstance(target_sha, str) and SHA.fullmatch(target_sha) else ""
+    old = installed_sha
+    try:
+        validation = verify_deployment(repo, installed_sha)
+        is_target = bool(attempted and old == attempted)
+        outcome = "success" if is_target else "failed"
+        message = ("Updater interrupted, but target is healthy and verified"
+                   if is_target else "Updater interrupted before completing target deployment")
+        error = "" if is_target else message
+    except Exception as exc:
+        outcome = "failed"
+        error = "Interrupted update verification failed: " + str(exc)[:1400]
+        validation = "Interrupted update: live service verification FAILED"
+        message = error
+    bridge(repo, "progress", {
+        "jobId": job_id, "stage": "complete", "percent": 100,
+        "message": message[:300],
+    })
+    bridge(repo, "complete", {
+        "jobId": job_id, "outcome": outcome, "error": error,
+        "log": "Recovery after interrupted updater: " + message +
+               "\\n" + validation,
+        "sha": old, "fromSha": "", "attemptedSha": attempted,
+        "verification": validation,
+    })
+
+
 def execute(repo: Path) -> None:
     state = bridge(repo, "state")
     if not isinstance(state, dict):
@@ -328,6 +364,9 @@ def execute(repo: Path) -> None:
         report(repo, status="blocked", lastError=str(error)[:1800])
         raise
     report(repo, currentSha=old)
+    if state.get("activeJob"):
+        recover_interrupted_job(repo, state["activeJob"], old, state.get("latestSha", ""))
+        return
     if not check_needed(state) and not state.get("pendingJob"):
         return
 
