@@ -13,7 +13,7 @@ const SHA = /^[0-9a-f]{40}$/i;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STAGE_SET = new Set([
   'queued', 'checking', 'fetching', 'ci', 'backup', 'merging',
-  'pulling', 'building', 'restarting', 'verifying', 'rollback', 'complete',
+  'building', 'restarting', 'verifying', 'rollback', 'complete',
 ]);
 
 function collection() {
