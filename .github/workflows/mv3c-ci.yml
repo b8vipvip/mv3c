@@ -33,6 +33,7 @@ jobs:
       - name: Validate env-free Compose configuration
         run: |
           docker compose config --quiet
+          docker compose config --format json | python3 -c "import json,sys; c=json.load(sys.stdin); assert c['services']['mv3c']['environment']['SCHEDULES_SINGLE_PROCESS'] == 'true'; print('Single-replica schedules explicitly enabled')"
           docker compose -f docker-compose.mv3c.yml config --quiet
       - name: Verify imported source branding
         run: |
