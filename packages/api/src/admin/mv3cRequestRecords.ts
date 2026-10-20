@@ -46,7 +46,8 @@ function classify(path: string): Mv3cRequestRecord['category'] {
 /** Observe the HTTP lifecycle once, including client disconnects and rejected requests.
  * HTTP 2xx does NOT prove model/tool success; this is transport-level evidence.
  */
-export function createMv3cRequestRecorder(store: Mv3cRequestRecordStore) {
+export function createMv3cRequestRecorder(store: Mv3cRequestRecordStore):
+  (req: Request, res: Response, next: NextFunction) => void {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.path.startsWith('/api/') || req.path.startsWith('/api/admin/mv3c/requests')
         || req.method === 'OPTIONS' || req.method === 'HEAD') {
@@ -164,7 +165,16 @@ function csvExport(records: Mv3cRequestRecord[]): string {
   return '\uFEFF' + [header, ...rows].join('\r\n') + '\r\n';
 }
 
-export function createMv3cRequestRecordHandlers(store: Mv3cRequestRecordStore) {
+type RequestRecordHandlers = {
+  list: (req: Request, res: Response) => Promise<void>;
+  detail: (req: Request, res: Response) => Promise<void>;
+  report: (req: Request, res: Response) => Promise<void>;
+  export: (req: Request, res: Response) => Promise<void>;
+};
+
+export function createMv3cRequestRecordHandlers(
+  store: Mv3cRequestRecordStore,
+): RequestRecordHandlers {
   return {
     list: async (req: Request, res: Response) => {
       try {
