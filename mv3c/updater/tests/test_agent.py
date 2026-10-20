@@ -35,6 +35,18 @@ class HostUpdaterTests(unittest.TestCase):
                 {"name": "mv3c source Docker build", "status": "completed", "conclusion": "success"},
             ]}
         self.assertFalse(agent.ci_is_green(SHA1, api_fetch=failed)[0])
+        self.assertIn("未通过", agent.ci_is_green(SHA1, api_fetch=failed)[1])
+
+        def pending(_):
+            return {"workflow_runs": [
+                {"name": "mv3c validation", "status": "completed", "conclusion": "success"},
+                {"name": "mv3c source Docker build", "status": "in_progress", "conclusion": None},
+            ]}
+        good, reason = agent.ci_is_green(SHA1, api_fetch=pending)
+        self.assertFalse(good)
+        self.assertIn("正在运行", reason)
+        self.assertNotIn("未通过", reason)
+
         with self.assertRaises(agent.UpdateError):
             agent.ci_is_green("invalid", api_fetch=ok)
 
