@@ -286,6 +286,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
     """Return outcome, log, error. Never remove Docker volumes."""
     log = []
     previous_image_saved = False
+    service_may_have_changed = False
     def advance(stage: str, percent: int, detail: str) -> None:
         log.append("[{}] {}% {}".format(stage, percent, detail))
         if on_progress:
@@ -306,6 +307,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         advance("building", 50, "从 GHCR 拉取 GitHub Actions 已验证的镜像；服务器不再本地构建")
         log.append(pull_prebuilt_image(repo, target)[-9500:])
         advance("restarting", 75, "正在重新创建 mv3c 服务")
+        service_may_have_changed = True
         log.append(run(["docker", "compose", "up", "-d", "--no-deps", "--force-recreate",
                         "--no-build", "mv3c"], repo, timeout=240)[-3000:])
         advance("verifying", 86, "检查 Docker 健康状态")
@@ -324,9 +326,12 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
                                repo, timeout=30)[-1000:])
             else:
                 log.append(pull_prebuilt_image(repo, old)[-4000:])
-            log.append(run(["docker", "compose", "up", "-d", "--no-deps",
-                            "--force-recreate", "--no-build", "mv3c"],
-                           repo, timeout=240)[-2000:])
+            if service_may_have_changed:
+                log.append(run(["docker", "compose", "up", "-d", "--no-deps",
+                                "--force-recreate", "--no-build", "mv3c"],
+                               repo, timeout=240)[-2000:])
+            else:
+                log.append("Container was not switched; existing running service left untouched")
             wait_healthy(repo)
             validation = verify_deployment(repo, old)
             log.append("Rollback validation PASSED: " + validation)
