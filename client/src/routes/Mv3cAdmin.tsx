@@ -31,6 +31,18 @@ type ManagedUser = {
 type UsersResponse = { total: number; users: ManagedUser[] };
 type AuditEvent = { id: string; actor: string; changedFields: string[]; at: string };
 type LogRange = '15m' | '1h' | '6h' | '24h' | '3d' | '7d';
+type RequestStatus = '' | 'completed' | 'failed' | 'aborted';
+type RequestCategory = '' | 'AI' | 'API';
+type RequestRecord = {
+  id: string; at: string; path: string; method: string;
+  category: 'AI' | 'API'; model: string | null; userId: string | null;
+  status: 'completed' | 'failed' | 'aborted';
+  httpStatus: number; durationMs: number; responseBytes: number | null;
+};
+type RequestPage = { total: number; records: RequestRecord[] };
+const requestStatusNames: Record<RequestRecord['status'], string> = {
+  completed: 'HTTP 完成', failed: 'HTTP 失败', aborted: '连接中断',
+};
 type RuntimeLogStats = {
   usedBytes: number; maxBytes: number; fileCount: number; ranges: LogRange[];
   capture: string;
@@ -115,7 +127,7 @@ const subtleButton =
 
 export default function Mv3cAdmin() {
   const { token, isAuthenticated, user, logout } = useAuthContext();
-  const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit' | 'updates' | 'logs'>('provider');
+  const [tab, setTab] = useState<'provider' | 'site' | 'users' | 'audit' | 'updates' | 'logs' | 'requests'>('provider');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [site, setSite] = useState<SiteSettings>({
     title: 'mv3c', welcome: '欢迎使用 mv3c', publicUrl: '', registrationEnabled: false,
@@ -131,6 +143,15 @@ export default function Mv3cAdmin() {
   const [logRange, setLogRange] = useState<LogRange>('1h');
   const [logStats, setLogStats] = useState<RuntimeLogStats | null>(null);
   const [logDownloading, setLogDownloading] = useState(false);
+  const [requestPage, setRequestPage] = useState<RequestPage | null>(null);
+  const [requestStatus, setRequestStatus] = useState<RequestStatus>('');
+  const [requestCategory, setRequestCategory] = useState<RequestCategory>('');
+  const [requestOffset, setRequestOffset] = useState(0);
+  const [requestDetail, setRequestDetail] = useState<RequestRecord | null>(null);
+  const [requestNote, setRequestNote] = useState('');
+  const [requestLoading, setRequestLoading] = useState(false);
+  const [requestDownloading, setRequestDownloading] = useState(false);
+  const [requestExportCount, setRequestExportCount] = useState(100);
   const [updates, setUpdates] = useState<UpdateState | null>(null);
   const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
@@ -235,6 +256,77 @@ export default function Mv3cAdmin() {
       setError(err instanceof Error ? err.message : '运行日志下载失败');
     } finally {
       setLogDownloading(false);
+    }
+  };
+
+  const requestFilters = useCallback(() => {
+    const query = new URLSearchParams();
+    if (requestStatus) query.set('status', requestStatus);
+    if (requestCategory) query.set('category', requestCategory);
+    return query;
+  }, [requestStatus, requestCategory]);
+
+  const loadRequests = useCallback(async () => {
+    if (!token || adminAuthExpired) return;
+    setRequestLoading(true);
+    try {
+      const query = requestFilters();
+      query.set('limit', '50');
+      query.set('offset', String(requestOffset));
+      const data = await adminRequest<RequestPage>(token, '/requests?' + query.toString());
+      setRequestPage(data);
+    } catch (err) {
+      if (err instanceof AdminApiError && err.status === 401) setAdminAuthExpired(true);
+      setError(err instanceof Error ? err.message : '请求记录加载失败');
+    } finally {
+      setRequestLoading(false);
+    }
+  }, [token, adminAuthExpired, requestFilters, requestOffset]);
+
+  useEffect(() => {
+    if (tab === 'requests') void loadRequests();
+  }, [tab, loadRequests]);
+
+  const showRequest = async (id: string) => {
+    if (!token) return;
+    setError('');
+    try {
+      const data = await adminRequest<{ record: RequestRecord; note: string }>(
+        token, '/requests/' + encodeURIComponent(id));
+      setRequestDetail(data.record);
+      setRequestNote(data.note);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '请求详情加载失败');
+    }
+  };
+
+  const downloadRequests = async (path: string, filename: string) => {
+    if (!token || requestDownloading) return;
+    setRequestDownloading(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/mv3c' + path, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        if (response.status === 401) setAdminAuthExpired(true);
+        throw new Error(result.error || '报告下载失败（HTTP ' + response.status + '）');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '下载请求报告失败');
+    } finally {
+      setRequestDownloading(false);
     }
   };
 
@@ -445,6 +537,7 @@ export default function Mv3cAdmin() {
                 ['users', '用户管理'],
                 ['audit', '操作审计'],
                 ['logs', '运行日志'],
+                ['requests', '请求记录'],
                 ['updates', '版本更新'],
               ] as const).map(([key, label]) => (
                 <button
@@ -800,6 +893,135 @@ export default function Mv3cAdmin() {
                       )}
                     </div>
                   </>
+                )}
+              </section>
+            )}
+
+            {tab === 'requests' && (
+              <section className="space-y-5 rounded-xl border border-border-medium p-5">
+                <div>
+                  <h2 className="text-xl font-semibold">服务端请求记录与诊断报告</h2>
+                  <p className="mt-1 text-sm text-text-secondary">
+                    记录 API 的 HTTP 请求结果、耗时和模型信息，保留最近 30 天。
+                    不保存提示词正文、AI 回复内容、API Key 或身份凭证。
+                    HTTP 完成不等于上游 AI 任务成功。
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="space-y-1 text-sm">
+                    <span className="block">请求类型</span>
+                    <select aria-label="请求类型" className={fieldClass} value={requestCategory}
+                      onChange={(e) => { setRequestCategory(e.target.value as RequestCategory); setRequestOffset(0); }}>
+                      <option value="">全部类型</option>
+                      <option value="AI">AI 请求</option>
+                      <option value="API">其他 API 请求</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="block">请求状态</span>
+                    <select aria-label="请求状态" className={fieldClass} value={requestStatus}
+                      onChange={(e) => { setRequestStatus(e.target.value as RequestStatus); setRequestOffset(0); }}>
+                      <option value="">全部状态</option>
+                      <option value="completed">HTTP 完成</option>
+                      <option value="failed">HTTP 失败</option>
+                      <option value="aborted">连接中断</option>
+                    </select>
+                  </label>
+                  <button type="button" className={subtleButton} disabled={requestLoading}
+                    onClick={() => void loadRequests()}>
+                    {requestLoading ? '加载中…' : '刷新记录'}
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="space-y-1 text-sm">
+                    <span className="block">批量导出数量（最近记录）</span>
+                    <select aria-label="导出记录数量" className={fieldClass}
+                      value={requestExportCount}
+                      onChange={(e) => setRequestExportCount(Number(e.target.value))}>
+                      {[50, 100, 200, 500].map((n) =>
+                        <option key={n} value={n}>{n} 条</option>)}
+                    </select>
+                  </label>
+                  <button type="button" className={buttonClass} disabled={requestDownloading}
+                    onClick={() => {
+                      const q = requestFilters();
+                      q.set('limit', String(requestExportCount));
+                      void downloadRequests('/requests/export?' + q.toString(),
+                        'mv3c-requests-' + new Date().toISOString().slice(0, 10) + '.csv');
+                    }}>
+                    {requestDownloading ? '正在导出…' : '下载筛选报告 (.csv)'}
+                  </button>
+                  <span className="text-sm text-text-secondary">
+                    共 {requestPage?.total ?? '…'} 条匹配记录
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-border-medium">
+                        <th className="p-2">时间</th>
+                        <th className="p-2">类别</th>
+                        <th className="p-2">HTTP</th>
+                        <th className="p-2">状态</th>
+                        <th className="p-2">模型</th>
+                        <th className="p-2">耗时</th>
+                        <th className="p-2">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {requestPage?.records.map((item) => (
+                        <tr key={item.id} className="border-b border-border-medium">
+                          <td className="whitespace-nowrap p-2">{new Date(item.at).toLocaleString()}</td>
+                          <td className="p-2">{item.category}</td>
+                          <td className="p-2">{item.httpStatus}</td>
+                          <td className="whitespace-nowrap p-2">{requestStatusNames[item.status]}</td>
+                          <td className="max-w-36 truncate p-2" title={item.model || undefined}>
+                            {item.model || '—'}
+                          </td>
+                          <td className="whitespace-nowrap p-2">{(item.durationMs / 1000).toFixed(2)} 秒</td>
+                          <td className="whitespace-nowrap p-2">
+                            <button type="button" className={subtleButton + ' mr-2'}
+                              onClick={() => void showRequest(item.id)}>详情</button>
+                            <button type="button" className={subtleButton}
+                              disabled={requestDownloading}
+                              onClick={() => void downloadRequests(
+                                '/requests/' + encodeURIComponent(item.id) + '/report',
+                                'mv3c-request-' + item.id + '.json')}>
+                              下载报告
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {requestPage?.records.length === 0 && (
+                    <p className="py-5 text-center text-sm text-text-secondary">当前筛选条件下没有请求记录</p>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span>第 {requestPage?.total ? Math.floor(requestOffset / 50) + 1 : 0} 页</span>
+                  <div className="flex gap-2">
+                    <button type="button" className={subtleButton}
+                      disabled={requestLoading || requestOffset === 0}
+                      onClick={() => setRequestOffset((n) => Math.max(0, n - 50))}>上一页</button>
+                    <button type="button" className={subtleButton}
+                      disabled={requestLoading || requestOffset + 50 >= (requestPage?.total ?? 0) ||
+                        requestOffset + 50 > 10000}
+                      onClick={() => setRequestOffset((n) => n + 50)}>下一页</button>
+                  </div>
+                </div>
+                {requestDetail && (
+                  <div role="region" aria-label="请求详情" className="rounded-lg border border-border-medium p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <h3 className="font-semibold">请求详情</h3>
+                      <button type="button" className={subtleButton}
+                        onClick={() => setRequestDetail(null)}>关闭</button>
+                    </div>
+                    <p className="mb-2 text-sm text-text-secondary">{requestNote}</p>
+                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all bg-surface-secondary p-3 text-xs">
+                      {JSON.stringify(requestDetail, null, 2)}
+                    </pre>
+                  </div>
                 )}
               </section>
             )}
