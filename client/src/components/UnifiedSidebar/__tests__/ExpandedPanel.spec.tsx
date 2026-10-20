@@ -39,7 +39,7 @@ jest.mock('~/store', () => {
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
   useNewConvo: () => ({ newConversation: mockNewConversation }),
-  useShowMarketplace: () => false,
+  useShowMarketplace: () => true,
 }));
 
 /**
@@ -106,7 +106,6 @@ function renderPanel({
   onNavigate,
   initialPanel = DEFAULT_PANEL,
   switchToHistory = true,
-  openAdvancedTools = true,
 }: {
   expanded?: boolean;
   links?: NavLink[];
@@ -115,7 +114,6 @@ function renderPanel({
   onNavigate?: jest.Mock;
   initialPanel?: string;
   switchToHistory?: boolean;
-  openAdvancedTools?: boolean;
 } = {}) {
   getDefaultStore().set(activePanelAtom, initialPanel);
 
@@ -138,9 +136,6 @@ function renderPanel({
     </MemoryRouter>,
   );
 
-  if (expanded && openAdvancedTools) {
-    fireEvent.click(screen.getByText('com_ui_mv3c_tools_more'));
-  }
   return { ...result, onCollapse, onExpand };
 }
 
@@ -151,13 +146,13 @@ describe('ExpandedPanel', () => {
   });
 
   describe('ChatGPT-style chat sidebar', () => {
-    it('keeps secondary tools collapsed by default but makes them available on demand', () => {
-      renderPanel({ expanded: true, openAdvancedTools: false });
-      const more = screen.getByTestId('mv3c-more-tools');
-      expect(more).not.toHaveAttribute('open');
-      fireEvent.click(screen.getByText('com_ui_mv3c_tools_more'));
-      expect(more).toHaveAttribute('open');
-      expect(screen.getByRole('button', { name: 'com_ui_prompts' })).toBeInTheDocument();
+    it('shows all tool links as labeled rows without an extra disclosure', () => {
+      renderPanel({ expanded: true });
+      expect(screen.getByTestId('mv3c-tool-links')).toBeInTheDocument();
+      expect(screen.queryByTestId('mv3c-more-tools')).not.toBeInTheDocument();
+      expect(screen.getByRole('navigation', { name: '工具导航' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'com_ui_prompts' })).toHaveTextContent('com_ui_prompts');
+      expect(screen.getByTestId('nav-my-agents-button')).toHaveTextContent('我的智能体');
     });
 
     it('keeps history as the primary area and shows a full-width new chat action', () => {
@@ -172,6 +167,8 @@ describe('ExpandedPanel', () => {
       renderPanel({ expanded: false });
       expect(screen.getByTestId('open-sidebar-button')).toBeInTheDocument();
       expect(screen.queryByRole('navigation', { name: 'com_ui_chat_history' })).toBeNull();
+      expect(screen.getByTestId('nav-my-agents-button')).not.toHaveTextContent('我的智能体');
+      expect(screen.getByRole('button', { name: 'com_ui_prompts' })).not.toHaveTextContent('com_ui_prompts');
     });
   });
 
