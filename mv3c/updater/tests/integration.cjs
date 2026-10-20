@@ -40,6 +40,18 @@ async function main() {
   assert.equal(duplicate.status, 409);
   const job = await updates.claimJob();
   assert.equal(job.id, queued.job.id);
+  await updates.progressJob({
+    jobId: job.id, stage: 'checking', percent: 8, message: 'Checking GitHub',
+  });
+  await updates.progressJob({
+    jobId: job.id, stage: 'building', percent: 50, message: 'Building Docker',
+  });
+  const working = await updates.getState();
+  assert.equal(working.activeJob.progress.percent, 50);
+  assert.equal(working.activeJob.progress.steps.length, 2);
+  await assert.rejects(updates.progressJob({
+    jobId: job.id, stage: 'checking', percent: 10, message: 'Regressed',
+  }), /regressed/);
   await updates.report({
     currentSha: 'a'.repeat(40), latestSha: 'a'.repeat(40),
     checkedAt: new Date().toISOString(), updateAvailable: false,
@@ -47,11 +59,25 @@ async function main() {
   await updates.completeJob({
     jobId: job.id, outcome: 'skipped', sha: 'a'.repeat(40),
     log: 'CI simulated updater bridge lifecycle', error: '',
+    fromSha: 'a'.repeat(40), attemptedSha: 'a'.repeat(40),
+    verification: 'No update necessary',
   });
   const done = await updates.getState();
   assert.equal(done.pendingJob, null);
   assert.equal(done.activeJob, null);
   assert.equal(done.history[0].outcome, 'skipped');
+  assert.equal(done.history[0].verification, 'No update necessary');
+  assert.equal(done.history[0].steps.length, 2);
+  assert.equal(done.history[0].log, undefined, 'polling API must omit full reports');
+  const reportResponse = await fetch(api + '/reports/' + job.id, { headers });
+  assert.equal(reportResponse.status, 200);
+  assert.match(reportResponse.headers.get('content-disposition'), /attachment/);
+  const reportText = await reportResponse.text();
+  assert.match(reportText, /No update necessary/);
+  assert.match(reportText, /50% \| building/);
+  assert.match(reportText, /CI simulated updater bridge lifecycle/);
+  assert.equal((await fetch(api + '/reports/' + job.id)).status, 401);
+  assert.equal((await fetch(api + '/reports/invalid', { headers })).status, 400);
   assert.equal(done.agentOnline, true);
   const second = await updates.queueJob('ci-admin');
   await updates.claimJob();
