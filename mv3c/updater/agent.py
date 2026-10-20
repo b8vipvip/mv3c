@@ -234,6 +234,16 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
                   container_id], repo, timeout=20)
     if health != "healthy":
         raise UpdateError("Container post-deploy health is " + health)
+    running_image = run(
+        ["docker", "inspect", "--format", "{{.Image}}", container_id],
+        repo, timeout=20,
+    )
+    tagged_image = run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", "mv3c:local"],
+        repo, timeout=20,
+    )
+    if running_image != tagged_image:
+        raise UpdateError("Running container image does not match newly built image")
     for url in ("http://127.0.0.1:3080/readyz",
                 "http://127.0.0.1:3080/api/config"):
         try:
@@ -247,7 +257,8 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
             raise UpdateError("HTTP smoke verification failed: " + url + " " +
                               str(error)[:200]) from error
     return ("Post-deploy validation PASSED: git SHA=" + actual[:12]
-            + "; container healthy; /readyz HTTP 200; /api/config HTTP 200")
+            + "; running image matches built tag; container healthy;"
+            + " /readyz HTTP 200; /api/config HTTP 200")
 
 
 def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str, str, str]:
@@ -340,7 +351,13 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> Non
     old = installed_sha
     try:
         validation = verify_deployment(repo, installed_sha)
-        is_target = bool(attempted and old == attempted)
+        # A Git fast-forward alone does not prove that the container switched.
+        # Require evidence that Compose completed its recreation step.
+        deployment_reached_verification = (
+            active.get("progress", {}).get("stage") in ("verifying", "complete")
+            and active.get("progress", {}).get("percent", 0) >= 86
+        )
+        is_target = bool(attempted and old == attempted and deployment_reached_verification)
         outcome = "success" if is_target else "failed"
         message = ("Updater interrupted, but target is healthy and verified"
                    if is_target else "Updater interrupted before completing target deployment")
