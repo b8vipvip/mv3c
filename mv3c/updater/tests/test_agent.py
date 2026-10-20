@@ -214,7 +214,9 @@ class HostUpdaterTests(unittest.TestCase):
             if args[:4] == ["docker", "compose", "ps", "-q"]:
                 return "container-id"
             if args[:2] == ["docker", "inspect"]:
-                return "healthy"
+                return "sha256:running-image" if "{{.Image}}" in args else "healthy"
+            if args[:3] == ["docker", "image", "inspect"]:
+                return "sha256:running-image"
             raise AssertionError(args)
         with patch.object(agent, "git", return_value=SHA2):
             with patch.object(agent, "run", side_effect=fake_run):
@@ -231,6 +233,7 @@ class HostUpdaterTests(unittest.TestCase):
         active = {
             "id": "22222222-2222-4222-8222-222222222222",
             "fromSha": SHA1, "targetSha": SHA2,
+            "progress": {"stage": "verifying", "percent": 93},
         }
         with patch.object(agent, "verify_deployment", return_value="verified"):
             with patch.object(agent, "bridge", return_value=True) as bridge:
@@ -247,7 +250,26 @@ class HostUpdaterTests(unittest.TestCase):
         with patch.object(agent, "verify_deployment", return_value="verified"):
             with patch.object(agent, "bridge", return_value=True) as bridge:
                 agent.recover_interrupted_job(pathlib.Path("/tmp"), without_target, SHA1)
+        not_restarted = dict(active)
+        not_restarted["progress"] = {"stage": "building", "percent": 50}
+        with patch.object(agent, "verify_deployment", return_value="verified"):
+            with patch.object(agent, "bridge", return_value=True) as bridge:
+                agent.recover_interrupted_job(pathlib.Path("/tmp"), not_restarted, SHA2)
         self.assertEqual(bridge.call_args_list[-1].args[2]["outcome"], "failed")
+
+    def test_deployment_rejects_running_image_mismatch(self):
+        def fake_run(args, _repo, **_kwargs):
+            if args[:4] == ["docker", "compose", "ps", "-q"]:
+                return "container-id"
+            if args[:2] == ["docker", "inspect"]:
+                return "sha256:old" if "{{.Image}}" in args else "healthy"
+            if args[:3] == ["docker", "image", "inspect"]:
+                return "sha256:new"
+            raise AssertionError(args)
+        with patch.object(agent, "git", return_value=SHA2):
+            with patch.object(agent, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(agent.UpdateError, "image does not match"):
+                    agent.verify_deployment(pathlib.Path("/tmp"), SHA2)
 
     def test_only_fast_forward_is_allowed(self):
         with patch.object(agent.subprocess, "run") as run:
