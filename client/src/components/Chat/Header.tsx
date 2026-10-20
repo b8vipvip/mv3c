@@ -12,7 +12,7 @@ import {
 import { OpenSidebar, PresetsMenu, NewChat, HeaderMenu } from './Menus';
 import { TemporaryChat, TemporaryChatIndicator } from './TemporaryChat';
 import useDrawerViewport from '~/hooks/Nav/useDrawerViewport';
-import ModelSelector from './Menus/Endpoints/ModelSelector';
+import TokenUsage from './Input/TokenUsage';
 import { BackgroundTasksButton } from './BackgroundTasks';
 import { isCodeConversation } from './PullRequest/code';
 import { TraceButton, useTraceControl } from './Trace';
@@ -110,7 +110,11 @@ function Header({
         {parentConversationId != null && (
           <SubagentThreadLink threadId={parentConversationId} labelClassName="hidden lg:inline" />
         )}
-        {!readOnly && <ModelSelector startupConfig={startupConfig} />}
+        {!readOnly && (
+          <div data-testid="mv3c-header-context-window" className="flex items-center gap-2">
+            <TokenUsage index={0} conversation={conversation} isSubmitting={isSubmitting} />
+          </div>
+        )}
         {!readOnly && interfaceConfig.presets === true && interfaceConfig.modelSelect === true && (
           <PresetsMenu />
         )}
