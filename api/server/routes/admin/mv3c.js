@@ -8,6 +8,7 @@ const { findUsers, updateUser, countUsers } = require('~/models');
 const { invalidateConfigCaches } = require('~/server/services/Config/app');
 const settings = require('~/server/services/Config/mv3cSettings');
 const updater = require('~/server/services/Config/mv3cUpdater');
+const runtimeLogs = require('~/server/services/Config/mv3cRuntimeLogs');
 
 const router = express.Router();
 // Require a JWT bearer header even when another authentication strategy is configured.
@@ -91,6 +92,32 @@ router.get('/audit', async (req, res) => {
     return failure(res, error);
   }
 });
+// Dedicated server-side runtime log access: admin bearer token + capability
+// checks from this router, fixed allowed time windows, no arbitrary file paths.
+router.get('/runtime-logs', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(runtimeLogs.getStats());
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.get('/runtime-logs/export', async (req, res) => {
+  try {
+    const range = req.query.range || '1h';
+    const data = runtimeLogs.getRecentLogText(range);
+    const date = new Date().toISOString().replace(/[:.]/g, '-');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition',
+      'attachment; filename="mv3c-runtime-' + range + '-' + date + '.log"');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(data);
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+
 router.get('/updates', async (req, res) => {
   try {
     return res.json(await updater.getState());
