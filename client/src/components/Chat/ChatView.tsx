@@ -204,6 +204,7 @@ function ChatView({
                         shortcut pressed from them acts here, not on the first pane. */}
                       <div data-chat-pane-portal={index} className="contents">
                         <Header
+                          index={index}
                           parentConversationId={parentConversationId}
                           readOnly={isSubagentThreadReadOnly}
                         />
