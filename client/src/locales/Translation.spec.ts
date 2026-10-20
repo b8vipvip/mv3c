@@ -8,6 +8,7 @@ import {
   normalizeLocale,
 } from './i18n';
 import English from './en/translation.json';
+import SimplifiedChinese from './zh-Hans/translation.json';
 import Spanish from './es/translation.json';
 import French from './fr/translation.json';
 import { TranslationKeys } from '~/hooks';
@@ -32,6 +33,18 @@ describe('i18next translation tests', () => {
 
   afterEach(async () => {
     await changeLanguageSafely('en');
+  });
+
+  it('keeps all agent-marketplace, context window and background-task labels in Simplified Chinese', () => {
+    const englishKeys = Object.keys(English);
+    const prefixes = ['com_agents_', 'com_ui_context_', 'com_ui_background_tasks_', 'com_ui_balance_'];
+    const missing = englishKeys.filter((key) =>
+      prefixes.some((prefix) => key.startsWith(prefix)) &&
+      !(key in SimplifiedChinese),
+    );
+    expect(missing).toEqual([]);
+    expect(SimplifiedChinese.com_agents_mine_empty_state_heading).toBe('你还没有创建智能体');
+    expect(SimplifiedChinese.com_ui_context_last_turn).toBe('上一轮');
   });
 
   it('should return the correct translation for a valid key in English', async () => {
