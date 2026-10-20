@@ -1,7 +1,7 @@
 import { memo, useCallback, Suspense } from 'react';
-import { SquarePen } from 'lucide-react';
+import { SquarePen, Bot } from 'lucide-react';
 import SidePanelNav from '~/components/SidePanel/Nav';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Skeleton, Sidebar, Button, TooltipAnchor } from '@librechat/client';
 import type { NavLink } from '~/common';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
@@ -10,7 +10,7 @@ import AgentMarketplaceButton from '~/components/Nav/AgentMarketplaceButton';
 import { CLOSE_SIDEBAR_ID } from '~/components/Chat/Menus/OpenSidebar';
 import useNewChat from '~/hooks/Conversations/useNewChat';
 import { lazyWithRecovery } from '~/lib/assets/lazy';
-import { useLocalize } from '~/hooks';
+import { useLocalize, useShowMarketplace } from '~/hooks';
 
 const AccountSettings = lazyWithRecovery(() => import('~/components/Nav/AccountSettings'));
 
@@ -108,16 +108,19 @@ const NavIconButton = memo(function NavIconButton({
       side="right"
       render={
         <Button
-          size="icon"
+          size={expanded ? 'row' : 'icon'}
           variant="nav"
           aria-label={localize(link.title)}
           aria-pressed={isActive}
           disabled={link.disabled}
           data-testid={`nav-panel-${link.id}`}
-          className="h-9 w-9 rounded-lg"
+          className={expanded
+            ? 'hover:bg-surface-nav-hover aria-pressed:bg-surface-nav-selected flex min-h-10 w-full justify-start gap-3 rounded-xl px-3 text-sm'
+            : 'hover:bg-surface-nav-hover aria-pressed:bg-surface-nav-selected h-9 w-9 rounded-lg'}
           onClick={handleClick}
         >
-          <link.icon className="h-5 w-5" aria-hidden="true" />
+          <link.icon className="h-5 w-5 shrink-0" aria-hidden="true" />
+          {expanded && <span className="min-w-0 truncate">{localize(link.title)}</span>}
         </Button>
       }
     />
@@ -146,6 +149,7 @@ function ExpandedPanel({
   const { active, setActive } = useActivePanel();
   const effectiveActive = resolveActivePanel(active, links);
   const isInsightsRoute = location.pathname.startsWith('/insights');
+  const showAgentMarketplace = useShowMarketplace();
 
   const toggleLabel = expanded ? 'com_nav_close_sidebar' : 'com_nav_open_sidebar';
   const toggleClick = expanded ? onCollapse : onExpand;
@@ -173,6 +177,27 @@ function ExpandedPanel({
       }
     />
   );
+
+  const myAgentsButton = showAgentMarketplace ? (
+    <TooltipAnchor
+      side="right"
+      description="我的智能体"
+      render={
+        <Link
+          to="/agents?mine=1"
+          data-testid="nav-my-agents-button"
+          aria-label="我的智能体"
+          onClick={onNavigate}
+          className={expanded
+            ? 'hover:bg-surface-nav-hover text-text-primary flex min-h-10 w-full items-center gap-3 rounded-xl px-3 text-sm'
+            : 'hover:bg-surface-nav-hover text-text-primary flex h-9 w-9 items-center justify-center rounded-lg'}
+        >
+          <Bot className="h-5 w-5 shrink-0" aria-hidden="true" />
+          {expanded && <span>我的智能体</span>}
+        </Link>
+      }
+    />
+  ) : null;
 
   const panelButtons = links.map((link) => (
     <NavIconButton
@@ -206,18 +231,14 @@ function ExpandedPanel({
         <nav className="min-h-0 flex-1 overflow-hidden" aria-label={localize('com_ui_chat_history')}>
           <SidePanelNav links={links} />
         </nav>
-        <div className="border-border-light shrink-0 border-t px-3 py-2">
-          <details className="group/mv3c-tools" data-testid="mv3c-more-tools">
-            <summary className="text-text-secondary hover:bg-surface-nav-hover flex min-h-10 cursor-pointer list-none items-center rounded-xl px-3 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 [&::-webkit-details-marker]:hidden">
-              <span className="flex-1">{localize('com_ui_mv3c_tools_more')}</span>
-              <span aria-hidden="true" className="text-xs transition-transform group-open/mv3c-tools:rotate-180">⌄</span>
-            </summary>
-            <div className="mt-1 flex max-h-44 flex-wrap items-center gap-1 overflow-y-auto px-1 pb-1">
-              <AgentMarketplaceButton />
-              {panelButtons}
-            </div>
-          </details>
-        </div>
+        <nav className="border-border-light shrink-0 border-t px-3 py-2" aria-label="工具导航">
+          <p className="text-text-secondary px-3 pb-2 text-xs">工具</p>
+          <div data-testid="mv3c-tool-links" className="max-h-[36vh] space-y-0.5 overflow-y-auto">
+            {myAgentsButton}
+            <AgentMarketplaceButton layout="row" onNavigate={onNavigate} />
+            {panelButtons}
+          </div>
+        </nav>
         <div className="border-border-light shrink-0 border-t px-2 py-2">
           <Suspense fallback={<Skeleton className="h-10 rounded-xl" />}>
             <AccountSettings />
@@ -232,9 +253,11 @@ function ExpandedPanel({
       {toggleControl}
       <NewChatButton setActive={setActive} switchToHistory={switchToHistory} />
       <div className="border-border-light mx-1 w-7 border-t" />
-      <div className="flex min-h-0 flex-col gap-1 overflow-y-auto">
+      <nav aria-label="工具导航" className="flex min-h-0 flex-col items-center gap-1 overflow-y-auto">
+        {myAgentsButton}
+        <AgentMarketplaceButton />
         {panelButtons}
-      </div>
+      </nav>
       <div className="mt-auto">
         <Suspense fallback={<Skeleton className="h-9 w-9 rounded-lg" />}>
           <AccountSettings collapsed />
