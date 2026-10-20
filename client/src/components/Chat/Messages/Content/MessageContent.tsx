@@ -15,6 +15,7 @@ import Thinking from './Parts/Thinking';
 import { useLocalize } from '~/hooks';
 import Container from './Container';
 import Markdown from './Markdown';
+import { isInternalMediaHandoff } from './internalMediaHandoff';
 import { cn } from '~/utils';
 
 const ERROR_CONNECTION_TEXT = 'Error connecting to server, try refreshing the page.';
@@ -111,6 +112,14 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
     }
     return <>{text}</>;
   }, [isCreatedByUser, enableUserMsgMarkdown, text, isLatestMessage]);
+
+  if (!isCreatedByUser && isInternalMediaHandoff(text)) {
+    return (
+      <Container message={message}>
+        <ErrorBox>此前的图片或工具结果未从上游正确交付。请重新生成该回复。</ErrorBox>
+      </Container>
+    );
+  }
 
   return (
     <Container message={message}>
