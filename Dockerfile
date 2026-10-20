@@ -69,7 +69,7 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules /app/node_modules
 RUN --mount=type=bind,from=build,source=/app,target=/mnt/mv3c-build,ro \
     find /mnt/mv3c-build -mindepth 1 -maxdepth 1 ! -name node_modules \
-      -exec cp -a {} /app/ \\;
+      -exec cp -a {} /app/ \;
 
 ARG BUILD_COMMIT=
 ARG BUILD_BRANCH=
