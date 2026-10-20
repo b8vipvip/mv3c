@@ -31,8 +31,20 @@ type ManagedUser = {
 type UsersResponse = { total: number; users: ManagedUser[] };
 type AuditEvent = { id: string; actor: string; changedFields: string[]; at: string };
 type UpdateConfig = { autoEnabled: boolean; channel: 'main' | 'release'; intervalMinutes: number };
-type UpdateJob = { id: string; mode: string; requestedAt: string; requestedBy: string };
-type UpdateHistory = { jobId: string; outcome: string; sha: string; error: string; finishedAt: string };
+type UpdateProgress = {
+  stage: string; percent: number; message: string; updatedAt: string;
+  steps: { stage: string; percent: number; message: string; at: string }[];
+};
+type UpdateJob = {
+  id: string; mode: string; requestedAt: string; requestedBy: string;
+  progress?: UpdateProgress;
+};
+type UpdateHistory = {
+  jobId: string; outcome: string; sha: string; error: string; finishedAt: string;
+  requestedAt?: string; startedAt?: string; durationMs?: number;
+  fromSha?: string; attemptedSha?: string; verification?: string;
+  steps?: UpdateProgress['steps'];
+};
 type UpdateState = {
   config: UpdateConfig;
   agentOnline: boolean;
@@ -111,6 +123,7 @@ export default function Mv3cAdmin() {
   const [busy, setBusy] = useState(false);
   const [allowed, setAllowed] = useState(true);
   const [testModels, setTestModels] = useState<string[] | null>(null);
+  const [downloadingReport, setDownloadingReport] = useState<string | null>(null);
 
   const applySettings = useCallback((data: AdminSettings) => {
     setSettings(data);
@@ -165,15 +178,17 @@ export default function Mv3cAdmin() {
       const result = await adminRequest<UpdateState>(token, '/updates');
       setUpdates(result);
       if (!updateConfigTouched) setUpdateConfig(result.config);
+      setError((previous) => previous.startsWith('更新服务短暂不可用：') ? '' : previous);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新状态加载失败');
+      setError('更新服务短暂不可用：' +
+        (err instanceof Error ? err.message : '更新状态加载失败') + '（将自动重试）');
     }
   }, [token, updateConfigTouched]);
 
   useEffect(() => {
     if (!token || tab !== 'updates') return;
     void loadUpdates();
-    const interval = window.setInterval(() => { void loadUpdates(); }, 8000);
+    const interval = window.setInterval(() => { void loadUpdates(); }, 3000);
     return () => window.clearInterval(interval);
   }, [token, tab, loadUpdates]);
 
@@ -262,6 +277,37 @@ export default function Mv3cAdmin() {
       await loadUpdates();
       setMessage('已加入更新队列。宿主机更新服务将在约 1 分钟内开始处理。');
     });
+  };
+
+  const downloadUpdateReport = async (jobId: string) => {
+    if (!token || downloadingReport) return;
+    setDownloadingReport(jobId);
+    setError('');
+    try {
+      const response = await fetch(
+        '/api/admin/mv3c/updates/reports/' + encodeURIComponent(jobId), {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Authorization: 'Bearer ' + token },
+        },
+      );
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || '下载诊断报告失败（HTTP ' + response.status + '）');
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'mv3c-update-' + jobId + '.log';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '下载报告失败');
+    } finally {
+      setDownloadingReport(null);
+    }
   };
 
   const changeRole = (id: string, role: string) => run(async () => {
@@ -504,6 +550,75 @@ export default function Mv3cAdmin() {
                       {updates.pendingJob && <p>排队任务：{updates.pendingJob.id}</p>}
                       {updates.activeJob && <p>正在执行：{updates.activeJob.id}</p>}
                     </div>
+                    {(updates.pendingJob || updates.activeJob) && (() => {
+                      const job = updates.activeJob || updates.pendingJob!;
+                      const progress = job.progress;
+                      const percent = updates.pendingJob ? 0 : Math.max(0, Math.min(100,
+                        progress?.percent ?? 0));
+                      return (
+                        <div className="space-y-3 rounded-lg border border-border-medium p-4"
+                          role="region" aria-label="更新任务进度">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h3 className="font-semibold">
+                              {updates.pendingJob ? '任务排队中' : '正在更新与验证'}
+                            </h3>
+                            <span className="font-mono text-sm tabular-nums">{percent}%</span>
+                          </div>
+                          <div role="progressbar" aria-label="版本更新阶段进度"
+                            aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}
+                            aria-valuetext={progress?.message || '等待宿主机更新服务'}
+                            className="h-3 w-full overflow-hidden rounded-full bg-surface-secondary">
+                            <div className="h-full rounded-full bg-blue-600 transition-[width] duration-500"
+                              style={{ width: percent + '%' }} />
+                          </div>
+                          <p role="status" className="text-sm text-text-secondary">
+                            {progress?.message || '更新任务已提交，等待宿主机服务接收'}
+                          </p>
+                          <p className="break-all font-mono text-xs text-text-secondary">
+                            任务 ID：{job.id}
+                          </p>
+                          {progress?.steps?.length ? (
+                            <details>
+                              <summary className="cursor-pointer text-sm">查看实时更新阶段记录</summary>
+                              <ol className="mt-2 max-h-48 space-y-1 overflow-auto text-xs text-text-secondary">
+                                {progress.steps.map((step, index) => (
+                                  <li key={index}>
+                                    {new Date(step.at).toLocaleTimeString()} ·
+                                    {' '}{step.percent}% · {step.message}
+                                  </li>
+                                ))}
+                              </ol>
+                            </details>
+                          ) : null}
+                          <p className="text-xs text-text-secondary">
+                            百分比表示当前进入的部署阶段，不是按时间估算。Docker 镜像构建期间可能停留在同一百分比。
+                          </p>
+                        </div>
+                      );
+                    })()}
+                    {!updates.activeJob && !updates.pendingJob && updates.history.length > 0 && (
+                      <div role="status" className="rounded-lg border border-border-medium p-4 text-sm">
+                        <p className="font-semibold">
+                          最新任务结果：{({
+                            success: '部署成功且自动验证通过', skipped: '无需更新',
+                            rolled_back: '部署失败，已验证并恢复旧版本',
+                            failed: '更新失败',
+                          } as Record<string, string>)[updates.history[0].outcome] ||
+                            updates.history[0].outcome}
+                        </p>
+                        <p className="mt-1 text-text-secondary">
+                          {updates.history[0].verification || '本次更新无额外验证说明'}
+                        </p>
+                        {updates.history[0].error && (
+                          <p className="mt-1 text-red-500">{updates.history[0].error}</p>
+                        )}
+                        <button className={subtleButton + ' mt-3'}
+                          disabled={downloadingReport !== null}
+                          onClick={() => void downloadUpdateReport(updates.history[0].jobId)}>
+                          下载本次更新报告 (.log)
+                        </button>
+                      </div>
+                    )}
                     {updates.lastError && (
                       <div role="alert" className="rounded-lg border border-red-500 p-3 text-sm text-red-500">
                         {updates.lastError}
@@ -574,7 +689,20 @@ export default function Mv3cAdmin() {
                             <div key={entry.jobId} className="rounded-lg bg-surface-secondary p-3">
                               <p>{new Date(entry.finishedAt).toLocaleString()} ·
                                 {' '}{entry.outcome} · {entry.sha?.slice(0, 12)}</p>
+                              {entry.verification && (
+                                <p className="mt-1 text-text-secondary">{entry.verification}</p>
+                              )}
+                              {typeof entry.durationMs === 'number' && (
+                                <p className="mt-1 text-xs text-text-secondary">
+                                  耗时：{Math.round(entry.durationMs / 1000)} 秒
+                                </p>
+                              )}
                               {entry.error && <p className="text-red-500">{entry.error}</p>}
+                              <button className={subtleButton + ' mt-2 text-xs'}
+                                disabled={downloadingReport !== null}
+                                onClick={() => void downloadUpdateReport(entry.jobId)}>
+                                {downloadingReport === entry.jobId ? '正在生成下载…' : '下载诊断报告'}
+                              </button>
                             </div>
                           ))}
                         </div>

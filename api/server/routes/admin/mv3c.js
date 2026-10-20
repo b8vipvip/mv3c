@@ -21,7 +21,9 @@ router.use((req, res, next) => {
 router.use(requireJwtAuth, requireCapability(SystemCapabilities.ACCESS_ADMIN));
 
 function failure(res, error) {
-  if (error?.status === 409) return res.status(409).json({ error: error.message });
+  if (error?.status === 409 || error?.status === 404) {
+    return res.status(error.status).json({ error: error.message });
+  }
   if (error instanceof TypeError || error instanceof SyntaxError) {
     return res.status(400).json({ error: error.message });
   }
@@ -92,6 +94,18 @@ router.get('/audit', async (req, res) => {
 router.get('/updates', async (req, res) => {
   try {
     return res.json(await updater.getState());
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.get('/updates/reports/:jobId', async (req, res) => {
+  try {
+    const report = await updater.getReport(req.params.jobId);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition',
+      'attachment; filename="mv3c-update-' + req.params.jobId + '.log"');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(report);
   } catch (error) {
     return failure(res, error);
   }

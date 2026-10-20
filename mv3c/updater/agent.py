@@ -220,25 +220,83 @@ def wait_healthy(repo: Path, timeout: int = 210) -> None:
     raise UpdateError("mv3c failed its health check: " + last[:300])
 
 
-def deploy(repo: Path, old: str, target: str) -> tuple[str, str, str]:
+def verify_deployment(repo: Path, expected_sha: str) -> str:
+    """Verify the running app, not merely whether Docker Compose exited 0."""
+    actual = git(repo, "rev-parse", "HEAD")
+    if actual != expected_sha:
+        raise UpdateError("Git checkout SHA mismatch after deployment")
+    cid = run(["docker", "compose", "ps", "-q", "mv3c"], repo, timeout=20)
+    if not cid:
+        raise UpdateError("mv3c container is missing")
+    container_id = cid.splitlines()[0]
+    health = run(["docker", "inspect", "--format",
+                  "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}",
+                  container_id], repo, timeout=20)
+    if health != "healthy":
+        raise UpdateError("Container post-deploy health is " + health)
+    running_image = run(
+        ["docker", "inspect", "--format", "{{.Image}}", container_id],
+        repo, timeout=20,
+    )
+    tagged_image = run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", "mv3c:local"],
+        repo, timeout=20,
+    )
+    if running_image != tagged_image:
+        raise UpdateError("Running container image does not match newly built image")
+    for url in ("http://127.0.0.1:3080/readyz",
+                "http://127.0.0.1:3080/api/config"):
+        try:
+            with urllib.request.urlopen(url, timeout=15) as response:
+                if response.status != 200:
+                    raise UpdateError("HTTP smoke verification failed: " + url)
+                data = response.read(200_000)
+                if url.endswith("/api/config") and not isinstance(json.loads(data), dict):
+                    raise UpdateError("Startup configuration is not a JSON object")
+        except (urllib.error.URLError, ValueError) as error:
+            raise UpdateError("HTTP smoke verification failed: " + url + " " +
+                              str(error)[:200]) from error
+    return ("Post-deploy validation PASSED: git SHA=" + actual[:12]
+            + "; running image matches built tag; container healthy;"
+            + " /readyz HTTP 200; /api/config HTTP 200")
+
+
+def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str, str, str]:
     """Return outcome, log, error. Never remove Docker volumes."""
     log = []
     previous_image_saved = False
+    def advance(stage: str, percent: int, detail: str) -> None:
+        log.append("[{}] {}% {}".format(stage, percent, detail))
+        if on_progress:
+            try:
+                on_progress(stage, percent, detail)
+            except Exception as exc:
+                # Status transport failure must not turn an otherwise healthy
+                # deployment into a rollback. The final report retries later.
+                log.append("Progress transport warning: " + str(exc)[:300])
     try:
         # Preserve the exact known-good image before a source build can replace its tag.
+        advance("backup", 35, "保存旧版 Docker 镜像")
         run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"], repo, timeout=30)
         previous_image_saved = True
+        advance("merging", 43, "Git 快进到验证通过的提交")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
-        log.append(run(["docker", "compose", "build", "mv3c"], repo, timeout=3600)[-5000:])
+        advance("building", 50, "正在构建 Docker 镜像；此阶段可能需要数分钟")
+        log.append(run(["docker", "compose", "build", "mv3c"], repo, timeout=3600)[-9500:])
+        advance("restarting", 75, "正在重新创建 mv3c 服务")
         log.append(run(["docker", "compose", "up", "-d", "--no-deps", "--force-recreate", "mv3c"],
                        repo, timeout=240)[-3000:])
+        advance("verifying", 86, "检查 Docker 健康状态")
         wait_healthy(repo)
-        return "success", "\n".join(log)[-12000:], ""
+        advance("verifying", 93, "验证 Git 提交、readyz 和应用配置 API")
+        log.append(verify_deployment(repo, target))
+        return "success", "\n".join(log)[-24000:], ""
     except Exception as error:
         failure = str(error)[:1600]
         log.append("Deployment failed: " + failure)
         try:
+            advance("rollback", 94, "更新失败，开始恢复旧版本")
             git(repo, "reset", "--hard", old, timeout=60)
             if previous_image_saved:
                 log.append(run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
@@ -249,11 +307,13 @@ def deploy(repo: Path, old: str, target: str) -> tuple[str, str, str]:
             log.append(run(["docker", "compose", "up", "-d", "--no-deps",
                             "--force-recreate", "mv3c"], repo, timeout=240)[-2000:])
             wait_healthy(repo)
+            validation = verify_deployment(repo, old)
+            log.append("Rollback validation PASSED: " + validation)
             log.append("Previous application version restored")
-            return "rolled_back", "\n".join(log)[-12000:], failure
+            return "rolled_back", "\n".join(log)[-24000:], failure
         except Exception as rollback_error:
             log.append("Rollback failed: " + str(rollback_error)[:1500])
-            return "failed", "\n".join(log)[-12000:], failure + "; rollback failed"
+            return "failed", "\n".join(log)[-24000:], failure + "; rollback failed"
 
 
 def check_needed(state: dict) -> bool:
@@ -274,6 +334,55 @@ def check_needed(state: dict) -> bool:
         return True
 
 
+def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> None:
+    """Reconcile a job abandoned when systemd or the server restarts.
+
+    This runs only under the host updater's exclusive flock. It never resets
+    data or guesses that an unfinished deployment succeeded without checks.
+    """
+    job_id = active.get("id")
+    if not job_id:
+        return
+    # Only a target pinned to this specific claimed job is authoritative.
+    # A global latestSha from a prior check could equal the old version and
+    # falsely report success for an update interrupted before its fetch.
+    target_sha = active.get("targetSha", "")
+    attempted = target_sha if isinstance(target_sha, str) and SHA.fullmatch(target_sha) else ""
+    old = installed_sha
+    try:
+        validation = verify_deployment(repo, installed_sha)
+        # A Git fast-forward alone does not prove that the container switched.
+        # Require evidence that Compose completed its recreation step.
+        deployment_reached_verification = (
+            active.get("progress", {}).get("stage") in ("verifying", "complete")
+            and active.get("progress", {}).get("percent", 0) >= 86
+        )
+        is_target = bool(attempted and old == attempted and deployment_reached_verification)
+        outcome = "success" if is_target else "failed"
+        message = ("Updater interrupted, but target is healthy and verified"
+                   if is_target else "Updater interrupted before completing target deployment")
+        error = "" if is_target else message
+    except Exception as exc:
+        outcome = "failed"
+        error = "Interrupted update verification failed: " + str(exc)[:1400]
+        validation = "Interrupted update: live service verification FAILED"
+        message = error
+    try:
+        bridge(repo, "progress", {
+            "jobId": job_id, "stage": "complete", "percent": 100,
+            "message": message[:300],
+        })
+    except Exception as exc:
+        print("Recovery progress reporting warning:", str(exc)[:200], flush=True)
+    bridge(repo, "complete", {
+        "jobId": job_id, "outcome": outcome, "error": error,
+        "log": "Recovery after interrupted updater: " + message +
+               "\n" + validation,
+        "sha": old, "fromSha": active.get("fromSha", ""), "attemptedSha": attempted,
+        "verification": validation,
+    })
+
+
 def execute(repo: Path) -> None:
     state = bridge(repo, "state")
     if not isinstance(state, dict):
@@ -284,71 +393,104 @@ def execute(repo: Path) -> None:
         report(repo, status="blocked", lastError=str(error)[:1800])
         raise
     report(repo, currentSha=old)
+    if state.get("activeJob"):
+        recover_interrupted_job(repo, state["activeJob"], old)
+        return
     if not check_needed(state) and not state.get("pendingJob"):
         return
 
-    pending = state.get("pendingJob")
+    # Claim manual work before GitHub checks: progress should say what the
+    # worker is doing instead of reporting "queued" for a long fetch.
+    job = bridge(repo, "claim") if state.get("pendingJob") else None
+    def progress(stage: str, percent: int, message: str, *,
+                 from_sha: str = "", target_sha: str = "") -> None:
+        if job:
+            bridge(repo, "progress", {
+                "jobId": job["id"], "stage": stage,
+                "percent": percent, "message": message,
+                **({"fromSha": from_sha} if from_sha else {}),
+                **({"targetSha": target_sha} if target_sha else {}),
+            })
+
+    def complete(outcome: str, *, log: str, error: str = "",
+                 sha: str = old, attempted: str = "", verification: str = "") -> None:
+        if not job:
+            return
+        try:
+            progress("complete", 100, {
+                "success": "部署和部署后验证成功",
+                "skipped": "当前已经是最新版本，无需重启",
+                "rolled_back": "部署失败，已回滚并验证旧版服务",
+                "failed": "更新失败，请下载报告排查",
+            }[outcome])
+        except Exception as exc:
+            print("Terminal progress reporting warning:", str(exc)[:200], flush=True)
+        bridge(repo, "complete", {
+            "jobId": job["id"], "outcome": outcome, "log": log,
+            "error": error, "sha": sha, "fromSha": old,
+            "attemptedSha": attempted, "verification": verification,
+        })
+
     try:
+        progress("checking", 8, "检查当前 Git 状态与更新通道", from_sha=old)
+        progress("fetching", 16, "优先 SSH 获取 GitHub 提交（失败回退 HTTPS）")
         target, label = target_for_channel(repo, state["config"]["channel"])
         if not is_descendant(repo, old, target):
             raise UpdateError("Target commit is not a fast-forward descendant of deployed version")
         available = target != old
+        progress("ci", 26, "校验 GitHub Actions 两项 CI", target_sha=target)
         good, reason = ci_is_green(target) if available else (True, "")
         report(repo, currentSha=old, latestSha=target, latestLabel=label,
                latestUrl="https://github.com/" + REPO + "/commit/" + target,
                checkedAt=utc_now(), updateAvailable=available,
                **({"status": "blocked", "lastError": reason}
-                  if available and not good and not pending
+                  if available and not good and not job
                   else {"status": "idle", "lastError": ""}
-                  if not available and not pending else {}))
+                  if not available and not job else {}))
     except Exception as error:
         message = str(error)[:1800]
         report(repo, checkedAt=utc_now(), lastError=message,
-               **({"status": "blocked"} if not pending else {}))
-        if pending:
-            job = bridge(repo, "claim")
-            if job:
-                bridge(repo, "complete", {
-                    "jobId": job["id"], "outcome": "failed", "error": message,
-                    "log": "Unable to resolve or verify GitHub update", "sha": old,
-                })
+               **({"status": "blocked"} if not job else {}))
+        complete("failed", error=message,
+                 log="Unable to resolve or verify the GitHub commit: " + message,
+                 verification="Pre-deployment verification FAILED")
         raise
 
     if not available:
-        if pending:
-            job = bridge(repo, "claim")
-            if job:
-                bridge(repo, "complete", {
-                    "jobId": job["id"], "outcome": "skipped",
-                    "error": "", "log": "Already running the latest commit", "sha": old,
-                })
+        complete("skipped", log="Already running the latest commit " + old,
+                 sha=old, attempted=target,
+                 verification="Skipped: current version already matches target")
         return
     if not good:
-        if pending:
-            job = bridge(repo, "claim")
-            if job:
-                bridge(repo, "complete", {
-                    "jobId": job["id"], "outcome": "failed",
-                    "error": reason, "log": "GitHub CI gate blocked deployment", "sha": old,
-                })
+        complete("failed", error=reason,
+                 log="GitHub CI gate blocked deployment: " + reason,
+                 attempted=target, verification="CI gate FAILED")
         return
 
-    if not pending and state["config"]["autoEnabled"]:
+    if not job and state["config"]["autoEnabled"]:
         if target == state.get("blockedSha"):
             report(repo, status="blocked",
                    lastError="此提交上次部署失败，已暂停自动重试；可手动重试或等待新的 GitHub 提交")
             return
         bridge(repo, "queue-auto")
-    job = bridge(repo, "claim")
+        job = bridge(repo, "claim")
+        if job:
+            progress("checking", 8, "自动更新已通过 GitHub 版本检查", from_sha=old)
+            progress("fetching", 16, "GitHub 代码已拉取")
+            progress("ci", 26, "两项 GitHub Actions 已通过", target_sha=target)
     if not job:
         return
+
     print("Deploying verified commit", target, flush=True)
-    outcome, log, error = deploy(repo, old, target)
-    bridge(repo, "complete", {
-        "jobId": job["id"], "outcome": outcome, "log": log, "error": error,
-        "sha": target if outcome == "success" else old,
-        "attemptedSha": target,
-    })
+    outcome, log, error = deploy(repo, old, target, on_progress=progress)
+    validation_line = next(
+        (line for line in log.splitlines()
+         if line.startswith(("Post-deploy validation PASSED", "Rollback validation PASSED"))),
+        "Verification failed" if outcome == "failed" else "Deployment failed; recovered old version",
+    )
+    complete(outcome, log=log, error=error,
+             sha=target if outcome == "success" else old, attempted=target,
+             verification=validation_line)
     print("mv3c update:", outcome, flush=True)
 
 

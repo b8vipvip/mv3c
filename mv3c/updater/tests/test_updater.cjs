@@ -36,3 +36,37 @@ test('admin update state never exposes secret keys and detects stale host agents
   assert.equal(formatted.pendingJob.id, 'job1');
   assert.equal(formatted.config.autoEnabled, false);
 });
+
+test('progress accepts only bounded stages and safe fields', () => {
+  const jobId = '22222222-2222-4222-8222-222222222222';
+  assert.deepEqual(updates.validateProgress({
+    jobId, stage: 'building', percent: 50, message: 'Building image',
+  }), { stage: 'building', percent: 50, message: 'Building image' });
+  assert.throws(() => updates.validateProgress({
+    jobId, stage: 'shell', percent: 50, message: 'bad',
+  }));
+  assert.throws(() => updates.validateProgress({
+    jobId, stage: 'building', percent: 130, message: 'bad',
+  }));
+  assert.throws(() => updates.validateProgress({
+    jobId, stage: 'building', percent: 50, message: 'bad', command: 'delete',
+  }));
+});
+
+test('diagnostic report keeps validated result, timestamps, verification and log', () => {
+  const jobId = '22222222-2222-4222-8222-222222222222';
+  const at = new Date('2026-10-20T00:00:00Z');
+  const report = updates.renderReport({
+    jobId, mode: 'manual', requestedBy: 'admin', requestedAt: at, startedAt: at,
+    finishedAt: at, durationMs: 3000, outcome: 'success', fromSha: 'a'.repeat(40),
+    attemptedSha: 'b'.repeat(40), sha: 'b'.repeat(40),
+    error: '', verification: 'Post-deploy validation PASSED',
+    steps: [{ at, stage: 'building', percent: 50, message: 'Building' }],
+    log: 'Docker compose output',
+  });
+  assert.match(report, /Post-deploy validation PASSED/);
+  assert.match(report, /50% \| building \| Building/);
+  assert.match(report, /Docker compose output/);
+  assert.match(report, /3000/);
+  assert.throws(() => updates.renderReport(null));
+});
