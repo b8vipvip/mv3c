@@ -32,14 +32,16 @@ const defaultInterface = getConfigDefaults().interface;
 /** Keep one DOM order while sharing the sidebar's scaled drawer breakpoint. */
 function Header({
   parentConversationId,
+  index = 0,
   readOnly = false,
 }: {
   parentConversationId?: string;
+  index?: number;
   readOnly?: boolean;
 }) {
   const { data: startupConfig } = useGetStartupConfig();
   const navVisible = useRecoilValue(store.sidebarExpanded);
-  const isSubmitting = useIsSubmitting(0);
+  const isSubmitting = useIsSubmitting(index);
   const isSmallScreen = useDrawerViewport();
 
   /** The mobile row only offers a new chat when there is one to leave. Read
@@ -112,7 +114,7 @@ function Header({
         )}
         {!readOnly && (
           <div data-testid="mv3c-header-context-window" className="flex items-center gap-2">
-            <TokenUsage index={0} conversation={conversation} isSubmitting={isSubmitting} />
+            <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
           </div>
         )}
         {!readOnly && interfaceConfig.presets === true && interfaceConfig.modelSelect === true && (

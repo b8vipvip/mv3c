@@ -476,7 +476,9 @@ function Bar({
                 disabled={disabled}
                 hasAddedConversation={hasAddedConversation}
               />
-              <TokenUsage index={index} conversation={conversation} isSubmitting={isSubmitting} />
+              <div data-testid="mv3c-composer-model-selector" className="max-w-[10rem] min-w-0">
+                <ModelSelector startupConfig={startupConfig} />
+              </div>
             </div>
             {/* Arrives and leaves in depth. The elapsed time is not one of the
                 things that stepped aside, so it has nowhere to travel from:
