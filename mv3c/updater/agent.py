@@ -369,6 +369,14 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         wait_healthy(repo)
         advance("verifying", 93, "验证镜像提交、readyz 和应用配置 API")
         log.append(verify_deployment(repo, target))
+        # The Docker image now exists in the daemon; keeping each 1GB+
+        # compressed SCP package would fill the user's 40GB host again.
+        for artifact in archive_paths(target):
+            try:
+                artifact.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                log.append("SCP archive cleanup warning: " +
+                           type(cleanup_error).__name__)
         return "success", "\n".join(log)[-24000:], ""
     except Exception as error:
         failure = str(error)[:1600]
