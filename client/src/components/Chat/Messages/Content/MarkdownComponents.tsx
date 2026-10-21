@@ -11,6 +11,7 @@ import { useMessagePartsHost } from '~/Providers/MessagePartsHostContext';
 import { useCodeBlockContext, useMediaContext } from '~/Providers';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
 import { isSafeRasterImageDataUrl } from './inlineImageUrl';
+import ImagePreview from './Image';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
 import { useFileDownload } from '~/data-provider';
 import { useLocalize } from '~/hooks';
@@ -239,6 +240,10 @@ export const img: React.ElementType = memo(function MarkdownImage({
     return toAbsoluteFilePath(resolved, baseURL);
   }, [src, baseURL, attachmentsByName]);
 
-  return <img src={fixedSrc} alt={alt} title={title} className={className} style={style} />;
+  // Markdown output images share the same bounded preview/lightbox as
+  // uploaded/generated attachments. Raw <img> rendered full-resolution at
+  // document width and offered no click-through original.
+  if (!fixedSrc) return null;
+  return <ImagePreview imagePath={fixedSrc} altText={alt || title || '生成图片'} className={className} />;
 });
 img.displayName = 'MarkdownImage';
