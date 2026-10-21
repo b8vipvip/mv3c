@@ -2,17 +2,19 @@
 
 **mv3c** 是基于 LibreChat 的独立多用户聊天网站，通过 **chat2api** 调用 Linux/Windows Worker。提供内置 **mv3c Admin** 管理后台：站点设置、注册开关、chat2api API 地址和密钥、模型列表、模型同步以及用户角色，全部通过后台配置并持久保存在 MongoDB。
 
-> 本项目保留 LibreChat 的内部依赖和 MIT 许可证；用户可见品牌为 mv3c。镜像从本仓库的修改后源码构建。
+> 本项目保留 LibreChat 的内部依赖和 MIT 许可证；用户可见品牌为 mv3c。镜像由 GitHub Actions 从本仓库修改后源码构建、测试并发布到 GHCR；正式服务器更新直接拉取已验证镜像。
 
 ## 1. 全新部署（无需 .env）
 
-服务器需要 Docker Engine、Docker Compose v2、Git；建议预留充足内存与磁盘空间用于首次源码构建。
+服务器需要 Docker Engine、Docker Compose v2、Git；应预留镜像下载与旧版回滚所需空间，不在服务器运行 npm/Docker 源码构建。
 
 ~~~bash
 git clone git@github.com:b8vipvip/mv3c.git
 cd mv3c
 docker compose -f docker-compose.mv3c.yml config --quiet
-docker compose -f docker-compose.mv3c.yml up -d --build
+docker pull ghcr.io/b8vipvip/mv3c:sha-$(git rev-parse HEAD)
+docker tag ghcr.io/b8vipvip/mv3c:sha-$(git rev-parse HEAD) mv3c:local
+docker compose -f docker-compose.mv3c.yml up -d --no-build --pull never
 docker compose -f docker-compose.mv3c.yml ps
 curl -fsS http://127.0.0.1:3080/readyz
 ~~~
@@ -78,9 +80,8 @@ docker compose -f docker-compose.mv3c.yml logs --tail=150 mv3c
 # 重启
 docker compose -f docker-compose.mv3c.yml restart mv3c
 
-# 更新源码并重新构建（命令行 Git 连接方式由 origin 决定）
-sudo -H git pull --ff-only origin main
-docker compose -f docker-compose.mv3c.yml up -d --build
+# 后续更新：使用“版本更新”后台触发（先校验 CI，拉取镜像并验证）
+# 不要再在服务器使用 docker compose build 或 --build
 ~~~
 
 不要运行 docker compose down -v，否则可能删除 MongoDB 用户数据和自动生成的根密钥。备份时必须**同时备份** mv3c-mongodb 和 mv3c-data 两个卷，缺少后者将无法解密已保存的 chat2api API Key。
@@ -133,3 +134,9 @@ docker compose -f docker-compose.mv3c.yml config --quiet
 ## 7. 开源许可
 
 本项目保留 LibreChat 原始 [MIT LICENSE](LICENSE) 及 [上游说明](mv3c/UPSTREAM_README.md)。后端项目：[chat2api](https://github.com/b8vipvip/chat2api)。
+
+## 预构建镜像更新机制（2026-10）
+
+每次推送 main 后，GitHub Actions 将构建、启动验证 mv3c Docker 镜像并推送到 `ghcr.io/b8vipvip/mv3c:sha-<40位提交 SHA>`；宿主机更新器要求两个 GitHub Actions 工作流均通过，只拉取 SHA 固定镜像，核对镜像提交标识与目标一致后切换 Docker Compose。服务器禁止重复构建，故不再执行 npm 构建或依赖安装。
+
+**原先安装的更新器必须先进行一次引导迁移**；直接点旧版后台更新仍然会执行旧代码。请阅读 [更新器引导步骤](mv3c/updater/README.md#切换到-github-actions-预构建镜像部署重要)。GHCR 包若未设置 Public，请先配置宿主机 Docker 只读 Registry 凭据。

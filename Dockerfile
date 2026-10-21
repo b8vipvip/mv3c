@@ -75,6 +75,9 @@ ARG BUILD_COMMIT=
 ARG BUILD_BRANCH=
 ARG BUILD_DATE=
 ENV BUILD_COMMIT=${BUILD_COMMIT}
+LABEL org.opencontainers.image.source="https://github.com/b8vipvip/mv3c" \
+      org.opencontainers.image.revision="${BUILD_COMMIT}" \
+      org.opencontainers.image.description="mv3c GitHub Actions verified release image"
 ENV BUILD_BRANCH=${BUILD_BRANCH}
 ENV BUILD_DATE=${BUILD_DATE}
 
