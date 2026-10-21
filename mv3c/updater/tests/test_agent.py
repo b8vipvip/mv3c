@@ -166,34 +166,51 @@ class HostUpdaterTests(unittest.TestCase):
             with self.assertRaisesRegex(agent.UpdateError, "timed out"):
                 agent.run(["git", "fetch"], pathlib.Path("/tmp"), timeout=5)
 
-    def test_failed_build_restores_previous_image_without_rebuilding(self):
-        commands = []
+    def test_image_reference_requires_full_immutable_sha(self):
+        self.assertEqual(agent.image_for_sha(SHA2),
+                         "ghcr.io/b8vipvip/mv3c:sha-" + SHA2)
+        with self.assertRaises(agent.UpdateError):
+            agent.image_for_sha("latest")
+        with self.assertRaises(agent.UpdateError):
+            agent.image_for_sha("abcd")
 
+    def test_wrong_registry_image_revision_refuses_to_switch(self):
+        def fake_run(args, _repo, **_kwargs):
+            if args[:3] == ["docker", "image", "inspect"]:
+                return SHA1
+            return "OK"
+        with patch.object(agent, "run", side_effect=fake_run):
+            with self.assertRaisesRegex(agent.UpdateError, "revision mismatch"):
+                agent.pull_prebuilt_image(pathlib.Path("/tmp"), SHA2)
+
+    def test_missing_registry_image_keeps_old_image_and_rolls_back_without_build(self):
+        commands = []
         def fake_run(args, _repo, **_kwargs):
             commands.append(args)
-            if args[:3] == ["docker", "compose", "build"]:
-                raise agent.UpdateError("Build failed")
+            if args[:2] == ["docker", "pull"]:
+                raise agent.UpdateError("GHCR registry unavailable")
             return "OK"
-
         with patch.object(agent, "run", side_effect=fake_run):
             with patch.object(agent, "git") as git:
                 with patch.object(agent, "wait_healthy"):
                     with patch.object(agent, "verify_deployment", return_value="verified"):
-                        outcome, _log, error = agent.deploy(
+                        outcome, log, error = agent.deploy(
                             pathlib.Path("/tmp"), SHA1, SHA2)
         self.assertEqual(outcome, "rolled_back")
-        self.assertIn("Build failed", error)
-        self.assertTrue(any(c[:4] == ["docker", "image", "tag", "mv3c:rollback"]
-                            for c in commands))
-        self.assertEqual(sum(c[:3] == ["docker", "compose", "build"]
-                             for c in commands), 1)
+        self.assertIn("GHCR registry unavailable", error)
+        self.assertNotIn("docker compose build", log)
+        self.assertFalse(any(cmd[:3] == ["docker", "compose", "build"] for cmd in commands))
+        self.assertTrue(any(cmd[:4] == ["docker", "image", "tag", "mv3c:rollback"]
+                            for cmd in commands))
         self.assertIn("reset", str(git.call_args_list))
 
-    def test_successful_deployment_emits_ordered_phases_and_verifies(self):
+    def test_successful_prebuilt_deploy_never_invokes_docker_build(self):
+        commands = []
         phases = []
         def fake_run(args, _repo, **_kwargs):
-            if args[:3] == ["docker", "compose", "build"]:
-                return "Build complete"
+            commands.append(args)
+            if args[:3] == ["docker", "image", "inspect"] and "sha-" in args[-1]:
+                return SHA2
             return "OK"
         with patch.object(agent, "run", side_effect=fake_run):
             with patch.object(agent, "git"):
@@ -205,11 +222,17 @@ class HostUpdaterTests(unittest.TestCase):
                             on_progress=lambda stage, percent, message:
                                 phases.append((stage, percent, message)))
         self.assertEqual((outcome, error), ("success", ""))
-        self.assertIn("Post-deploy validation PASSED", log)
+        self.assertIn("GHCR verified prebuilt image", log)
         check.assert_called_once_with(pathlib.Path("/tmp"), SHA2)
         self.assertEqual([phase[0] for phase in phases],
-                         ["backup", "merging", "building", "restarting",
+                         ["backup", "pulling", "merging", "restarting",
                           "verifying", "verifying"])
+        self.assertFalse(any(cmd[:3] == ["docker", "compose", "build"] for cmd in commands))
+        self.assertTrue(any(cmd[:2] == ["docker", "pull"] and
+                            cmd[-1] == agent.image_for_sha(SHA2) for cmd in commands))
+        self.assertTrue(any(cmd[:3] == ["docker", "compose", "up"] and
+                            "--no-build" in cmd and "--pull" in cmd
+                            for cmd in commands))
         self.assertEqual(sorted(phase[1] for phase in phases),
                          [phase[1] for phase in phases])
 
