@@ -6,7 +6,7 @@
 - Linux 宿主机 systemd timer 每分钟检查是否有管理员任务；按后台配置的 5–60 分钟间隔检查 GitHub。
 - 网站容器不挂载 Docker Socket，不直接执行 Git、Docker 或任意 shell 命令。
 - **自动更新与后台手动更新均优先通过 SSH 拉取 Git 代码**：首先使用 git@github.com:b8vipvip/mv3c.git；若 SSH 连接失败或超时，自动回退至 https://github.com/b8vipvip/mv3c.git。两种协议都失败才报错；禁止重定向到其他 Git 仓库。目标提交必须是已部署版本的快进后代，且 GitHub Actions 中 mv3c validation 和 mv3c source Docker build 两项都成功。GitHub API 的版本/CI 元数据查询仍通过 HTTPS 完成。
-- 部署：Git 快进 → Docker Compose 构建 → 更新网站容器 → 健康检查；失败则尝试恢复上一提交并重新构建。
+- 部署：先从 GHCR 拉取精确提交 SHA 对应的 GitHub Actions 预构建镜像，验证镜像提交标签 → Git 快进 → 本地镜像标签更新 → `docker compose up --no-build --pull never` → 健康检查；失败直接恢复旧提交与旧镜像，**不在服务器执行构建**。
 - 不删除 MongoDB、密钥和上传文件的数据卷；数据库 schema 迁移无法保证回滚，需单独备份。
 
 ## 一次性安装
@@ -54,7 +54,7 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 
 ## 更新进度、自动验证和下载报告
 
-- 后台「版本更新」每 3 秒刷新进度；阶段依次覆盖 GitHub 拉取/CI、旧镜像备份、Git 快进、Docker 构建、容器重启和验证。百分比只表示已到达的真实阶段，构建阶段可停留数分钟。
+- 后台「版本更新」每 3 秒刷新进度；阶段依次覆盖 GitHub 拉取/CI、旧镜像备份、Git 快进、GHCR 镜像下载与校验、容器重启和验证。百分比只表示已到达的真实阶段，构建阶段可停留数分钟。
 - 部署成功必须确认目标 Git SHA、容器 `healthy` 状态、本机 `http://127.0.0.1:3080/readyz` 和 `/api/config` 两项 HTTP 200。验证失败触发旧版应用回滚及再次验证。
 - 每次任务的结果、阶段时间线、SHA、耗时、验证结果与限长日志保存至 MongoDB。管理员可在「最近更新记录」下载该任务的 `.log` 诊断报告，最多保留最近 20 次；下载接口要求管理员 Bearer Token。
 - 更新器意外中断时，下一次运行先核对当前 Git 版本与网站健康状况：只有部署目标实际匹配且验证通过才认定成功，否则标记失败并保留诊断，绝不因进度到 100% 就判定成功。
@@ -79,3 +79,29 @@ sudo docker compose logs --tail=200 mv3c
 - GitHub Release 不存在：选择 main 通道，或在 GitHub 先发布正式 Release。
 
 宿主机更新服务具有 Docker 部署权限，以 root 运行；只能从固定仓库更新并执行固定的 Compose 命令，不能接受管理员提交的任意命令、仓库地址或 Git SHA。
+
+## 切换到 GitHub Actions 预构建镜像部署（重要）
+
+GitHub Actions 的 `mv3c source Docker build` **在完成构建、启动与冒烟验证后**，会发布 `ghcr.io/b8vipvip/mv3c:sha-<完整40位SHA>`。更新器仅下载此固定标签，核对镜像 `org.opencontainers.image.revision` 标签匹配目标 SHA，并运行 `docker compose up -d --no-build --pull never`。不会再运行 `npm ci`、`npm run frontend` 或 `docker compose build`。
+
+GitHub Container Registry 创建 Package 后，如希望服务器免登录拉取，请在仓库关联的 Packages → mv3c → Package settings 将包设为 **Public**。如必须保持私有，则需管理员在宿主机上通过只读 Package Token 安全配置 root 用户的 Docker GHCR 登录；更新器不会接收、打印或通过网页传输容器仓库凭据。未经拉取权限验证时，更新应失败并恢复旧版，不应重新本地构建。
+
+### 旧宿主机更新器的一次性引导（仅首次）
+
+由于旧 systemd 服务当前仍加载旧版 agent.py，直接在后台按“更新”仍会运行旧构建逻辑。必须先把新的更新器脚本从通过 CI 的新提交加载到临时文件，执行一次新引擎更新，然后安装新版 systemd 服务。确认 GitHub 上 **main 提交的两项 CI 成功，GHCR 对应 SHA 镜像已推送且主机能够拉取**之后，在宿主机执行以下命令（默认仓库在 /opt/mv3c，请按实际路径修改）：
+
+~~~bash
+sudo systemctl stop mv3c-updater.timer
+cd /opt/mv3c
+sudo git fetch https://github.com/b8vipvip/mv3c.git main:refs/remotes/origin/main
+sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/agent.py > /root/mv3c-prebuilt-bootstrap.py'
+sudo python3 /root/mv3c-prebuilt-bootstrap.py --repo /opt/mv3c --bootstrap-prebuilt
+sudo bash /opt/mv3c/mv3c/updater/install.sh
+sudo systemctl start mv3c-updater.timer
+~~~
+
+上述引导命令不会清空 MongoDB 或卷，也不会执行 Docker 本地构建。若 GHCR 拉取失败，脚本会回滚到旧代码/镜像并退出非零状态；应先解决仓库包可见性、身份验证或磁盘空间，不要无条件继续安装步骤。**请确认实际仓库安装路径后再运行**。除本次首次切换外，后续网站后台自动与手动更新均直接拉取预构建镜像。
+
+### 磁盘空间限制
+
+预构建镜像仍然需要足够的磁盘空间存放镜像层，但不再需要 Node/npm 构建缓存与同时保留多层临时编译产物。遇到 `ENOSPC` 时先检查 `df -h`、`docker system df`，只清除经过确认不被其它容器引用的缓存；**不要运行 `docker compose down -v`、`docker volume prune` 或未经审查的全局容器/镜像清理命令**。
