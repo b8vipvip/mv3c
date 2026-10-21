@@ -19,6 +19,16 @@ const Markdown = memo(function Markdown({ content = '', isLatestMessage }: TCont
   const isInitializing = content === '';
 
   const streaming = isLatestMessage && isSubmitting;
+  // Legacy providers may stream an incomplete ![...](data:image;base64, ...)
+  // one token at a time. Never render its unfinished Base64 as plain text.
+  // chat2api now returns short archived media URLs, so this is a fallback.
+  const inlineIndex = content.indexOf('](data:image/');
+  const imageStart = inlineIndex >= 0 ? content.lastIndexOf('![', inlineIndex) : -1;
+  const unfinishedInlineImage = imageStart >= 0 &&
+    content.indexOf(')', inlineIndex + 2) < 0;
+  const renderContent = unfinishedInlineImage
+    ? content.slice(0, imageStart) + '\\n\\n*图片正在接收…*'
+    : content;
   const animate = smoothStreaming && streaming;
 
   // Hydration signal for the fade: substantial content already present at the
@@ -49,9 +59,9 @@ const Markdown = memo(function Markdown({ content = '', isLatestMessage }: TCont
   }
 
   return (
-    <MarkdownErrorBoundary content={content} codeExecution={true}>
+    <MarkdownErrorBoundary content={renderContent} codeExecution={true}>
       <MarkdownBlocks
-        content={content}
+        content={renderContent}
         streaming={streaming}
         remarkPlugins={getRemarkPlugins(LaTeXParsing)}
         rehypePlugins={getRehypePlugins()}
