@@ -12,7 +12,6 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   docker-build:
@@ -88,30 +87,30 @@ jobs:
           docker compose exec -T mv3c node /app/mv3c/updater/tests/integration.cjs
           docker compose exec -T mv3c node /app/mv3c/updater/bridge.cjs state > /tmp/mv3c-updater-state.json
           node -e "const x=require('/tmp/mv3c-updater-state.json');if(!x.config||x.config.channel!=='main')process.exit(1);console.log('Updater database bridge ready')"
-      # Only publish a verified main-branch image. This is a registry
-      # publication, NOT a server-side source build. Consumers also check
-      # independent "mv3c validation" on the same immutable Git SHA.
-      - name: Verify immutable image revision
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # GitHub Actions builds AND validates the actual image, then ships the
+      # immutable artifact via SSH/SCP. No registry and no host-side build.
+      # The receiving SSH account can only write to the inbox; it cannot run
+      # Docker, update the code checkout or modify app data.
+      - name: Check immutable image revision
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' mv3c:ci)" = "${GITHUB_SHA}"
-          test "$(docker image inspect --format '{{ index .Config.Env 0 }}' mv3c:ci)" != ""
-      - name: Authenticate to GitHub Container Registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish verified SHA-tagged image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Export verified Docker archive and upload over SSH/SCP
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        timeout-minutes: 40
         env:
-          IMAGE: ghcr.io/b8vipvip/mv3c
+          MV3C_SCP_HOST: ${{ secrets.MV3C_SCP_HOST }}
+          MV3C_SCP_USER: ${{ secrets.MV3C_SCP_USER }}
+          MV3C_SCP_PRIVATE_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
+          MV3C_SCP_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
+          MV3C_SCP_PORT: ${{ secrets.MV3C_SCP_PORT }}
         run: |
-          docker tag mv3c:ci "${IMAGE}:sha-${GITHUB_SHA}"
-          docker push "${IMAGE}:sha-${GITHUB_SHA}"
-          docker tag mv3c:ci "${IMAGE}:latest"
-          docker push "${IMAGE}:latest"
+          if [[ -z "$MV3C_SCP_HOST" || -z "$MV3C_SCP_USER" || -z "$MV3C_SCP_PRIVATE_KEY" || -z "$MV3C_SCP_KNOWN_HOSTS" ]]; then
+            echo "::warning::SSH/SCP delivery is not configured yet. Set MV3C_SCP_HOST, MV3C_SCP_USER, MV3C_SCP_PRIVATE_KEY, MV3C_SCP_KNOWN_HOSTS repository secrets."
+            echo "⚠️ SCP delivery skipped: set the four required GitHub Actions secrets before the server can deploy this commit." >> "$GITHUB_STEP_SUMMARY"
+          else
+            bash mv3c/updater/export_scp_image.sh
+          fi
       - name: Dump runtime logs on failure
         if: failure()
         run: docker compose -f docker-compose.mv3c.yml logs --tail=250
