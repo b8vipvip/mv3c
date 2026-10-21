@@ -3,7 +3,7 @@
 
 The web container NEVER receives a Docker socket or host filesystem mount.
 A host timer executes this program. It reads a restricted MongoDB bridge through
-docker compose exec, verifies GitHub CI, builds, switches and health-checks.
+docker compose exec, verifies GitHub CI, pulls verified GHCR images, switches and health-checks.
 """
 from __future__ import annotations
 
@@ -29,7 +29,35 @@ HTTPS_ORIGIN = "https://github.com/b8vipvip/mv3c.git"
 TRUSTED_ORIGINS = {SSH_ORIGIN, HTTPS_ORIGIN, "https://github.com/b8vipvip/mv3c"}
 SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
 CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
-USER_AGENT = "mv3c-updater/1.0"
+USER_AGENT = "mv3c-updater/2.0"
+IMAGE_REPOSITORY = "ghcr.io/b8vipvip/mv3c"
+
+
+def image_for_sha(sha: str) -> str:
+    """Never deploy mutable :latest; pin the exact GitHub commit."""
+    if not SHA.fullmatch(sha):
+        raise UpdateError("Untrusted Docker image revision")
+    return IMAGE_REPOSITORY + ":sha-" + sha
+
+
+def verify_prebuilt_image(repo: Path, sha: str) -> None:
+    """Prevent a stale or mismatched registry tag from being deployed."""
+    image = image_for_sha(sha)
+    revision = run([
+        "docker", "image", "inspect", "--format",
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}', image,
+    ], repo, timeout=30)
+    if revision != sha:
+        raise UpdateError("GHCR image revision mismatch: expected " + sha[:12] +
+                          ", got " + revision[:80])
+
+
+def pull_prebuilt_image(repo: Path, sha: str) -> str:
+    """Use precompiled layers only. No docker build or npm install on host."""
+    image = image_for_sha(sha)
+    run(["docker", "pull", image], repo, timeout=1800)
+    verify_prebuilt_image(repo, sha)
+    return image
 
 
 class UpdateError(RuntimeError):
@@ -266,7 +294,7 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
 
 
 def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str, str, str]:
-    """Return outcome, log, error. Never remove Docker volumes."""
+    """Switch only to CI-built SHA-pinned images. Never rebuild on the host."""
     log = []
     previous_image_saved = False
     def advance(stage: str, percent: int, detail: str) -> None:
@@ -275,41 +303,42 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
             try:
                 on_progress(stage, percent, detail)
             except Exception as exc:
-                # Status transport failure must not turn an otherwise healthy
-                # deployment into a rollback. The final report retries later.
                 log.append("Progress transport warning: " + str(exc)[:300])
     try:
-        # Preserve the exact known-good image before a source build can replace its tag.
-        advance("backup", 35, "保存旧版 Docker 镜像")
+        advance("backup", 35, "保留旧版 Docker 镜像用于回滚")
         run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"], repo, timeout=30)
         previous_image_saved = True
-        advance("merging", 43, "Git 快进到验证通过的提交")
+        advance("pulling", 50, "从 GHCR 拉取 GitHub Actions 已构建的镜像（不在服务器编译）")
+        immutable_ref = pull_prebuilt_image(repo, target)
+        log.append("GHCR verified prebuilt image: " + immutable_ref)
+        advance("merging", 63, "Git 快进至已通过 CI 的提交")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
-        advance("building", 50, "正在构建 Docker 镜像；此阶段可能需要数分钟")
-        log.append(run(["docker", "compose", "build", "mv3c"], repo, timeout=3600)[-9500:])
-        advance("restarting", 75, "正在重新创建 mv3c 服务")
-        log.append(run(["docker", "compose", "up", "-d", "--no-deps", "--force-recreate", "mv3c"],
+        # Existing production Compose uses image: mv3c:local and persists all
+        # MongoDB & data volumes. Tagging does not alter compose services.
+        run(["docker", "image", "tag", immutable_ref, "mv3c:local"], repo, timeout=30)
+        advance("restarting", 75, "切换已下载镜像，禁止本地 Docker 构建")
+        log.append(run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
+                        "--no-deps", "--force-recreate", "mv3c"],
                        repo, timeout=240)[-3000:])
         advance("verifying", 86, "检查 Docker 健康状态")
         wait_healthy(repo)
-        advance("verifying", 93, "验证 Git 提交、readyz 和应用配置 API")
+        advance("verifying", 93, "验证镜像提交、readyz 和应用配置 API")
         log.append(verify_deployment(repo, target))
         return "success", "\n".join(log)[-24000:], ""
     except Exception as error:
         failure = str(error)[:1600]
         log.append("Deployment failed: " + failure)
         try:
-            advance("rollback", 94, "更新失败，开始恢复旧版本")
+            advance("rollback", 94, "更新失败，恢复旧版已验证镜像")
             git(repo, "reset", "--hard", old, timeout=60)
-            if previous_image_saved:
-                log.append(run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
-                               repo, timeout=30)[-1000:])
-            else:
-                log.append(run(["docker", "compose", "build", "mv3c"], repo,
-                               timeout=3600)[-4000:])
-            log.append(run(["docker", "compose", "up", "-d", "--no-deps",
-                            "--force-recreate", "mv3c"], repo, timeout=240)[-2000:])
+            if not previous_image_saved:
+                raise UpdateError("No known-good rollback image; refusing to build from source")
+            log.append(run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
+                           repo, timeout=30)[-1000:])
+            log.append(run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
+                            "--no-deps", "--force-recreate", "mv3c"],
+                           repo, timeout=240)[-2000:])
             wait_healthy(repo)
             validation = verify_deployment(repo, old)
             log.append("Rollback validation PASSED: " + validation)
