@@ -2,7 +2,7 @@
 
 **mv3c** 是基于 LibreChat 的独立多用户聊天网站，通过 **chat2api** 调用 Linux/Windows Worker。提供内置 **mv3c Admin** 管理后台：站点设置、注册开关、chat2api API 地址和密钥、模型列表、模型同步以及用户角色，全部通过后台配置并持久保存在 MongoDB。
 
-> 本项目保留 LibreChat 的内部依赖和 MIT 许可证；用户可见品牌为 mv3c。镜像由 GitHub Actions 从本仓库修改后源码构建、测试并发布到 GHCR；正式服务器更新直接拉取已验证镜像。
+> 本项目保留 LibreChat 的内部依赖和 MIT 许可证；用户可见品牌为 mv3c。镜像由 GitHub Actions 从修改后的源码构建并验证，通过专用 SSH/SCP 上传通道发送至服务器；宿主机校验 SHA-256 与提交标识后导入，无需服务器本地构建。
 
 ## 1. 全新部署（无需 .env）
 
@@ -12,8 +12,10 @@
 git clone git@github.com:b8vipvip/mv3c.git
 cd mv3c
 docker compose -f docker-compose.mv3c.yml config --quiet
-docker pull ghcr.io/b8vipvip/mv3c:sha-$(git rev-parse HEAD)
-docker tag ghcr.io/b8vipvip/mv3c:sha-$(git rev-parse HEAD) mv3c:local
+# 先按 mv3c/updater/README.md 配置 Actions SSH/SCP 传输并等待当前提交的存档到达
+SHA=$(git rev-parse HEAD)
+sudo docker load --input "/var/lib/mv3c-prebuilt/incoming/mv3c-${SHA}.tar.gz"
+sudo docker tag "mv3c:sha-${SHA}" mv3c:local
 docker compose -f docker-compose.mv3c.yml up -d --no-build --pull never
 docker compose -f docker-compose.mv3c.yml ps
 curl -fsS http://127.0.0.1:3080/readyz
@@ -100,13 +102,13 @@ sudo systemctl status mv3c-updater.timer
 
 建议将 Git 仓库放在 **root 所有的 /opt/mv3c**；安装脚本会检查来源仓库、分支和工作区是否干净。后台自动和手动更新都**优先 SSH，失败时自动回退到固定的 GitHub HTTPS 地址**；安装脚本会测试两种方式，SSH 成功则优先设置 SSH origin，仅 HTTPS 成功则使用 HTTPS。安装后，管理员在 /admin →「版本更新」管理策略，无需在 .env 中设置版本更新选项。
 
-默认启用自动更新、每 10 分钟检查 GitHub main 分支；只有 mv3c validation 和 mv3c source Docker build 两项 GitHub Actions **均成功**，才会构建并更新 Docker 容器。也可切换到 GitHub Release 通道（仓库必须先发布 Release），或关闭自动更新并手动触发。部署失败时会尝试回滚代码和镜像，**不会回滚数据库迁移**。
+默认启用自动更新、每 10 分钟检查 GitHub main 分支；只有 mv3c validation 和 mv3c source Docker build 两项 GitHub Actions **均成功**、SCP 存档完整且镜像 SHA 校验通过，才会导入镜像、重启应用。也可切换到 GitHub Release 通道（仓库必须先发布 Release），或关闭自动更新并手动触发。部署失败时会尝试回滚代码和镜像，**不会回滚数据库迁移**。
 
 **网页容器没有 Docker Socket 权限**；更新实际由宿主机 systemd 服务执行。详细安装、排错与回滚说明：[版本更新文档](mv3c/updater/README.md)。
 
 ## 4.2 Docker 依赖缓存与运行日志
 
-- 后台自动更新和手动更新都复用同一套 Docker BuildKit 缓存。依赖清单（根 `package-lock.json`、根和各 workspace 的 `package.json`）不变时直接使用已安装依赖层；依赖清单变化时才重新运行 `npm ci`，并通过共享的 npm 缓存优先使用本地包。**不会每次清空缓存，也不使用 `--no-cache`**。源码变化仍需要重新编译前端，首次构建和基础镜像缺失时仍可能联网。
+- 依赖安装、前端编译和镜像构建全部在 GitHub Actions 执行。服务器通过 SCP 收取经过验证的压缩镜像；**自动更新与后台手动更新都不会运行 npm、Docker BuildKit 构建或拉取 GHCR 镜像**。服务器仅校验文件、导入镜像并切换容器。
 - 管理后台新增「**运行日志**」：实时写入脱敏应用日志和 API 请求摘要（不保存请求/响应正文），最多约 10 MiB；采用小文件轮转，超过阈值先淘汰最旧的内容，保存在已有 `mv3c-logs` Docker 数据卷。
 - 后台选择 **最近 15 分钟 / 1 小时 / 6 小时 / 24 小时 / 3 天 / 7 天** 下载 `.log`，仅管理员能操作。由于总量受限，日志轮转后可能不足所选择的时间段。
 - 为避免 Docker 自身标准输出日志无限增长，`mv3c` 与 `mongodb` 的 Docker `local` 日志驱动各自按 2 MB × 5 文件轮转。它们与后台导出的应用运行日志**属于不同的日志集合**。升级前已保存的旧 LibreChat 日志不会被自动删除或合并进新报告。
@@ -137,6 +139,8 @@ docker compose -f docker-compose.mv3c.yml config --quiet
 
 ## 预构建镜像更新机制（2026-10）
 
-每次推送 main 后，GitHub Actions 将构建、启动验证 mv3c Docker 镜像并推送到 `ghcr.io/b8vipvip/mv3c:sha-<40位提交 SHA>`；宿主机更新器要求两个 GitHub Actions 工作流均通过，只拉取 SHA 固定镜像，核对镜像提交标识与目标一致后切换 Docker Compose。服务器禁止重复构建，故不再执行 npm 构建或依赖安装。
+每次推送 main 后，GitHub Actions 构建、启动并验证生产 Docker 镜像，然后导出 gzip 压缩 tar 与 SHA-256 校验和；配置独立上传账户和四项 GitHub Actions SSH Secrets 后，自动通过 SSH/SCP 传到 `/var/lib/mv3c-prebuilt/incoming/`。
 
-**原先安装的更新器必须先进行一次引导迁移**；直接点旧版后台更新仍然会执行旧代码。请阅读 [更新器引导步骤](mv3c/updater/README.md#切换到-github-actions-预构建镜像部署重要)。GHCR 包若未设置 Public，请先配置宿主机 Docker 只读 Registry 凭据。
+服务器更新器要求两项 Actions 验证都通过，并再次核验压缩包的 SHA-256、镜像自带提交 SHA，才执行 `docker load`、`docker compose up --no-build` 和健康检查。传输失败不会触发本地编译，更不会重启已有健康容器。仍应保留足够磁盘空间容纳新旧镜像与回滚所需数据。
+
+**现有宿主机如仍安装的是本地构建版或 GHCR 下载版更新器，需要首次引导迁移。** 详见 [SSH/SCP 专用部署步骤](mv3c/updater/README.md#github-actions--sshscp--mv3c-部署当前方案)。Actions 使用的服务器登录私钥必须与服务器拉取 GitHub 的 Deploy Key 分开配置。

@@ -6,7 +6,7 @@
 - Linux 宿主机 systemd timer 每分钟检查是否有管理员任务；按后台配置的 5–60 分钟间隔检查 GitHub。
 - 网站容器不挂载 Docker Socket，不直接执行 Git、Docker 或任意 shell 命令。
 - **自动更新与后台手动更新均优先通过 SSH 拉取 Git 代码**：首先使用 git@github.com:b8vipvip/mv3c.git；若 SSH 连接失败或超时，自动回退至 https://github.com/b8vipvip/mv3c.git。两种协议都失败才报错；禁止重定向到其他 Git 仓库。目标提交必须是已部署版本的快进后代，且 GitHub Actions 中 mv3c validation 和 mv3c source Docker build 两项都成功。GitHub API 的版本/CI 元数据查询仍通过 HTTPS 完成。
-- 部署：先从 GHCR 拉取精确提交 SHA 对应的 GitHub Actions 预构建镜像，验证镜像提交标签 → Git 快进 → 本地镜像标签更新 → `docker compose up --no-build --pull never` → 健康检查；失败直接恢复旧提交与旧镜像，**不在服务器执行构建**。
+- 部署：在 GitHub Actions 上完成构建与验证，经 SSH/SCP 向宿主机发送固定提交 SHA 的压缩镜像文件；宿主机核对 SHA-256 与镜像提交标签 → Git 快进 → 本地镜像标签更新 → `docker compose up --no-build --pull never` → 健康检查；失败直接恢复旧提交与旧镜像，**不在服务器执行构建**。
 - 不删除 MongoDB、密钥和上传文件的数据卷；数据库 schema 迁移无法保证回滚，需单独备份。
 
 ## 一次性安装
@@ -54,7 +54,7 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 
 ## 更新进度、自动验证和下载报告
 
-- 后台「版本更新」每 3 秒刷新进度；阶段依次覆盖 GitHub 拉取/CI、旧镜像备份、Git 快进、GHCR 镜像下载与校验、容器重启和验证。百分比只表示已到达的真实阶段，构建阶段可停留数分钟。
+- 后台「版本更新」每 3 秒刷新进度；阶段依次覆盖 GitHub 拉取/CI、旧镜像备份、Git 快进、SSH/SCP 镜像存档校验与导入、容器重启和验证。百分比只表示已到达的真实阶段，构建阶段可停留数分钟。
 - 部署成功必须确认目标 Git SHA、容器 `healthy` 状态、本机 `http://127.0.0.1:3080/readyz` 和 `/api/config` 两项 HTTP 200。验证失败触发旧版应用回滚及再次验证。
 - 每次任务的结果、阶段时间线、SHA、耗时、验证结果与限长日志保存至 MongoDB。管理员可在「最近更新记录」下载该任务的 `.log` 诊断报告，最多保留最近 20 次；下载接口要求管理员 Bearer Token。
 - 更新器意外中断时，下一次运行先核对当前 Git 版本与网站健康状况：只有部署目标实际匹配且验证通过才认定成功，否则标记失败并保留诊断，绝不因进度到 100% 就判定成功。
@@ -80,28 +80,79 @@ sudo docker compose logs --tail=200 mv3c
 
 宿主机更新服务具有 Docker 部署权限，以 root 运行；只能从固定仓库更新并执行固定的 Compose 命令，不能接受管理员提交的任意命令、仓库地址或 Git SHA。
 
-## 切换到 GitHub Actions 预构建镜像部署（重要）
+## GitHub Actions → SSH/SCP → mv3c 部署（当前方案）
 
-GitHub Actions 的 `mv3c source Docker build` **在完成构建、启动与冒烟验证后**，会发布 `ghcr.io/b8vipvip/mv3c:sha-<完整40位SHA>`。更新器仅下载此固定标签，核对镜像 `org.opencontainers.image.revision` 标签匹配目标 SHA，并运行 `docker compose up -d --no-build --pull never`。不会再运行 `npm ci`、`npm run frontend` 或 `docker compose build`。
+GitHub Actions 在完成前端/后端 Docker 构建与真实健康测试后执行：
 
-GitHub Container Registry 创建 Package 后，如希望服务器免登录拉取，请在仓库关联的 Packages → mv3c → Package settings 将包设为 **Public**。如必须保持私有，则需管理员在宿主机上通过只读 Package Token 安全配置 root 用户的 Docker GHCR 登录；更新器不会接收、打印或通过网页传输容器仓库凭据。未经拉取权限验证时，更新应失败并恢复旧版，不应重新本地构建。
+1. `docker tag mv3c:ci mv3c:sha-<40位提交SHA>`，`docker save`，`gzip -1` 生成压缩存档。
+2. 计算原始压缩文件 SHA-256；**通过 GitHub Actions 中配置的 SSH 私钥**将存档和校验和通过 SCP 传到 Ubuntu。
+3. 宿主机更新器只在目标 Commit 的两项 GitHub CI 均通过时尝试部署；先验证文件存在、checksum、大小及 `docker load` 后镜像 `org.opencontainers.image.revision` 完整匹配。
+4. 按现有的 `docker compose up -d --no-build --pull never --no-deps --force-recreate mv3c` 切换，验证健康及 HTTP；失败恢复之前的 `mv3c:rollback` 和旧 SHA。
 
-### 旧宿主机更新器的一次性引导（仅首次）
+**服务器不再执行 `docker pull ghcr.io`、`docker compose build`、`npm ci`。** 用户数据卷与 MongoDB 不改变。没有成功上传的归档时更新器直接阻断，不触发容器重启。镜像仍然很大；SCP 并不保证在所有线路上比 GHCR 快，但能够使用 Actions 主机到 Ubuntu 的另一条网络路径。
 
-由于旧 systemd 服务当前仍加载旧版 agent.py，直接在后台按“更新”仍会运行旧构建逻辑。必须先把新的更新器脚本从通过 CI 的新提交加载到临时文件，执行一次新引擎更新，然后安装新版 systemd 服务。确认 GitHub 上 **main 提交的两项 CI 成功，GHCR 对应 SHA 镜像已推送且主机能够拉取**之后，在宿主机执行以下命令（默认仓库在 /opt/mv3c，请按实际路径修改）：
+### 1. 宿主机配置独立的上传账户（一次）
+
+推荐使用一个**不能 sudo、不能访问 Docker Socket、不能写入 mv3c Git 源码**的 Linux 上传账号。本方案默认文件收件地址固定为 `/var/lib/mv3c-prebuilt/incoming`，请在 Ubuntu 宿主机由管理员执行：
+
+~~~bash
+sudo useradd --create-home --shell /bin/bash mv3c-transfer
+sudo install -d -o mv3c-transfer -g mv3c-transfer -m 0700 /var/lib/mv3c-prebuilt/incoming
+sudo install -d -o mv3c-transfer -g mv3c-transfer -m 0700 /home/mv3c-transfer/.ssh
+# 先在你自己信任的电脑上生成独立 SSH ED25519 密钥对；仅在服务器
+# 的 /home/mv3c-transfer/.ssh/authorized_keys 添加 PUBLIC key。
+# authorized_keys 文件权限 0600，目录 0700，owner mv3c-transfer。
+~~~
+
+如果 `mv3c-transfer` 已存在，不要重复 `useradd`，只检查账号所属组无 sudo/docker 权限。使用现有普通 SSH 用户也可以，但不能让 Actions 直接使用 root 密码或 root 私钥。
+
+端口 22 只是默认；如用自定义端口，应确认防火墙仅开放必要连接。**此账号只用于上传存档，不要加入 docker 或 sudo 组**。系统已经使用 SSH Key 的 GitHub `git fetch` 功能，不能自动授予 GitHub Actions 反向登录服务器的权限。
+
+### 2. 配置仓库 GitHub Actions Secrets
+
+进入 `b8vipvip/mv3c` → Settings → Secrets and variables → Actions → Repository secrets：
+
+| Secret | 用途 |
+|---|---|
+| `MV3C_SCP_HOST` | Ubuntu SSH 对外 IP 或域名，**不要**填 `http://` 或端口 |
+| `MV3C_SCP_USER` | `mv3c-transfer` 或另一个普通上传账户 |
+| `MV3C_SCP_PRIVATE_KEY` | 独立 ED25519 私钥全文，仅存于 GitHub Actions Secrets |
+| `MV3C_SCP_KNOWN_HOSTS` | 固定 SSH 主机公钥对应的完整 known_hosts 记录，必须先验证指纹 |
+| `MV3C_SCP_PORT`（可选） | SSH 端口，默认 22 |
+
+主机指纹应通过宿主机控制台上的 `/etc/ssh/ssh_host_ed25519_key.pub`，与另一侧 `ssh-keyscan -p <port> <host>` 获取的值比对后再固定，**不得**用 `StrictHostKeyChecking=no` 绕过验证。已存在的 GitHub 仓库读取 Deploy Key **不能**直接当作 GitHub Actions 登录这台服务器的上传私钥。
+
+当 Secret 缺失时，Actions 仍会运行 CI，但会明确提示 `SCP delivery skipped`；缺少压缩镜像存档时宿主机更新器会拒绝更新，不会恢复服务器本地编译作为回退路径。添加凭据后可在 GitHub Actions → `mv3c source Docker build` → Run workflow（main）重新构建并发送镜像。
+
+### 3. 检查存档并首次升级旧更新器
+
+Action 成功上传后，在 **Ubuntu 服务器本机**检查：
+
+~~~bash
+sudo ls -lh /var/lib/mv3c-prebuilt/incoming/
+df -h /
+# 目标 main HEAD 和归档 SHA 必须匹配完整 40 位。
+~~~
+
+已有 mv3c 宿主机还在运行**旧的本地构建版更新器**。在验证新提交两项 GitHub CI 均通过、对应存档已经完整传输、当前业务可用之后，使用新 agent 的临时副本首次引导。以下仓库路径 `/opt/mv3c` 只是示例，应先确认实际安装目录：
 
 ~~~bash
 sudo systemctl stop mv3c-updater.timer
 cd /opt/mv3c
 sudo git fetch https://github.com/b8vipvip/mv3c.git main:refs/remotes/origin/main
-sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/agent.py > /root/mv3c-prebuilt-bootstrap.py'
-sudo python3 /root/mv3c-prebuilt-bootstrap.py --repo /opt/mv3c --bootstrap-prebuilt
+sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/agent.py > /root/mv3c-scp-bootstrap.py'
+sudo python3 /root/mv3c-scp-bootstrap.py --repo /opt/mv3c --bootstrap-prebuilt
+# 只有前一步成功，才执行：
 sudo bash /opt/mv3c/mv3c/updater/install.sh
 sudo systemctl start mv3c-updater.timer
 ~~~
 
-上述引导命令不会清空 MongoDB 或卷，也不会执行 Docker 本地构建。若 GHCR 拉取失败，脚本会回滚到旧代码/镜像并退出非零状态；应先解决仓库包可见性、身份验证或磁盘空间，不要无条件继续安装步骤。**请确认实际仓库安装路径后再运行**。除本次首次切换外，后续网站后台自动与手动更新均直接拉取预构建镜像。
+如果有任何异常，停止操作并查看日志；没有确认新容器 healthy 前，不要手动删除旧版 `mv3c:local`、`mv3c:rollback` 镜像，也不要执行 `docker compose down -v` / `docker volume prune`。
 
-### 磁盘空间限制
+### 4. 容量和账户安全
 
-预构建镜像仍然需要足够的磁盘空间存放镜像层，但不再需要 Node/npm 构建缓存与同时保留多层临时编译产物。遇到 `ENOSPC` 时先检查 `df -h`、`docker system df`，只清除经过确认不被其它容器引用的缓存；**不要运行 `docker compose down -v`、`docker volume prune` 或未经审查的全局容器/镜像清理命令**。
+- 建议在发送大压缩包之前预留不少于 6GB 可用磁盘空间（实际按镜像大小变化）；`docker load --input ...tar.gz` 直接解压读取，无需落地未压缩 tar，但新旧 Docker 镜像必须在短期内共存以便回滚。
+- SCP 的上传账户和 SSH key 应严格分离于 Git 仓库的只读 Deploy Key，不使用 root 身份上传。
+- SHA-256 主要保证文件传输完整性；结合固定来源的 SSH Key、GitHub CI 和镜像提交标识完成多步验证。若 SSH 私钥被泄露，必须撤销授权。
+- 新版保留更新失败后的旧镜像回滚；数据库 schema 的不可逆迁移仍应单独备份。
+

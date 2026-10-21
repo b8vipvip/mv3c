@@ -3,13 +3,15 @@
 
 The web container NEVER receives a Docker socket or host filesystem mount.
 A host timer executes this program. It reads a restricted MongoDB bridge through
-docker compose exec, verifies GitHub CI, pulls verified GHCR images, switches and health-checks.
+docker compose exec, verifies GitHub CI, imports SSH-delivered Actions image archives, switches and health-checks.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
+import stat
 import json
 import os
 import re
@@ -29,35 +31,75 @@ HTTPS_ORIGIN = "https://github.com/b8vipvip/mv3c.git"
 TRUSTED_ORIGINS = {SSH_ORIGIN, HTTPS_ORIGIN, "https://github.com/b8vipvip/mv3c"}
 SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
 CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
-USER_AGENT = "mv3c-updater/2.0"
-IMAGE_REPOSITORY = "ghcr.io/b8vipvip/mv3c"
+USER_AGENT = "mv3c-updater/3.0"
+# Fixed receiver: the CI upload account can write *only* this dedicated
+# directory; it never gets root/Docker/Compose access. The updater runs as
+# root and verifies an exact immutable commit and SHA256 before docker load.
+IMAGE_INBOX = Path("/var/lib/mv3c-prebuilt/incoming")
+MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
 
 
 def image_for_sha(sha: str) -> str:
-    """Never deploy mutable :latest; pin the exact GitHub commit."""
     if not SHA.fullmatch(sha):
         raise UpdateError("Untrusted Docker image revision")
-    return IMAGE_REPOSITORY + ":sha-" + sha
+    return "mv3c:sha-" + sha
+
+
+def archive_paths(sha: str, inbox: Path = IMAGE_INBOX) -> tuple[Path, Path]:
+    if not SHA.fullmatch(sha):
+        raise UpdateError("Invalid prebuilt image commit SHA")
+    return (inbox / ("mv3c-" + sha + ".tar.gz"),
+            inbox / ("mv3c-" + sha + ".sha256"))
+
+
+def verify_scp_archive(sha: str, inbox: Path = IMAGE_INBOX) -> Path:
+    image_file, checksum_file = archive_paths(sha, inbox)
+    for path in (image_file, checksum_file):
+        try:
+            info = path.lstat()
+        except FileNotFoundError as exc:
+            raise UpdateError("Actions SCP image has not arrived for " + sha[:12] +
+                              " (missing " + path.name + "); no server build attempted") from exc
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise UpdateError("Image archive or checksum is not a regular single-link file")
+    total = image_file.stat().st_size
+    if not 1024 <= total <= MAX_ARCHIVE_BYTES:
+        raise UpdateError("Prebuilt image archive has an invalid size")
+    raw = checksum_file.read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"[a-fA-F0-9]{64}", raw):
+        raise UpdateError("Invalid SHA256 sidecar for prebuilt image")
+    digest = hashlib.sha256()
+    with image_file.open("rb") as stream:
+        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            digest.update(block)
+    if digest.hexdigest() != raw.lower():
+        raise UpdateError("SCP image archive checksum mismatch; refusing docker load")
+    return image_file
 
 
 def verify_prebuilt_image(repo: Path, sha: str) -> None:
-    """Prevent a stale or mismatched registry tag from being deployed."""
     image = image_for_sha(sha)
     revision = run([
         "docker", "image", "inspect", "--format",
         '{{index .Config.Labels "org.opencontainers.image.revision"}}', image,
     ], repo, timeout=30)
     if revision != sha:
-        raise UpdateError("GHCR image revision mismatch: expected " + sha[:12] +
+        raise UpdateError("Imported image revision mismatch: expected " + sha[:12] +
                           ", got " + revision[:80])
 
 
-def pull_prebuilt_image(repo: Path, sha: str) -> str:
-    """Use precompiled layers only. No docker build or npm install on host."""
-    image = image_for_sha(sha)
-    run(["docker", "pull", image], repo, timeout=1800)
+def load_prebuilt_image(repo: Path, sha: str, inbox: Path = IMAGE_INBOX) -> str:
+    """Load the verified compressed Actions artifact, never contact GHCR.
+
+    docker load accepts gzip inputs directly, avoiding a multi-GB temporary
+    uncompressed tar file on the small host disk.
+    """
+    archive = verify_scp_archive(sha, inbox)
+    # An existing image of the expected tag is not trusted without inspecting
+    # its embedded revision label. docker load never runs user code.
+    run(["docker", "load", "--input", str(archive)], repo, timeout=1800)
     verify_prebuilt_image(repo, sha)
-    return image
+    return image_for_sha(sha)
 
 
 class UpdateError(RuntimeError):
@@ -305,12 +347,14 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
             except Exception as exc:
                 log.append("Progress transport warning: " + str(exc)[:300])
     try:
-        advance("backup", 35, "保留旧版 Docker 镜像用于回滚")
+        # Verify that the complete artifact is present BEFORE touching any
+        # running service or previous deployment tag.
+        advance("pulling", 45, "核对 Actions SCP 镜像文件与 SHA256，保持现有容器运行")
+        immutable_ref = load_prebuilt_image(repo, target)
+        log.append("SCP SHA256 verified prebuilt image: " + immutable_ref)
+        advance("backup", 55, "保留旧版 Docker 镜像用于回滚")
         run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"], repo, timeout=30)
         previous_image_saved = True
-        advance("pulling", 50, "从 GHCR 拉取 GitHub Actions 已构建的镜像（不在服务器编译）")
-        immutable_ref = pull_prebuilt_image(repo, target)
-        log.append("GHCR verified prebuilt image: " + immutable_ref)
         advance("merging", 63, "Git 快进至已通过 CI 的提交")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
@@ -325,15 +369,27 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         wait_healthy(repo)
         advance("verifying", 93, "验证镜像提交、readyz 和应用配置 API")
         log.append(verify_deployment(repo, target))
+        # The Docker image now exists in the daemon; keeping each 1GB+
+        # compressed SCP package would fill the user's 40GB host again.
+        for artifact in archive_paths(target):
+            try:
+                artifact.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                log.append("SCP archive cleanup warning: " +
+                           type(cleanup_error).__name__)
         return "success", "\n".join(log)[-24000:], ""
     except Exception as error:
         failure = str(error)[:1600]
         log.append("Deployment failed: " + failure)
+        if not previous_image_saved:
+            # No image tags, containers, Git refs or persistent volumes were
+            # altered yet. Do not restart a healthy service just because an
+            # archive is missing or corrupt.
+            log.append("Preflight failed before deployment: current containers unchanged")
+            return "failed", "\n".join(log)[-24000:], failure
         try:
             advance("rollback", 94, "更新失败，恢复旧版已验证镜像")
             git(repo, "reset", "--hard", old, timeout=60)
-            if not previous_image_saved:
-                raise UpdateError("No known-good rollback image; refusing to build from source")
             log.append(run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
                            repo, timeout=30)[-1000:])
             log.append(run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
@@ -537,7 +593,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="mv3c host update worker")
     parser.add_argument("--repo", required=True, type=Path, help="Host Git checkout path")
     parser.add_argument("--bootstrap-prebuilt", action="store_true",
-                        help="One-time migration from legacy host-building updater")
+                        help="One-time migration from legacy host-building updater using SCP archive")
     args = parser.parse_args()
     repo = args.repo.resolve(strict=True)
     if os.geteuid() != 0:
