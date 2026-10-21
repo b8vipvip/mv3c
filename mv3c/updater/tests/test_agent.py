@@ -1,5 +1,7 @@
 """Pure, network-free tests for the privileged host updater."""
 import importlib.util
+import hashlib
+import tempfile
 import pathlib
 import unittest
 from unittest.mock import patch
@@ -167,74 +169,97 @@ class HostUpdaterTests(unittest.TestCase):
                 agent.run(["git", "fetch"], pathlib.Path("/tmp"), timeout=5)
 
     def test_image_reference_requires_full_immutable_sha(self):
-        self.assertEqual(agent.image_for_sha(SHA2),
-                         "ghcr.io/b8vipvip/mv3c:sha-" + SHA2)
+        self.assertEqual(agent.image_for_sha(SHA2), "mv3c:sha-" + SHA2)
         with self.assertRaises(agent.UpdateError):
             agent.image_for_sha("latest")
         with self.assertRaises(agent.UpdateError):
             agent.image_for_sha("abcd")
 
-    def test_wrong_registry_image_revision_refuses_to_switch(self):
-        def fake_run(args, _repo, **_kwargs):
-            if args[:3] == ["docker", "image", "inspect"]:
-                return SHA1
-            return "OK"
-        with patch.object(agent, "run", side_effect=fake_run):
-            with self.assertRaisesRegex(agent.UpdateError, "revision mismatch"):
-                agent.pull_prebuilt_image(pathlib.Path("/tmp"), SHA2)
+    def test_archive_names_are_pinned_to_exact_sha(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path, checksum = agent.archive_paths(SHA2, pathlib.Path(temp))
+            self.assertEqual(path.name, "mv3c-" + SHA2 + ".tar.gz")
+            self.assertEqual(checksum.name, "mv3c-" + SHA2 + ".sha256")
+            with self.assertRaises(agent.UpdateError):
+                agent.archive_paths("../../etc/passwd", pathlib.Path(temp))
 
-    def test_missing_registry_image_keeps_old_image_and_rolls_back_without_build(self):
+    def test_archive_integrity_gate_checks_payload_and_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            archive, sidecar = agent.archive_paths(SHA2, root)
+            data = b"gzip-compressed-docker-test-archive" * 64
+            archive.write_bytes(data)
+            sidecar.write_text(hashlib.sha256(data).hexdigest() + "\n")
+            self.assertEqual(agent.verify_scp_archive(SHA2, root), archive)
+            sidecar.write_text("a" * 64 + "\n")
+            with self.assertRaisesRegex(agent.UpdateError, "checksum mismatch"):
+                agent.verify_scp_archive(SHA2, root)
+            archive.unlink()
+            archive.symlink_to("/etc/passwd")
+            with self.assertRaisesRegex(agent.UpdateError, "regular"):
+                agent.verify_scp_archive(SHA2, root)
+
+    def test_mismatched_loaded_docker_revision_prevents_deployment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            archive, sidecar = agent.archive_paths(SHA2, root)
+            data = b"gzip-compressed-docker-test-archive" * 64
+            archive.write_bytes(data)
+            sidecar.write_text(hashlib.sha256(data).hexdigest() + "\n")
+            def fake_run(args, _repo, **_kwargs):
+                if args[:3] == ["docker", "image", "inspect"]:
+                    return SHA1
+                return "Loaded image: mv3c:sha-" + SHA2
+            with patch.object(agent, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(agent.UpdateError, "revision mismatch"):
+                    agent.load_prebuilt_image(root, SHA2, root)
+
+    def test_missing_scp_archive_does_not_restart_current_healthy_service(self):
         commands = []
         def fake_run(args, _repo, **_kwargs):
             commands.append(args)
-            if args[:2] == ["docker", "pull"]:
-                raise agent.UpdateError("GHCR registry unavailable")
             return "OK"
         with patch.object(agent, "run", side_effect=fake_run):
             with patch.object(agent, "git") as git:
-                with patch.object(agent, "wait_healthy"):
-                    with patch.object(agent, "verify_deployment", return_value="verified"):
-                        outcome, log, error = agent.deploy(
-                            pathlib.Path("/tmp"), SHA1, SHA2)
-        self.assertEqual(outcome, "rolled_back")
-        self.assertIn("GHCR registry unavailable", error)
-        self.assertNotIn("docker compose build", log)
-        self.assertFalse(any(cmd[:3] == ["docker", "compose", "build"] for cmd in commands))
-        self.assertTrue(any(cmd[:4] == ["docker", "image", "tag", "mv3c:rollback"]
-                            for cmd in commands))
-        self.assertIn("reset", str(git.call_args_list))
+                with patch.object(agent, "wait_healthy") as healthy:
+                    outcome, log, error = agent.deploy(
+                        pathlib.Path("/tmp"), SHA1, SHA2)
+        self.assertEqual(outcome, "failed")
+        self.assertIn("SCP image has not arrived", error)
+        self.assertIn("current containers unchanged", log)
+        git.assert_not_called()
+        healthy.assert_not_called()
+        self.assertFalse(commands, "Missing artifact must leave Docker and Git untouched")
 
-    def test_successful_prebuilt_deploy_never_invokes_docker_build(self):
+    def test_successful_scp_image_deploy_never_builds_or_pulls(self):
         commands = []
         phases = []
         def fake_run(args, _repo, **_kwargs):
             commands.append(args)
-            if args[:3] == ["docker", "image", "inspect"] and "sha-" in args[-1]:
-                return SHA2
             return "OK"
-        with patch.object(agent, "run", side_effect=fake_run):
-            with patch.object(agent, "git"):
-                with patch.object(agent, "wait_healthy"):
-                    with patch.object(agent, "verify_deployment",
-                                      return_value="Post-deploy validation PASSED") as check:
-                        outcome, log, error = agent.deploy(
-                            pathlib.Path("/tmp"), SHA1, SHA2,
-                            on_progress=lambda stage, percent, message:
-                                phases.append((stage, percent, message)))
+        with patch.object(agent, "load_prebuilt_image", return_value=agent.image_for_sha(SHA2)) as load:
+            with patch.object(agent, "run", side_effect=fake_run):
+                with patch.object(agent, "git"):
+                    with patch.object(agent, "wait_healthy"):
+                        with patch.object(agent, "verify_deployment",
+                                          return_value="Post-deploy validation PASSED") as check:
+                            outcome, log, error = agent.deploy(
+                                pathlib.Path("/tmp"), SHA1, SHA2,
+                                on_progress=lambda stage, percent, message:
+                                    phases.append((stage, percent, message)))
         self.assertEqual((outcome, error), ("success", ""))
-        self.assertIn("GHCR verified prebuilt image", log)
+        self.assertIn("SCP SHA256 verified prebuilt image", log)
+        load.assert_called_once_with(pathlib.Path("/tmp"), SHA2)
         check.assert_called_once_with(pathlib.Path("/tmp"), SHA2)
-        self.assertEqual([phase[0] for phase in phases],
-                         ["backup", "pulling", "merging", "restarting",
+        self.assertEqual([p[0] for p in phases],
+                         ["pulling", "backup", "merging", "restarting",
                           "verifying", "verifying"])
-        self.assertFalse(any(cmd[:3] == ["docker", "compose", "build"] for cmd in commands))
-        self.assertTrue(any(cmd[:2] == ["docker", "pull"] and
-                            cmd[-1] == agent.image_for_sha(SHA2) for cmd in commands))
+        self.assertFalse(any(cmd[:2] == ["docker", "pull"] or
+                             cmd[:3] == ["docker", "compose", "build"]
+                             for cmd in commands))
         self.assertTrue(any(cmd[:3] == ["docker", "compose", "up"] and
                             "--no-build" in cmd and "--pull" in cmd
                             for cmd in commands))
-        self.assertEqual(sorted(phase[1] for phase in phases),
-                         [phase[1] for phase in phases])
 
     def test_post_deploy_checks_sha_container_and_http(self):
         class Response:
