@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   docker-build:
@@ -24,6 +25,9 @@ jobs:
           docker build --progress=plain \
             --build-arg NODE_MAX_OLD_SPACE_SIZE=4096 \
             --build-arg NPM_CI_TIMEOUT_SECONDS=1800 \
+            --build-arg BUILD_COMMIT=${{ github.sha }} \
+            --build-arg BUILD_BRANCH=${{ github.ref_name }} \
+            --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
             -t mv3c:ci .
       - name: Start env-free mv3c and verify public startup
         timeout-minutes: 10
@@ -84,6 +88,30 @@ jobs:
           docker compose exec -T mv3c node /app/mv3c/updater/tests/integration.cjs
           docker compose exec -T mv3c node /app/mv3c/updater/bridge.cjs state > /tmp/mv3c-updater-state.json
           node -e "const x=require('/tmp/mv3c-updater-state.json');if(!x.config||x.config.channel!=='main')process.exit(1);console.log('Updater database bridge ready')"
+      # Only publish a verified main-branch image. This is a registry
+      # publication, NOT a server-side source build. Consumers also check
+      # independent "mv3c validation" on the same immutable Git SHA.
+      - name: Verify immutable image revision
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' mv3c:ci)" = "${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{ index .Config.Env 0 }}' mv3c:ci)" != ""
+      - name: Authenticate to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified SHA-tagged image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE: ghcr.io/b8vipvip/mv3c
+        run: |
+          docker tag mv3c:ci "${IMAGE}:sha-${GITHUB_SHA}"
+          docker push "${IMAGE}:sha-${GITHUB_SHA}"
+          docker tag mv3c:ci "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
       - name: Dump runtime logs on failure
         if: failure()
         run: docker compose -f docker-compose.mv3c.yml logs --tail=250
