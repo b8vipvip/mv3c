@@ -42,6 +42,11 @@ scp "${SCP_OPTIONS[@]}" "$WORK/$ARCHIVE" "$DEST:$REMOTE_DIR/$ARCHIVE.part"
 scp "${SCP_OPTIONS[@]}" "$WORK/$CHECKSUM" "$DEST:$REMOTE_DIR/$CHECKSUM.part"
 ssh "${SSH_OPTIONS[@]}" -p "$PORT" "$DEST" \
   "cd '$REMOTE_DIR' && mv -f '$ARCHIVE.part' '$ARCHIVE' && mv -f '$CHECKSUM.part' '$CHECKSUM'"
+# Limit queued archives to the newest two if automatic updating is paused.
+# Previous runtime images live in Docker; archive files are delivery queues,
+# not backup copies. Avoid accumulating >1GB per CI commit on a 40GB disk.
+ssh "${SSH_OPTIONS[@]}" -p "$PORT" "$DEST" \
+  "cd '$REMOTE_DIR' && for old in \$(ls -1t mv3c-*.tar.gz 2>/dev/null | tail -n +3); do case \$old in mv3c-*.tar.gz) rm -f -- \"\$old\" \"\${old%.tar.gz}.sha256\";; esac; done"
 echo "SCP upload complete: $ARCHIVE, commit=$GITHUB_SHA"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   echo "### CI-built image delivered by SSH/SCP" >> "$GITHUB_STEP_SUMMARY"
