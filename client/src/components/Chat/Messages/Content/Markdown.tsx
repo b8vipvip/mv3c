@@ -27,7 +27,7 @@ const Markdown = memo(function Markdown({ content = '', isLatestMessage }: TCont
   const unfinishedInlineImage = imageStart >= 0 &&
     content.indexOf(')', inlineIndex + 2) < 0;
   const renderContent = unfinishedInlineImage
-    ? content.slice(0, imageStart) + '\\n\\n*图片正在接收…*'
+    ? content.slice(0, imageStart) + '\n\n*图片正在接收…*'
     : content;
   const animate = smoothStreaming && streaming;
 
