@@ -54,10 +54,16 @@ const Image = ({
    *  share routes) are resolved against the API base so they load under a
    *  subpath deployment. */
   const absoluteImageUrl = useMemo(() => toAbsoluteFilePath(imagePath, apiBaseUrl()), [imagePath]);
+  // chat2api owns both asset variants: render the small /thumbnail bitmap,
+  // but open and download the original image after the user clicks it.
+  const originalImageUrl = useMemo(
+    () => absoluteImageUrl.replace(/\/thumbnail(?=\?|$)/, ''),
+    [absoluteImageUrl],
+  );
 
   const downloadImage = async () => {
     try {
-      const response = await fetch(absoluteImageUrl);
+      const response = await fetch(originalImageUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch image: ${response.status}`);
       }
@@ -76,7 +82,7 @@ const Image = ({
     } catch (error) {
       console.error('Download failed:', error);
       const link = document.createElement('a');
-      link.href = absoluteImageUrl;
+      link.href = originalImageUrl;
       link.download = altText || 'image.png';
       document.body.appendChild(link);
       link.click();
@@ -126,7 +132,7 @@ const Image = ({
       <DialogImage
         isOpen={isOpen}
         onOpenChange={setIsOpen}
-        src={absoluteImageUrl}
+        src={originalImageUrl}
         downloadImage={downloadImage}
         args={args}
         triggerRef={triggerRef}
