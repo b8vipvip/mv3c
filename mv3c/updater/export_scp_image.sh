@@ -48,6 +48,9 @@ if ! ssh "${SSH_OPTIONS[@]}" -p "$PORT" "$DEST" "test -w '$REMOTE_DIR'"; then
   exit 49
 fi
 echo "SSH/SCP receiver preflight succeeded"
+if [[ "${1:-}" == "--preflight" ]]; then
+  exit 0
+fi
 docker image tag mv3c:ci "$IMAGE"
 test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$GITHUB_SHA"
 ARCHIVE="mv3c-$GITHUB_SHA.tar.gz"
