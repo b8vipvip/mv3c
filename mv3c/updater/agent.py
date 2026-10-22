@@ -10,8 +10,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
-import hashlib
-import stat
+import shutil
 import json
 import os
 import re
@@ -32,11 +31,9 @@ TRUSTED_ORIGINS = {SSH_ORIGIN, HTTPS_ORIGIN, "https://github.com/b8vipvip/mv3c"}
 SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
 CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
 USER_AGENT = "mv3c-updater/3.0"
-# Fixed receiver: the CI upload account can write *only* this dedicated
-# directory; it never gets root/Docker/Compose access. The updater runs as
-# root and verifies an exact immutable commit and SHA256 before docker load.
-IMAGE_INBOX = Path("/var/lib/mv3c-prebuilt/incoming")
-MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
+# Local Docker images remain in the host cache across updates. The GitHub
+# Actions image is tested for the exact SHA, but does not need to be transferred.
+MIN_DOCKER_FREE_BYTES = 3 * 1024 ** 3
 
 
 def image_for_sha(sha: str) -> str:
@@ -45,61 +42,42 @@ def image_for_sha(sha: str) -> str:
     return "mv3c:sha-" + sha
 
 
-def archive_paths(sha: str, inbox: Path = IMAGE_INBOX) -> tuple[Path, Path]:
-    if not SHA.fullmatch(sha):
-        raise UpdateError("Invalid prebuilt image commit SHA")
-    return (inbox / ("mv3c-" + sha + ".tar.gz"),
-            inbox / ("mv3c-" + sha + ".sha256"))
-
-
-def verify_scp_archive(sha: str, inbox: Path = IMAGE_INBOX) -> Path:
-    image_file, checksum_file = archive_paths(sha, inbox)
-    for path in (image_file, checksum_file):
-        try:
-            info = path.lstat()
-        except FileNotFoundError as exc:
-            raise UpdateError("Actions SCP image has not arrived for " + sha[:12] +
-                              " (missing " + path.name + "); no server build attempted") from exc
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            raise UpdateError("Image archive or checksum is not a regular single-link file")
-    total = image_file.stat().st_size
-    if not 1024 <= total <= MAX_ARCHIVE_BYTES:
-        raise UpdateError("Prebuilt image archive has an invalid size")
-    raw = checksum_file.read_text(encoding="ascii").strip()
-    if not re.fullmatch(r"[a-fA-F0-9]{64}", raw):
-        raise UpdateError("Invalid SHA256 sidecar for prebuilt image")
-    digest = hashlib.sha256()
-    with image_file.open("rb") as stream:
-        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
-            digest.update(block)
-    if digest.hexdigest() != raw.lower():
-        raise UpdateError("SCP image archive checksum mismatch; refusing docker load")
-    return image_file
-
-
-def verify_prebuilt_image(repo: Path, sha: str) -> None:
-    image = image_for_sha(sha)
+def verify_built_image(repo: Path, sha: str) -> None:
     revision = run([
         "docker", "image", "inspect", "--format",
-        '{{index .Config.Labels "org.opencontainers.image.revision"}}', image,
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+        image_for_sha(sha),
     ], repo, timeout=30)
     if revision != sha:
-        raise UpdateError("Imported image revision mismatch: expected " + sha[:12] +
-                          ", got " + revision[:80])
+        raise UpdateError("Locally built image revision mismatch: expected "
+                          + sha[:12] + ", got " + revision[:80])
 
 
-def load_prebuilt_image(repo: Path, sha: str, inbox: Path = IMAGE_INBOX) -> str:
-    """Load the verified compressed Actions artifact, never contact GHCR.
+def check_build_capacity(repo: Path) -> None:
+    docker_root = Path("/var/lib/docker")
+    location = docker_root if docker_root.is_dir() else repo
+    free = shutil.disk_usage(location).free
+    if free < MIN_DOCKER_FREE_BYTES:
+        raise UpdateError("Docker build blocked: less than 3 GiB available on "
+                          + str(location) + "; free disk space without pruning data volumes")
 
-    docker load accepts gzip inputs directly, avoiding a multi-GB temporary
-    uncompressed tar file on the small host disk.
-    """
-    archive = verify_scp_archive(sha, inbox)
-    # An existing image of the expected tag is not trusted without inspecting
-    # its embedded revision label. docker load never runs user code.
-    run(["docker", "load", "--input", str(archive)], repo, timeout=1800)
-    verify_prebuilt_image(repo, sha)
-    return image_for_sha(sha)
+
+def build_local_image(repo: Path, sha: str) -> None:
+    """Reuse host layers, persistent BuildKit cache mounts and npm tarballs."""
+    heap = os.environ.get("MV3C_BUILD_NODE_HEAP_MB", "3072")
+    if not heap.isdecimal() or not 1024 <= int(heap) <= 8192:
+        raise UpdateError("MV3C_BUILD_NODE_HEAP_MB must be 1024..8192")
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+    run([
+        "docker", "build", "--progress=plain",
+        "--build-arg", "NODE_MAX_OLD_SPACE_SIZE=" + heap,
+        "--build-arg", "NPM_CI_TIMEOUT_SECONDS=1800",
+        "--build-arg", "BUILD_COMMIT=" + sha,
+        "--build-arg", "BUILD_BRANCH=main",
+        "-t", image_for_sha(sha), ".",
+    ], repo, timeout=4500, env=env)
+    verify_built_image(repo, sha)
 
 
 class UpdateError(RuntimeError):
