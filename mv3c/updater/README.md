@@ -61,6 +61,8 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 
 若 bootstrap 失败：**保留旧容器、Docker 镜像与数据卷**，不要手动删除镜像或强行 Git reset。查看错误日志，必要时按实际结果恢复更新器 timer。更新器自身在构建失败时负责 Git 回滚；若宿主机异常重启则会在下次执行恢复事务日志。
 
+**迁移锁与回滚排查：** 若看到 `Another mv3c update check is already running`，说明其他更新任务持有锁，首次 bootstrap 尚未启动，不得将其视为迁移成功。先停止 timer，确认已有 `mv3c-updater.service` 执行结束，再重新运行 bootstrap；无需删除锁文件。新的 bootstrap 遇到锁冲突会返回非零退出码，阻止部署脚本错误地继续安装。安装脚本只启用 timer，不再同步等待可能耗时很长的 oneshot 更新器。若看到 `mv3c update: rolled_back`，表示部署失败后已恢复旧版本，**不是**新版本部署成功。到管理后台「版本更新」→「最近更新记录」下载该次部署诊断报告，其 `error` / `Deployment log` 才是定位构建、网络或镜像失败的关键证据；宿主机 `journalctl -u mv3c-updater.service` 也会输出简短失败原因。
+
 之前添加的 `MV3C_SCP_*` Actions Secrets 不再参与部署；可以在验证迁移后手动撤销上传密钥并删除对应 Secrets。专用的 `mv3c-transfer` 用户如果已存在，不建议在未检查其它用途前直接删除。
 
 ## 缓存、资源与故障排查
