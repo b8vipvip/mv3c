@@ -30,6 +30,8 @@ jobs:
           python3 -m py_compile mv3c/updater/agent.py
           bash -n mv3c/updater/install.sh
           bash -n mv3c/updater/export_scp_image.sh
+          bash -n mv3c/updater/assemble_scp_image.sh
+          bash -n mv3c/updater/create_scp_archive.sh
           node --check mv3c/updater/bridge.cjs
       - name: Validate env-free Compose configuration
         run: |
