@@ -495,13 +495,15 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> Non
 
 
 def execute(repo: Path) -> None:
+    # Recover BEFORE the database bridge: a container that crashed during
+    # switching may be unavailable, so it cannot be asked for job state.
+    recovered = restore_interrupted_local_deploy(repo)
+    if recovered:
+        print(recovered, flush=True)
     state = bridge(repo, "state")
     if not isinstance(state, dict):
         raise UpdateError("Invalid update state")
     try:
-        recovered = restore_interrupted_local_deploy(repo)
-        if recovered:
-            print(recovered, flush=True)
         old = verify_repo(repo)
     except Exception as error:
         report(repo, status="blocked", lastError=str(error)[:1800])
