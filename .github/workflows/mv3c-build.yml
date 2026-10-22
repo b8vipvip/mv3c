@@ -19,20 +19,6 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Preflight pinned SSH/SCP host identity before Docker build
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        env:
-          MV3C_SCP_HOST: ${{ secrets.MV3C_SCP_HOST }}
-          MV3C_SCP_USER: ${{ secrets.MV3C_SCP_USER }}
-          MV3C_SCP_PRIVATE_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
-          MV3C_SCP_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
-          MV3C_SCP_PORT: ${{ secrets.MV3C_SCP_PORT }}
-        run: |
-          if [[ -n "$MV3C_SCP_HOST" && -n "$MV3C_SCP_USER" && -n "$MV3C_SCP_PRIVATE_KEY" && -n "$MV3C_SCP_KNOWN_HOSTS" ]]; then
-            bash mv3c/updater/export_scp_image.sh --preflight
-          else
-            echo "::warning::SCP upload secrets not yet configured; built image will be tested but not sent to the server"
-          fi
       - name: Build mv3c from modified source
         run: |
           docker build --progress=plain \
