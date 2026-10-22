@@ -409,6 +409,11 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
     except Exception as error:
         failure = str(error)[:1600]
         log.append("Deployment failed: " + failure)
+        # The database diagnostic report retains the build error, but admins
+        # commonly inspect systemd output first. Never hide the reason behind
+        # a generic rolled_back status.
+        print("mv3c deployment failure before rollback: " + failure[:1000],
+              file=sys.stderr, flush=True)
         if not backed_up:
             log.append("Preflight failed; live container, Git and image unchanged")
             return "failed", "\n".join(log)[-24000:], failure
@@ -618,6 +623,10 @@ def execute(repo: Path) -> None:
              sha=target if outcome == "success" else old, attempted=target,
              verification=validation_line)
     print("mv3c update:", outcome, flush=True)
+    if outcome not in ("success", "skipped"):
+        # Preserve the database completion first, then let systemd signal the
+        # failed attempted deployment instead of reporting a green oneshot.
+        raise UpdateError("Deployment " + outcome + ": " + error[:1000])
 
 
 def main() -> int:
@@ -634,6 +643,12 @@ def main() -> int:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            if args.bootstrap_local:
+                raise UpdateError(
+                    "Bootstrap was NOT run: another mv3c updater holds the lock. "
+                    "Stop the timer, wait for the existing service to finish, "
+                    "then retry migration before installing a new updater."
+                )
             print("Another mv3c update check is already running")
             return 0
         if args.bootstrap_local:
