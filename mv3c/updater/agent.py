@@ -349,7 +349,11 @@ def restore_interrupted_local_deploy(repo: Path) -> str:
                   if current_container else "")
     old_id = run(["docker", "image", "inspect", "--format", "{{.Id}}",
                   "mv3c:rollback"], repo, timeout=20)
-    if running_id != old_id:
+    health = (run(["docker", "inspect", "--format",
+                   "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}",
+                   current_container.splitlines()[0]], repo, timeout=20)
+              if current_container and running_id == old_id else "")
+    if running_id != old_id or health != "healthy":
         run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
              "--no-deps", "--force-recreate", "mv3c"], repo, timeout=240)
     wait_healthy(repo)
