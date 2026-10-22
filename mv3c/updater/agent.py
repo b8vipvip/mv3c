@@ -499,6 +499,9 @@ def execute(repo: Path) -> None:
     if not isinstance(state, dict):
         raise UpdateError("Invalid update state")
     try:
+        recovered = restore_interrupted_local_deploy(repo)
+        if recovered:
+            print(recovered, flush=True)
         old = verify_repo(repo)
     except Exception as error:
         report(repo, status="blocked", lastError=str(error)[:1800])
@@ -614,8 +617,8 @@ def execute(repo: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="mv3c host update worker")
     parser.add_argument("--repo", required=True, type=Path, help="Host Git checkout path")
-    parser.add_argument("--bootstrap-prebuilt", action="store_true",
-                        help="One-time migration from legacy host-building updater using SCP archive")
+    parser.add_argument("--bootstrap-local", action="store_true",
+                        help="One-time transition from old updater using cached local Docker build")
     args = parser.parse_args()
     repo = args.repo.resolve(strict=True)
     if os.geteuid() != 0:
@@ -627,10 +630,12 @@ def main() -> int:
         except BlockingIOError:
             print("Another mv3c update check is already running")
             return 0
-        if args.bootstrap_prebuilt:
-            # Legacy systemd updater still runs its old Python file until the
-            # repository advances. Bootstrap executes the fetched new updater
-            # in a temporary file without modifying a tracked checkout.
+        if args.bootstrap_local:
+            # Execute the newer fetched script once even when the checked-out
+            # on-disk updater still points to the legacy SCP implementation.
+            restored = restore_interrupted_local_deploy(repo)
+            if restored:
+                print(restored, flush=True)
             current = verify_repo(repo)
             target, _label = target_for_channel(repo, "main")
             if not is_descendant(repo, current, target):
@@ -645,7 +650,7 @@ def main() -> int:
             print(log, flush=True)
             if outcome != "success":
                 raise UpdateError("Bootstrap deployment did not succeed: " + error[:1000])
-            print("Prebuilt bootstrap succeeded; reinstall/restart systemd updater to use new code")
+            print("Local Docker bootstrap succeeded; reinstall/restart systemd updater to use new code")
             return 0
         execute(repo)
     return 0
