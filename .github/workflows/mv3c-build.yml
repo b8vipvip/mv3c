@@ -16,23 +16,9 @@ permissions:
 jobs:
   docker-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 140
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Preflight pinned SSH/SCP host identity before Docker build
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        env:
-          MV3C_SCP_HOST: ${{ secrets.MV3C_SCP_HOST }}
-          MV3C_SCP_USER: ${{ secrets.MV3C_SCP_USER }}
-          MV3C_SCP_PRIVATE_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
-          MV3C_SCP_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
-          MV3C_SCP_PORT: ${{ secrets.MV3C_SCP_PORT }}
-        run: |
-          if [[ -n "$MV3C_SCP_HOST" && -n "$MV3C_SCP_USER" && -n "$MV3C_SCP_PRIVATE_KEY" && -n "$MV3C_SCP_KNOWN_HOSTS" ]]; then
-            bash mv3c/updater/export_scp_image.sh --preflight
-          else
-            echo "::warning::SCP upload secrets not yet configured; built image will be tested but not sent to the server"
-          fi
       - name: Build mv3c from modified source
         run: |
           docker build --progress=plain \
@@ -101,57 +87,12 @@ jobs:
           docker compose exec -T mv3c node /app/mv3c/updater/tests/integration.cjs
           docker compose exec -T mv3c node /app/mv3c/updater/bridge.cjs state > /tmp/mv3c-updater-state.json
           node -e "const x=require('/tmp/mv3c-updater-state.json');if(!x.config||x.config.channel!=='main')process.exit(1);console.log('Updater database bridge ready')"
-      # GitHub Actions builds AND validates the actual image, then ships the
-      # immutable artifact via SSH/SCP. No registry and no host-side build.
-      # The receiving SSH account can only write to the inbox; it cannot run
-      # Docker, update the code checkout or modify app data.
+      # CI validates the commit. Production hosts independently pull the same
+      # SHA and build with persistent Docker layer and BuildKit npm caches.
       - name: Check immutable image revision
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' mv3c:ci)" = "${GITHUB_SHA}"
-      - name: Check delivery configuration
-        id: scp_package
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        env:
-          MV3C_SCP_HOST: ${{ secrets.MV3C_SCP_HOST }}
-          MV3C_SCP_USER: ${{ secrets.MV3C_SCP_USER }}
-          MV3C_SCP_PRIVATE_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
-          MV3C_SCP_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
-        run: |
-          if [[ -n "$MV3C_SCP_HOST" && -n "$MV3C_SCP_USER" && -n "$MV3C_SCP_PRIVATE_KEY" && -n "$MV3C_SCP_KNOWN_HOSTS" ]]; then
-            echo 'ready=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'ready=false' >> "$GITHUB_OUTPUT"
-            echo '::warning::SCP secrets incomplete; Actions image verified but delivery skipped'
-          fi
-      - name: Restore exact image from Actions cache when rebuilding the same commit
-        id: scp_cache
-        if: steps.scp_package.outputs.ready == 'true'
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/mv3c-scp-payload
-          key: mv3c-scp-image-${{ github.sha }}
-      - name: Package tested image exactly once when cache is absent
-        if: steps.scp_package.outputs.ready == 'true' && steps.scp_cache.outputs.cache-hit != 'true'
-        timeout-minutes: 20
-        run: bash mv3c/updater/create_scp_archive.sh "$RUNNER_TEMP/mv3c-scp-payload"
-      - name: Save verified image to short-lived Actions cache for transfer-only retries
-        if: steps.scp_package.outputs.ready == 'true' && steps.scp_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/mv3c-scp-payload
-          key: mv3c-scp-image-${{ github.sha }}
-      - name: Upload saved verified image with resumable 16MiB SCP chunks
-        if: steps.scp_package.outputs.ready == 'true'
-        timeout-minutes: 100
-        env:
-          MV3C_IMAGE_ARCHIVE_DIR: ${{ runner.temp }}/mv3c-scp-payload
-          MV3C_SCP_HOST: ${{ secrets.MV3C_SCP_HOST }}
-          MV3C_SCP_USER: ${{ secrets.MV3C_SCP_USER }}
-          MV3C_SCP_PRIVATE_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
-          MV3C_SCP_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
-          MV3C_SCP_PORT: ${{ secrets.MV3C_SCP_PORT }}
-        run: bash mv3c/updater/export_scp_image.sh --upload-only
       - name: Dump runtime logs on failure
         if: failure()
         run: docker compose -f docker-compose.mv3c.yml logs --tail=250

@@ -3,15 +3,14 @@
 
 The web container NEVER receives a Docker socket or host filesystem mount.
 A host timer executes this program. It reads a restricted MongoDB bridge through
-docker compose exec, verifies GitHub CI, imports SSH-delivered Actions image archives, switches and health-checks.
+docker compose exec, verifies GitHub CI, builds CI-validated commits using local Docker caches, switches and health-checks.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import fcntl
-import hashlib
-import stat
+import shutil
 import json
 import os
 import re
@@ -31,12 +30,10 @@ HTTPS_ORIGIN = "https://github.com/b8vipvip/mv3c.git"
 TRUSTED_ORIGINS = {SSH_ORIGIN, HTTPS_ORIGIN, "https://github.com/b8vipvip/mv3c"}
 SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
 CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
-USER_AGENT = "mv3c-updater/3.0"
-# Fixed receiver: the CI upload account can write *only* this dedicated
-# directory; it never gets root/Docker/Compose access. The updater runs as
-# root and verifies an exact immutable commit and SHA256 before docker load.
-IMAGE_INBOX = Path("/var/lib/mv3c-prebuilt/incoming")
-MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
+USER_AGENT = "mv3c-updater/4.0"
+# Local Docker images remain in the host cache across updates. The GitHub
+# Actions image is tested for the exact SHA, but does not need to be transferred.
+MIN_DOCKER_FREE_BYTES = 3 * 1024 ** 3
 
 
 def image_for_sha(sha: str) -> str:
@@ -45,61 +42,42 @@ def image_for_sha(sha: str) -> str:
     return "mv3c:sha-" + sha
 
 
-def archive_paths(sha: str, inbox: Path = IMAGE_INBOX) -> tuple[Path, Path]:
-    if not SHA.fullmatch(sha):
-        raise UpdateError("Invalid prebuilt image commit SHA")
-    return (inbox / ("mv3c-" + sha + ".tar.gz"),
-            inbox / ("mv3c-" + sha + ".sha256"))
-
-
-def verify_scp_archive(sha: str, inbox: Path = IMAGE_INBOX) -> Path:
-    image_file, checksum_file = archive_paths(sha, inbox)
-    for path in (image_file, checksum_file):
-        try:
-            info = path.lstat()
-        except FileNotFoundError as exc:
-            raise UpdateError("Actions SCP image has not arrived for " + sha[:12] +
-                              " (missing " + path.name + "); no server build attempted") from exc
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            raise UpdateError("Image archive or checksum is not a regular single-link file")
-    total = image_file.stat().st_size
-    if not 1024 <= total <= MAX_ARCHIVE_BYTES:
-        raise UpdateError("Prebuilt image archive has an invalid size")
-    raw = checksum_file.read_text(encoding="ascii").strip()
-    if not re.fullmatch(r"[a-fA-F0-9]{64}", raw):
-        raise UpdateError("Invalid SHA256 sidecar for prebuilt image")
-    digest = hashlib.sha256()
-    with image_file.open("rb") as stream:
-        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
-            digest.update(block)
-    if digest.hexdigest() != raw.lower():
-        raise UpdateError("SCP image archive checksum mismatch; refusing docker load")
-    return image_file
-
-
-def verify_prebuilt_image(repo: Path, sha: str) -> None:
-    image = image_for_sha(sha)
+def verify_built_image(repo: Path, sha: str) -> None:
     revision = run([
         "docker", "image", "inspect", "--format",
-        '{{index .Config.Labels "org.opencontainers.image.revision"}}', image,
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+        image_for_sha(sha),
     ], repo, timeout=30)
     if revision != sha:
-        raise UpdateError("Imported image revision mismatch: expected " + sha[:12] +
-                          ", got " + revision[:80])
+        raise UpdateError("Locally built image revision mismatch: expected "
+                          + sha[:12] + ", got " + revision[:80])
 
 
-def load_prebuilt_image(repo: Path, sha: str, inbox: Path = IMAGE_INBOX) -> str:
-    """Load the verified compressed Actions artifact, never contact GHCR.
+def check_build_capacity(repo: Path) -> None:
+    docker_root = Path("/var/lib/docker")
+    location = docker_root if docker_root.is_dir() else repo
+    free = shutil.disk_usage(location).free
+    if free < MIN_DOCKER_FREE_BYTES:
+        raise UpdateError("Docker build blocked: less than 3 GiB available on "
+                          + str(location) + "; free disk space without pruning data volumes")
 
-    docker load accepts gzip inputs directly, avoiding a multi-GB temporary
-    uncompressed tar file on the small host disk.
-    """
-    archive = verify_scp_archive(sha, inbox)
-    # An existing image of the expected tag is not trusted without inspecting
-    # its embedded revision label. docker load never runs user code.
-    run(["docker", "load", "--input", str(archive)], repo, timeout=1800)
-    verify_prebuilt_image(repo, sha)
-    return image_for_sha(sha)
+
+def build_local_image(repo: Path, sha: str) -> None:
+    """Reuse host layers, persistent BuildKit cache mounts and npm tarballs."""
+    heap = os.environ.get("MV3C_BUILD_NODE_HEAP_MB", "3072")
+    if not heap.isdecimal() or not 1024 <= int(heap) <= 8192:
+        raise UpdateError("MV3C_BUILD_NODE_HEAP_MB must be 1024..8192")
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+    run([
+        "docker", "build", "--progress=plain",
+        "--build-arg", "NODE_MAX_OLD_SPACE_SIZE=" + heap,
+        "--build-arg", "NPM_CI_TIMEOUT_SECONDS=1800",
+        "--build-arg", "BUILD_COMMIT=" + sha,
+        "--build-arg", "BUILD_BRANCH=main",
+        "-t", image_for_sha(sha), ".",
+    ], repo, timeout=4500, env=env)
+    verify_built_image(repo, sha)
 
 
 class UpdateError(RuntimeError):
@@ -335,10 +313,62 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
             + " /readyz HTTP 200; /api/config HTTP 200")
 
 
+def transaction_path(repo: Path) -> Path:
+    return repo / ".mv3c-local-build-transaction.json"
+
+
+def save_transaction(repo: Path, old: str, target: str) -> None:
+    journal = transaction_path(repo)
+    if journal.exists():
+        raise UpdateError("Previous local deployment was interrupted; recover it first")
+    pending = journal.with_suffix(".tmp")
+    pending.write_text(json.dumps({"old": old, "target": target}), encoding="utf-8")
+    os.chmod(pending, 0o600)
+    os.replace(pending, journal)
+
+
+def restore_interrupted_local_deploy(repo: Path) -> str:
+    """Resolve a crash after fast-forward/build, before any new deployment."""
+    journal = transaction_path(repo)
+    if not journal.exists():
+        return ""
+    data = json.loads(journal.read_text(encoding="utf-8"))
+    previous, target = data.get("old"), data.get("target")
+    if not isinstance(previous, str) or not SHA.fullmatch(previous) or not (
+        isinstance(target, str) and SHA.fullmatch(target)
+    ):
+        raise UpdateError("Invalid deployment recovery journal; refusing to alter Git or Docker")
+    current = git(repo, "rev-parse", "HEAD")
+    if current not in (previous, target):
+        raise UpdateError("Git HEAD differs from the interrupted deployment; manual intervention required")
+    git(repo, "reset", "--hard", previous, timeout=60)
+    run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"], repo, timeout=30)
+    current_container = run(["docker", "compose", "ps", "-q", "mv3c"], repo, timeout=20)
+    running_id = (run(["docker", "inspect", "--format", "{{.Image}}",
+                       current_container.splitlines()[0]], repo, timeout=20)
+                  if current_container else "")
+    old_id = run(["docker", "image", "inspect", "--format", "{{.Id}}",
+                  "mv3c:rollback"], repo, timeout=20)
+    health = (run(["docker", "inspect", "--format",
+                   "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}",
+                   current_container.splitlines()[0]], repo, timeout=20)
+              if current_container and running_id == old_id else "")
+    if running_id != old_id or health != "healthy":
+        run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
+             "--no-deps", "--force-recreate", "mv3c"], repo, timeout=240)
+    wait_healthy(repo)
+    verify_deployment(repo, previous)
+    journal.unlink()
+    return "Interrupted local build/deployment restored verified version " + previous[:12]
+
+
 def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str, str, str]:
-    """Switch only to CI-built SHA-pinned images. Never rebuild on the host."""
-    log = []
-    previous_image_saved = False
+    """Build from the CI-approved commit with the host's Docker/BuildKit cache."""
+    log: list[str] = []
+    backed_up = False
+    switched = False
+    journal = transaction_path(repo)
+
     def advance(stage: str, percent: int, detail: str) -> None:
         log.append("[{}] {}% {}".format(stage, percent, detail))
         if on_progress:
@@ -346,59 +376,55 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
                 on_progress(stage, percent, detail)
             except Exception as exc:
                 log.append("Progress transport warning: " + str(exc)[:300])
+
     try:
-        # Verify that the complete artifact is present BEFORE touching any
-        # running service or previous deployment tag.
-        advance("pulling", 45, "核对 Actions SCP 镜像文件与 SHA256，保持现有容器运行")
-        immutable_ref = load_prebuilt_image(repo, target)
-        log.append("SCP SHA256 verified prebuilt image: " + immutable_ref)
-        advance("backup", 55, "保留旧版 Docker 镜像用于回滚")
-        run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"], repo, timeout=30)
-        previous_image_saved = True
-        advance("merging", 63, "Git 快进至已通过 CI 的提交")
+        advance("backup", 36, "检查可用空间，保留当前镜像用于回滚")
+        check_build_capacity(repo)
+        run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"],
+            repo, timeout=30)
+        backed_up = True
+        save_transaction(repo, old, target)
+        advance("merging", 43, "Git 快进至已通过 CI 的源码版本")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
-        # Existing production Compose uses image: mv3c:local and persists all
-        # MongoDB & data volumes. Tagging does not alter compose services.
-        run(["docker", "image", "tag", immutable_ref, "mv3c:local"], repo, timeout=30)
-        advance("restarting", 75, "切换已下载镜像，禁止本地 Docker 构建")
-        log.append(run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
-                        "--no-deps", "--force-recreate", "mv3c"],
+        advance("building", 54, "本机 BuildKit 增量构建，保留已有 Docker 层及 npm 缓存")
+        build_local_image(repo, target)
+        log.append("Cached host Docker build and image revision check PASSED: "
+                   + target[:12])
+        # Only change the stable image tag after the candidate has built and
+        # been verified. The old running container remains untouched up to here.
+        run(["docker", "image", "tag", image_for_sha(target), "mv3c:local"],
+            repo, timeout=30)
+        advance("restarting", 76, "切换已构建镜像，保持 MongoDB 和数据卷不变")
+        switched = True
+        log.append(run(["docker", "compose", "up", "-d", "--no-build", "--pull",
+                        "never", "--no-deps", "--force-recreate", "mv3c"],
                        repo, timeout=240)[-3000:])
-        advance("verifying", 86, "检查 Docker 健康状态")
+        advance("verifying", 87, "确认容器健康状态")
         wait_healthy(repo)
-        advance("verifying", 93, "验证镜像提交、readyz 和应用配置 API")
+        advance("verifying", 94, "校验当前提交、运行镜像、readyz 和配置 API")
         log.append(verify_deployment(repo, target))
-        # The Docker image now exists in the daemon; keeping each 1GB+
-        # compressed SCP package would fill the user's 40GB host again.
-        for artifact in archive_paths(target):
-            try:
-                artifact.unlink(missing_ok=True)
-            except OSError as cleanup_error:
-                log.append("SCP archive cleanup warning: " +
-                           type(cleanup_error).__name__)
+        journal.unlink(missing_ok=True)
         return "success", "\n".join(log)[-24000:], ""
     except Exception as error:
         failure = str(error)[:1600]
         log.append("Deployment failed: " + failure)
-        if not previous_image_saved:
-            # No image tags, containers, Git refs or persistent volumes were
-            # altered yet. Do not restart a healthy service just because an
-            # archive is missing or corrupt.
-            log.append("Preflight failed before deployment: current containers unchanged")
+        if not backed_up:
+            log.append("Preflight failed; live container, Git and image unchanged")
             return "failed", "\n".join(log)[-24000:], failure
         try:
-            advance("rollback", 94, "更新失败，恢复旧版已验证镜像")
+            advance("rollback", 95, "更新失败，恢复原 Git 提交和已备份的 Docker 镜像")
             git(repo, "reset", "--hard", old, timeout=60)
-            log.append(run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
-                           repo, timeout=30)[-1000:])
-            log.append(run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
-                            "--no-deps", "--force-recreate", "mv3c"],
-                           repo, timeout=240)[-2000:])
+            run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
+                repo, timeout=30)
+            if switched:
+                log.append(run(["docker", "compose", "up", "-d", "--no-build",
+                                "--pull", "never", "--no-deps", "--force-recreate",
+                                "mv3c"], repo, timeout=240)[-2000:])
             wait_healthy(repo)
             validation = verify_deployment(repo, old)
             log.append("Rollback validation PASSED: " + validation)
-            log.append("Previous application version restored")
+            journal.unlink(missing_ok=True)
             return "rolled_back", "\n".join(log)[-24000:], failure
         except Exception as rollback_error:
             log.append("Rollback failed: " + str(rollback_error)[:1500])
@@ -473,6 +499,11 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> Non
 
 
 def execute(repo: Path) -> None:
+    # Recover BEFORE the database bridge: a container that crashed during
+    # switching may be unavailable, so it cannot be asked for job state.
+    recovered = restore_interrupted_local_deploy(repo)
+    if recovered:
+        print(recovered, flush=True)
     state = bridge(repo, "state")
     if not isinstance(state, dict):
         raise UpdateError("Invalid update state")
@@ -592,8 +623,8 @@ def execute(repo: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="mv3c host update worker")
     parser.add_argument("--repo", required=True, type=Path, help="Host Git checkout path")
-    parser.add_argument("--bootstrap-prebuilt", action="store_true",
-                        help="One-time migration from legacy host-building updater using SCP archive")
+    parser.add_argument("--bootstrap-local", action="store_true",
+                        help="One-time transition from old updater using cached local Docker build")
     args = parser.parse_args()
     repo = args.repo.resolve(strict=True)
     if os.geteuid() != 0:
@@ -605,10 +636,12 @@ def main() -> int:
         except BlockingIOError:
             print("Another mv3c update check is already running")
             return 0
-        if args.bootstrap_prebuilt:
-            # Legacy systemd updater still runs its old Python file until the
-            # repository advances. Bootstrap executes the fetched new updater
-            # in a temporary file without modifying a tracked checkout.
+        if args.bootstrap_local:
+            # Execute the newer fetched script once even when the checked-out
+            # on-disk updater still points to the legacy SCP implementation.
+            restored = restore_interrupted_local_deploy(repo)
+            if restored:
+                print(restored, flush=True)
             current = verify_repo(repo)
             target, _label = target_for_channel(repo, "main")
             if not is_descendant(repo, current, target):
@@ -623,7 +656,7 @@ def main() -> int:
             print(log, flush=True)
             if outcome != "success":
                 raise UpdateError("Bootstrap deployment did not succeed: " + error[:1000])
-            print("Prebuilt bootstrap succeeded; reinstall/restart systemd updater to use new code")
+            print("Local Docker bootstrap succeeded; reinstall/restart systemd updater to use new code")
             return 0
         execute(repo)
     return 0
