@@ -51,13 +51,26 @@ echo "SSH/SCP receiver preflight succeeded"
 if [[ "${1:-}" == "--preflight" ]]; then
   exit 0
 fi
-docker image tag mv3c:ci "$IMAGE"
-test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$GITHUB_SHA"
 ARCHIVE="mv3c-$GITHUB_SHA.tar.gz"
 CHECKSUM="mv3c-$GITHUB_SHA.sha256"
-echo "Exporting already-tested $IMAGE; host will never compile source"
-docker save "$IMAGE" | gzip -1 > "$WORK/$ARCHIVE"
-sha256sum "$WORK/$ARCHIVE" | cut -d ' ' -f1 > "$WORK/$CHECKSUM"
+if [[ "${1:-}" == "--upload-only" ]]; then
+  : "${MV3C_IMAGE_ARCHIVE_DIR:?An exact saved Actions archive is required for retry}"
+  source_dir="$MV3C_IMAGE_ARCHIVE_DIR"
+  [[ -f "$source_dir/$ARCHIVE" && -f "$source_dir/$CHECKSUM" ]] || { echo "Missing CI archive files" >&2; exit 51; }
+  cp -- "$source_dir/$ARCHIVE" "$WORK/$ARCHIVE"
+  cp -- "$source_dir/$CHECKSUM" "$WORK/$CHECKSUM"
+  expected="$(cat "$WORK/$CHECKSUM")"
+  [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || { echo "Invalid stored image checksum" >&2; exit 52; }
+  actual="$(sha256sum "$WORK/$ARCHIVE" | cut -d ' ' -f1)"
+  [[ "$actual" == "$expected" ]] || { echo "Cached Actions archive SHA256 mismatch" >&2; exit 53; }
+  echo "Reusing EXACT saved Actions archive (no Docker build or re-export)"
+else
+  docker image tag mv3c:ci "$IMAGE"
+  test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$GITHUB_SHA"
+  echo "Exporting already-tested $IMAGE; host will never compile source"
+  docker save "$IMAGE" | gzip -1 > "$WORK/$ARCHIVE"
+  sha256sum "$WORK/$ARCHIVE" | cut -d ' ' -f1 > "$WORK/$CHECKSUM"
+fi
 test -s "$WORK/$ARCHIVE"
 echo "SCP archive size: $(wc -c < "$WORK/$ARCHIVE") bytes"
 # Transfer fixed-size, checksum-verified chunks. A failed Actions run can
