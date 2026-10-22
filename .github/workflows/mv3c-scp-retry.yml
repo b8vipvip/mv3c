@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: "Original mv3c source Docker build Actions run ID with saved image artifact"
+        description: "Original mv3c source Docker build Actions run ID; image cache must still be present"
         required: true
         type: string
 
@@ -45,16 +45,15 @@ jobs:
                       or .name == "Exercise first admin login and persisted provider configuration"
                       or .name == "Validate updater inside the live Docker stack"
                       or .name == "Check immutable image revision"
-                      or .name == "Package smoke-tested image as a reusable Actions artifact"
-                      or .name == "Cache exact CI image bytes for transfer-only retries"
-                    ) | .conclusion]] | any(length == 7 and all(. == "success"))'
-      - name: Recover exact compressed Actions image artifact without Docker build
-        uses: actions/download-artifact@v4
+                      or .name == "Check delivery configuration"
+                    ) | .conclusion]] | any(length == 6 and all(. == "success"))'
+      - name: Restore exact compressed image from Actions cache without Docker build
+        id: restore
+        uses: actions/cache/restore@v4
         with:
-          run-id: ${{ inputs.source_run_id }}
-          name: mv3c-scp-${{ github.sha }}
           path: ${{ runner.temp }}/mv3c-scp-payload
-          github-token: ${{ github.token }}
+          key: mv3c-scp-image-${{ github.sha }}
+          fail-on-cache-miss: true
       - name: Retry resumable SHA-verified upload only
         timeout-minutes: 100
         env:
