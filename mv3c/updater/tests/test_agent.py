@@ -194,6 +194,27 @@ class HostUpdaterTests(unittest.TestCase):
         with self.assertRaises(agent.UpdateError):
             agent.image_for_sha("abcd")
 
+    def test_failed_build_log_keeps_first_registry_error(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temp:
+            logfile = pathlib.Path(temp) / "build.log"
+            def fake_build(_args, **kwargs):
+                stream = kwargs["stdout"]
+                stream.write(b"#10 ERROR: failed to fetch image: network timeout\\n")
+                for index in range(80):
+                    stream.write(("#10 downloading layer %s\\n" % index).encode())
+                return SimpleNamespace(returncode=1)
+            with patch.object(agent, "BUILD_LOG_PATH", logfile):
+                with patch.object(agent.subprocess, "run", side_effect=fake_build):
+                    with self.assertRaises(agent.UpdateError) as caught:
+                        agent.run(["docker", "build", "-t", "mv3c:sha-" + SHA2, "."],
+                                  pathlib.Path(temp), timeout=30)
+            error = str(caught.exception)
+            self.assertIn("failed to fetch image: network timeout", error)
+            self.assertIn(str(logfile), error)
+            self.assertIn("downloading layer 79", logfile.read_text())
+            self.assertEqual(logfile.stat().st_mode & 0o777, 0o600)
+
     def test_local_build_reuses_docker_layers_and_npm_cache(self):
         commands = []
         def fake_run(args, _repo, **kwargs):
