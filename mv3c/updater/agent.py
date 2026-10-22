@@ -114,16 +114,16 @@ def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
         for line in stored:
             line = line.rstrip()[:1000]
             tail.append(line)
-            if re.search(r"(?i)(?:\\berror[: ]|failed to|unexpected eof|connection reset|"
+            if re.search(r"(?i)(?:\berror[: ]|failed to|unexpected eof|connection reset|"
                          r"deadline exceeded|tls handshake|timed out|timeout|"
                          r"no space left|out of memory|network is unreachable|"
                          r"not found|denied|429 too many requests)", line):
                 important.append(line)
-    summary = "\\n".join(important)[:2000] + "\\nLast output:\\n" + "\\n".join(tail)[-1800:]
+    summary = "\n".join(important)[:2000] + "\nLast output:\n" + "\n".join(tail)[-1800:]
     if code:
-        raise UpdateError("docker build failed (exit {}), full log: {}\\n{}".format(
+        raise UpdateError("docker build failed (exit {}), full log: {}\n{}".format(
             code, BUILD_LOG_PATH, summary))
-    return "Docker build succeeded; full log: " + str(BUILD_LOG_PATH) + "\\n" + "\\n".join(tail)[-1000:]
+    return "Docker build succeeded; full log: " + str(BUILD_LOG_PATH) + "\n" + "\n".join(tail)[-1000:]
 
 
 def run(args: list[str], cwd: Path, *, input_data: str | None = None,
