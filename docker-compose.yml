@@ -16,6 +16,9 @@ services:
       NODE_ENV: production
       MONGO_URI: mongodb://mongodb:27017/mv3c
       SEARCH: "false"
+      # One mv3c app replica, no Redis-backed shared generation store.
+      # Required for schedule routes; without it they permanently return 503.
+      SCHEDULES_SINGLE_PROCESS: "true"
       LOG_TO_FILE: "false" # Replace upstream long-lived 20MB/error logs with bounded mv3c log
     ports:
       - "127.0.0.1:${MV3C_PORT:-3080}:3080"

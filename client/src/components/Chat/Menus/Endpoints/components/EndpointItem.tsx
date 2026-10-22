@@ -271,6 +271,9 @@ export function EndpointItem({ endpoint, endpointIndex }: EndpointItemProps) {
 
   const isAssistantsNotLoaded =
     isAssistantsEndpoint(endpoint.value) && endpoint.models === undefined;
+  const displayLabel = isAgentsEndpoint(endpoint.value)
+    ? localize('com_agents_my_agents')
+    : endpoint.label;
 
   const renderIconLabel = () => (
     <div className="flex min-w-0 items-center gap-2">
@@ -279,7 +282,7 @@ export function EndpointItem({ endpoint, endpointIndex }: EndpointItemProps) {
           {endpoint.icon}
         </div>
       )}
-      <span className="truncate text-left">{endpoint.label}</span>
+      <span className="truncate text-left">{displayLabel}</span>
     </div>
   );
 
@@ -292,8 +295,8 @@ export function EndpointItem({ endpoint, endpointIndex }: EndpointItemProps) {
   if (endpoint.hasModels) {
     const placeholder =
       isAgentsEndpoint(endpoint.value) || isAssistantsEndpoint(endpoint.value)
-        ? localize('com_endpoint_search_var', { 0: endpoint.label })
-        : localize('com_endpoint_search_endpoint_models', { 0: endpoint.label });
+        ? localize('com_endpoint_search_var', { 0: displayLabel })
+        : localize('com_endpoint_search_endpoint_models', { 0: displayLabel });
     return (
       <Menu
         id={`endpoint-${endpoint.value}-menu`}
@@ -339,7 +342,7 @@ export function EndpointItem({ endpoint, endpointIndex }: EndpointItemProps) {
           )}
           {isAssistantsNotLoaded && (
             <TooltipAnchor
-              description={localize('com_ui_click_to_view_var', { 0: endpoint.label })}
+              description={localize('com_ui_click_to_view_var', { 0: displayLabel })}
               side="top"
               render={
                 <span className="flex items-center">
