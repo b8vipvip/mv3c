@@ -144,3 +144,6 @@ docker compose -f docker-compose.mv3c.yml config --quiet
 服务器更新器要求两项 Actions 验证都通过，并再次核验压缩包的 SHA-256、镜像自带提交 SHA，才执行 `docker load`、`docker compose up --no-build` 和健康检查。传输失败不会触发本地编译，更不会重启已有健康容器。仍应保留足够磁盘空间容纳新旧镜像与回滚所需数据。
 
 **现有宿主机如仍安装的是本地构建版或 GHCR 下载版更新器，需要首次引导迁移。** 详见 [SSH/SCP 专用部署步骤](mv3c/updater/README.md#github-actions--sshscp--mv3c-部署当前方案)。Actions 使用的服务器登录私钥必须与服务器拉取 GitHub 的 Deploy Key 分开配置。
+
+
+最新镜像传输采用 SHA-256 校验的 16MiB 分段 SCP，并通过 GitHub Actions Cache 复用同一压缩包。单次传输失败时，在 Actions 内运行 `mv3c SCP transfer retry`，输入原 Docker Build 运行 ID，即可不重新构建、从已完整上传的分段续传。此前 #94 的旧整包上传无法直接复用，详见 [更新器文档](mv3c/updater/README.md#大镜像上传超时与断点续传2026-10-22)。本机制仍依赖实际 SSH 网络带宽，不保证比 GHCR 或其他线路更快。

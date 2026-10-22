@@ -1,0 +1,66 @@
+name: mv3c SCP transfer retry
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Original mv3c source Docker build Actions run ID; image cache must still be present"
+        required: true
+        type: string
+
+concurrency:
+  group: mv3c-scp-retry-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  transfer:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source run is a genuine tested main-branch Docker build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]{5,15}$ ]] || { echo "::error::Invalid Actions run id"; exit 1; }
+          workflow_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/mv3c-build.yml" --jq '.id')"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            | jq -e --arg sha "$GITHUB_SHA" --argjson wf "$workflow_id" \
+              '.head_sha == $sha and .workflow_id == $wf and .head_branch == "main"
+                and (.event == "push" or .event == "workflow_dispatch")
+                and .status == "completed"'
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" \
+            | jq -e '
+                [.jobs[] | select(.name == "docker-build")
+                  | [.steps[] | select(
+                      .name == "Build mv3c from modified source"
+                      or .name == "Start env-free mv3c and verify public startup"
+                      or .name == "Exercise first admin login and persisted provider configuration"
+                      or .name == "Validate updater inside the live Docker stack"
+                      or .name == "Check immutable image revision"
+                      or .name == "Check delivery configuration"
+                    ) | .conclusion]] | any(length == 6 and all(. == "success"))'
+      - name: Restore exact compressed image from Actions cache without Docker build
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/mv3c-scp-payload
+          key: mv3c-scp-image-${{ github.sha }}
+          fail-on-cache-miss: true
+      - name: Retry resumable SHA-verified upload only
+        timeout-minutes: 100
+        env:
+          MV3C_IMAGE_ARCHIVE_DIR: ${{ runner.temp }}/mv3c-scp-payload
+          MV3C_SCP_HOST: ${{ secrets.MV3C_SCP_HOST }}
+          MV3C_SCP_USER: ${{ secrets.MV3C_SCP_USER }}
+          MV3C_SCP_PRIVATE_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
+          MV3C_SCP_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
+          MV3C_SCP_PORT: ${{ secrets.MV3C_SCP_PORT }}
+        run: bash mv3c/updater/export_scp_image.sh --upload-only
