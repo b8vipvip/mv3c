@@ -82,8 +82,8 @@ docker compose -f docker-compose.mv3c.yml logs --tail=150 mv3c
 # 重启
 docker compose -f docker-compose.mv3c.yml restart mv3c
 
-# 后续更新：使用“版本更新”后台触发（先校验 CI，拉取镜像并验证）
-# 不要再在服务器使用 docker compose build 或 --build
+# 后续更新：使用“版本更新”后台触发（CI 门禁通过后本机复用缓存构建并验证）
+# 不要执行 docker compose down -v 或清空 Docker 构建缓存
 ~~~
 
 不要运行 docker compose down -v，否则可能删除 MongoDB 用户数据和自动生成的根密钥。备份时必须**同时备份** mv3c-mongodb 和 mv3c-data 两个卷，缺少后者将无法解密已保存的 chat2api API Key。
@@ -102,13 +102,13 @@ sudo systemctl status mv3c-updater.timer
 
 建议将 Git 仓库放在 **root 所有的 /opt/mv3c**；安装脚本会检查来源仓库、分支和工作区是否干净。后台自动和手动更新都**优先 SSH，失败时自动回退到固定的 GitHub HTTPS 地址**；安装脚本会测试两种方式，SSH 成功则优先设置 SSH origin，仅 HTTPS 成功则使用 HTTPS。安装后，管理员在 /admin →「版本更新」管理策略，无需在 .env 中设置版本更新选项。
 
-默认启用自动更新、每 10 分钟检查 GitHub main 分支；只有 mv3c validation 和 mv3c source Docker build 两项 GitHub Actions **均成功**、SCP 存档完整且镜像 SHA 校验通过，才会导入镜像、重启应用。也可切换到 GitHub Release 通道（仓库必须先发布 Release），或关闭自动更新并手动触发。部署失败时会尝试回滚代码和镜像，**不会回滚数据库迁移**。
+默认启用自动更新、每 10 分钟检查 GitHub main 分支；只有 mv3c validation 和 mv3c source Docker build 两项 GitHub Actions **均成功**，宿主机才会执行缓存构建、核验镜像 SHA 并切换应用。也可切换到 GitHub Release 通道（仓库必须先发布 Release），或关闭自动更新并手动触发。部署失败时会尝试回滚代码和镜像，**不会回滚数据库迁移**。
 
 **网页容器没有 Docker Socket 权限**；更新实际由宿主机 systemd 服务执行。详细安装、排错与回滚说明：[版本更新文档](mv3c/updater/README.md)。
 
 ## 4.2 Docker 依赖缓存与运行日志
 
-- 依赖安装、前端编译和镜像构建全部在 GitHub Actions 执行。服务器通过 SCP 收取经过验证的压缩镜像；**自动更新与后台手动更新都不会运行 npm、Docker BuildKit 构建或拉取 GHCR 镜像**。服务器仅校验文件、导入镜像并切换容器。
+- GitHub Actions 负责完整 Docker 冒烟验证。服务器从 GitHub 拉取已验证源码，在本机执行 Docker BuildKit 增量构建，复用 Docker 层和 `mv3c-npm-cache` 包缓存；构建成功后才切换服务，不再使用 SCP 或 GHCR 传输完整镜像。
 - 管理后台新增「**运行日志**」：实时写入脱敏应用日志和 API 请求摘要（不保存请求/响应正文），最多约 10 MiB；采用小文件轮转，超过阈值先淘汰最旧的内容，保存在已有 `mv3c-logs` Docker 数据卷。
 - 后台选择 **最近 15 分钟 / 1 小时 / 6 小时 / 24 小时 / 3 天 / 7 天** 下载 `.log`，仅管理员能操作。由于总量受限，日志轮转后可能不足所选择的时间段。
 - 为避免 Docker 自身标准输出日志无限增长，`mv3c` 与 `mongodb` 的 Docker `local` 日志驱动各自按 2 MB × 5 文件轮转。它们与后台导出的应用运行日志**属于不同的日志集合**。升级前已保存的旧 LibreChat 日志不会被自动删除或合并进新报告。
@@ -137,13 +137,8 @@ docker compose -f docker-compose.mv3c.yml config --quiet
 
 本项目保留 LibreChat 原始 [MIT LICENSE](LICENSE) 及 [上游说明](mv3c/UPSTREAM_README.md)。后端项目：[chat2api](https://github.com/b8vipvip/chat2api)。
 
-## 预构建镜像更新机制（2026-10）
+## 本机缓存构建部署（2026-10）
 
-每次推送 main 后，GitHub Actions 构建、启动并验证生产 Docker 镜像，然后导出 gzip 压缩 tar 与 SHA-256 校验和；配置独立上传账户和四项 GitHub Actions SSH Secrets 后，自动通过 SSH/SCP 传到 `/var/lib/mv3c-prebuilt/incoming/`。
+新版 MV3C 更新方式与 chat2api 类似：GitHub Actions 验证源码，宿主机拉取精确提交并用 Docker/BuildKit 缓存构建。构建失败不重启正在运行的服务；切换后检查容器健康与 API，失败自动恢复旧 Git 提交和镜像。**不再需要 MV3C_SCP_* Secrets**，也无需 GitHub Actions 到服务器的入站 SSH 上传。
 
-服务器更新器要求两项 Actions 验证都通过，并再次核验压缩包的 SHA-256、镜像自带提交 SHA，才执行 `docker load`、`docker compose up --no-build` 和健康检查。传输失败不会触发本地编译，更不会重启已有健康容器。仍应保留足够磁盘空间容纳新旧镜像与回滚所需数据。
-
-**现有宿主机如仍安装的是本地构建版或 GHCR 下载版更新器，需要首次引导迁移。** 详见 [SSH/SCP 专用部署步骤](mv3c/updater/README.md#github-actions--sshscp--mv3c-部署当前方案)。Actions 使用的服务器登录私钥必须与服务器拉取 GitHub 的 Deploy Key 分开配置。
-
-
-最新镜像传输采用 SHA-256 校验的 16MiB 分段 SCP，并通过 GitHub Actions Cache 复用同一压缩包。单次传输失败时，在 Actions 内运行 `mv3c SCP transfer retry`，输入原 Docker Build 运行 ID，即可不重新构建、从已完整上传的分段续传。此前 #94 的旧整包上传无法直接复用，详见 [更新器文档](mv3c/updater/README.md#大镜像上传超时与断点续传2026-10-22)。本机制仍依赖实际 SSH 网络带宽，不保证比 GHCR 或其他线路更快。
+已经安装旧的 SCP 镜像更新器时，必须先按 [一次性迁移步骤](mv3c/updater/README.md#从旧的-scp--预构建镜像更新器迁移仅执行一次) 引导新版宿主机脚本，否则老更新器仍会等待不存在的镜像存档。不要清理 Docker 构建缓存或业务数据卷。
