@@ -27,6 +27,27 @@ SSH_OPTIONS=(-o BatchMode=yes -o StrictHostKeyChecking=yes
 SCP_OPTIONS=(-o BatchMode=yes -o StrictHostKeyChecking=yes
   -o UserKnownHostsFile="$WORK/known_hosts" -o ConnectTimeout=15
   -o ServerAliveInterval=20 -o ServerAliveCountMax=5 -i "$WORK/deploy_key" -P "$PORT")
+# Verify pinned host identity and receiver BEFORE exporting ~700MB.
+# Never accept an opportunistically scanned host key.
+HOST_LOOKUP="$MV3C_SCP_HOST"
+if (( 10#$PORT != 22 )); then
+  HOST_LOOKUP="[$MV3C_SCP_HOST]:$((10#$PORT))"
+fi
+if ! ssh-keygen -F "$HOST_LOOKUP" -f "$WORK/known_hosts" >/dev/null 2>&1; then
+  echo "::error title=SSH known_hosts mismatch::MV3C_SCP_KNOWN_HOSTS has no trusted key for the exact MV3C_SCP_HOST and port. For port 22 use HOST ssh-ed25519 AAAA...; otherwise use [HOST]:PORT ssh-ed25519 AAAA... . Use the server SSH host key, not the upload account key or fingerprint." >&2
+  exit 47
+fi
+if ! ssh-keygen -F "$HOST_LOOKUP" -f "$WORK/known_hosts" | grep -q "ssh-ed25519"; then
+  echo "::error title=SSH key type mismatch::MV3C_SCP_KNOWN_HOSTS does not pin an ED25519 host key for this SSH destination." >&2
+  exit 48
+fi
+DEST="$MV3C_SCP_USER@$MV3C_SCP_HOST"
+echo "Checking strict SSH host identity, upload key and inbox before image export"
+if ! ssh "${SSH_OPTIONS[@]}" -p "$PORT" "$DEST" "test -w '$REMOTE_DIR'"; then
+  echo "::error title=SSH/SCP preflight failed::Check pinned server host key, SSH upload private key authorization and inbox permissions. Image export was skipped." >&2
+  exit 49
+fi
+echo "SSH/SCP receiver preflight succeeded"
 docker image tag mv3c:ci "$IMAGE"
 test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$GITHUB_SHA"
 ARCHIVE="mv3c-$GITHUB_SHA.tar.gz"
@@ -36,7 +57,6 @@ docker save "$IMAGE" | gzip -1 > "$WORK/$ARCHIVE"
 sha256sum "$WORK/$ARCHIVE" | cut -d ' ' -f1 > "$WORK/$CHECKSUM"
 test -s "$WORK/$ARCHIVE"
 echo "SCP archive size: $(wc -c < "$WORK/$ARCHIVE") bytes"
-DEST="$MV3C_SCP_USER@$MV3C_SCP_HOST"
 # Stage both files before publishing checksum sidecar as the ready marker.
 scp "${SCP_OPTIONS[@]}" "$WORK/$ARCHIVE" "$DEST:$REMOTE_DIR/$ARCHIVE.part"
 scp "${SCP_OPTIONS[@]}" "$WORK/$CHECKSUM" "$DEST:$REMOTE_DIR/$CHECKSUM.part"
