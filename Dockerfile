@@ -16,9 +16,10 @@ ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
 # Disable dependency installation analytics before any npm lifecycle scripts run.
 ENV SCARF_ANALYTICS=false
 
-# Add `uv` for extended MCP support
-COPY --from=ghcr.io/astral-sh/uv:0.9.5-python3.12-alpine /usr/local/bin/uv /usr/local/bin/uvx /bin/
-RUN uv --version
+# uv and uvx are already installed by apk above. Do not fetch a second
+# multi-layer Alpine/Python uv image from GHCR on production host builds.
+# Alpine's 'uv' package provides both executables; verify both at build time.
+RUN uv --version && uvx --version
 
 # Set configurable max-old-space-size with default
 ARG NODE_MAX_OLD_SPACE_SIZE=6144
