@@ -1,6 +1,5 @@
 """Pure, network-free tests for the privileged host updater."""
 import importlib.util
-import hashlib
 import tempfile
 import pathlib
 import unittest
@@ -175,91 +174,116 @@ class HostUpdaterTests(unittest.TestCase):
         with self.assertRaises(agent.UpdateError):
             agent.image_for_sha("abcd")
 
-    def test_archive_names_are_pinned_to_exact_sha(self):
-        with tempfile.TemporaryDirectory() as temp:
-            path, checksum = agent.archive_paths(SHA2, pathlib.Path(temp))
-            self.assertEqual(path.name, "mv3c-" + SHA2 + ".tar.gz")
-            self.assertEqual(checksum.name, "mv3c-" + SHA2 + ".sha256")
-            with self.assertRaises(agent.UpdateError):
-                agent.archive_paths("../../etc/passwd", pathlib.Path(temp))
-
-    def test_archive_integrity_gate_checks_payload_and_rejects_symlink(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = pathlib.Path(temp)
-            archive, sidecar = agent.archive_paths(SHA2, root)
-            data = b"gzip-compressed-docker-test-archive" * 64
-            archive.write_bytes(data)
-            sidecar.write_text(hashlib.sha256(data).hexdigest() + "\n")
-            self.assertEqual(agent.verify_scp_archive(SHA2, root), archive)
-            sidecar.write_text("a" * 64 + "\n")
-            with self.assertRaisesRegex(agent.UpdateError, "checksum mismatch"):
-                agent.verify_scp_archive(SHA2, root)
-            archive.unlink()
-            archive.symlink_to("/etc/passwd")
-            with self.assertRaisesRegex(agent.UpdateError, "regular"):
-                agent.verify_scp_archive(SHA2, root)
-
-    def test_mismatched_loaded_docker_revision_prevents_deployment(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = pathlib.Path(temp)
-            archive, sidecar = agent.archive_paths(SHA2, root)
-            data = b"gzip-compressed-docker-test-archive" * 64
-            archive.write_bytes(data)
-            sidecar.write_text(hashlib.sha256(data).hexdigest() + "\n")
-            def fake_run(args, _repo, **_kwargs):
-                if args[:3] == ["docker", "image", "inspect"]:
-                    return SHA1
-                return "Loaded image: mv3c:sha-" + SHA2
-            with patch.object(agent, "run", side_effect=fake_run):
-                with self.assertRaisesRegex(agent.UpdateError, "revision mismatch"):
-                    agent.load_prebuilt_image(root, SHA2, root)
-
-    def test_missing_scp_archive_does_not_restart_current_healthy_service(self):
+    def test_local_build_reuses_docker_layers_and_npm_cache(self):
         commands = []
-        def fake_run(args, _repo, **_kwargs):
-            commands.append(args)
-            return "OK"
+        def fake_run(args, _repo, **kwargs):
+            commands.append((args, kwargs))
+            if args[:3] == ["docker", "image", "inspect"]:
+                return SHA2
+            return "#1 CACHED\\n#2 build successful"
         with patch.object(agent, "run", side_effect=fake_run):
-            with patch.object(agent, "git") as git:
-                with patch.object(agent, "wait_healthy") as healthy:
-                    outcome, log, error = agent.deploy(
-                        pathlib.Path("/tmp"), SHA1, SHA2)
-        self.assertEqual(outcome, "failed")
-        self.assertIn("SCP image has not arrived", error)
-        self.assertIn("current containers unchanged", log)
-        git.assert_not_called()
-        healthy.assert_not_called()
-        self.assertFalse(commands, "Missing artifact must leave Docker and Git untouched")
+            agent.build_local_image(pathlib.Path("/tmp"), SHA2)
+        build, kwargs = commands[0]
+        self.assertEqual(build[:3], ["docker", "build", "--progress=plain"])
+        self.assertEqual(build[-1], ".")
+        self.assertIn("NODE_MAX_OLD_SPACE_SIZE=3072", build)
+        self.assertIn("BUILD_COMMIT=" + SHA2, build)
+        self.assertIn("NPM_CI_TIMEOUT_SECONDS=1800", build)
+        self.assertNotIn("--no-cache", build)
+        self.assertNotIn("--pull", build)
+        self.assertEqual(kwargs["env"]["DOCKER_BUILDKIT"], "1")
+        self.assertEqual(commands[1][0][-1], "mv3c:sha-" + SHA2)
+        with patch.dict(agent.os.environ, {"MV3C_BUILD_NODE_HEAP_MB": "evil"}):
+            with self.assertRaises(agent.UpdateError):
+                agent.build_local_image(pathlib.Path("/tmp"), SHA2)
 
-    def test_successful_scp_image_deploy_never_builds_or_pulls(self):
+    def test_local_build_image_revision_mismatch_blocks_switch(self):
+        with patch.object(agent, "run", return_value=SHA1):
+            with self.assertRaisesRegex(agent.UpdateError, "revision mismatch"):
+                agent.verify_built_image(pathlib.Path("/tmp"), SHA2)
+
+    def test_capacity_gate_preserves_host_when_disk_is_low(self):
+        from collections import namedtuple
+        Usage = namedtuple("Usage", "total used free")
+        with patch.object(agent.shutil, "disk_usage", return_value=Usage(10, 9, 1)):
+            with self.assertRaisesRegex(agent.UpdateError, "less than 3 GiB"):
+                agent.check_build_capacity(pathlib.Path("/tmp"))
+
+    def test_successful_local_build_is_verified_before_container_switch(self):
         commands = []
         phases = []
-        def fake_run(args, _repo, **_kwargs):
+        def fake_run(args, _repo, **kwargs):
             commands.append(args)
             return "OK"
-        with patch.object(agent, "load_prebuilt_image", return_value=agent.image_for_sha(SHA2)) as load:
-            with patch.object(agent, "run", side_effect=fake_run):
-                with patch.object(agent, "git"):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = pathlib.Path(tmp)
+            with patch.object(agent, "check_build_capacity"):
+                with patch.object(agent, "build_local_image") as build:
+                    with patch.object(agent, "run", side_effect=fake_run):
+                        with patch.object(agent, "git"):
+                            with patch.object(agent, "wait_healthy"):
+                                with patch.object(agent, "verify_deployment",
+                                                  return_value="Post-deploy validation PASSED"):
+                                    result = agent.deploy(repo, SHA1, SHA2,
+                                        on_progress=lambda stage, pct, msg:
+                                            phases.append((stage, pct, msg)))
+            self.assertFalse(agent.transaction_path(repo).exists())
+        self.assertEqual((result[0], result[2]), ("success", ""))
+        build.assert_called_once_with(repo, SHA2)
+        self.assertIn("Cached host Docker build", result[1])
+        self.assertIn("building", [step[0] for step in phases])
+        self.assertEqual(len([cmd for cmd in commands if cmd[:3] ==
+                              ["docker", "compose", "up"]]), 1)
+        self.assertTrue(any(cmd[:3] == ["docker", "image", "tag"] and
+                            "mv3c:rollback" in cmd for cmd in commands))
+        self.assertFalse(any("--build" in cmd for cmd in commands))
+
+    def test_failed_build_keeps_running_container_and_rolls_back_git(self):
+        commands = []
+        def fake_run(args, _repo, **kwargs):
+            commands.append(args)
+            return "OK"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = pathlib.Path(tmp)
+            with patch.object(agent, "check_build_capacity"):
+                with patch.object(agent, "build_local_image",
+                                  side_effect=agent.UpdateError("npm ci failed")):
+                    with patch.object(agent, "run", side_effect=fake_run):
+                        with patch.object(agent, "git") as git:
+                            with patch.object(agent, "wait_healthy"):
+                                with patch.object(agent, "verify_deployment",
+                                                  return_value="Post-deploy validation PASSED"):
+                                    result = agent.deploy(repo, SHA1, SHA2)
+            self.assertFalse(agent.transaction_path(repo).exists())
+        self.assertEqual(result[0], "rolled_back")
+        self.assertIn("npm ci failed", result[2])
+        self.assertFalse(any(cmd[:3] == ["docker", "compose", "up"]
+                             for cmd in commands),
+                         "Build failure must not interrupt live application")
+        self.assertTrue(any(x.args[1:3] == ("reset", "--hard")
+                            for x in git.call_args_list))
+
+    def test_interrupted_transaction_restores_verified_old_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = pathlib.Path(tmp)
+            agent.save_transaction(repo, SHA1, SHA2)
+            def fake_run(args, _repo, **kwargs):
+                if args[:3] == ["docker", "compose", "ps"]:
+                    return "container-1"
+                if args[:2] == ["docker", "inspect"]:
+                    return "sha256:old-image"
+                if args[:3] == ["docker", "image", "inspect"]:
+                    return "sha256:old-image"
+                return ""
+            with patch.object(agent, "git", return_value=SHA2):
+                with patch.object(agent, "run", side_effect=fake_run) as run:
                     with patch.object(agent, "wait_healthy"):
-                        with patch.object(agent, "verify_deployment",
-                                          return_value="Post-deploy validation PASSED") as check:
-                            outcome, log, error = agent.deploy(
-                                pathlib.Path("/tmp"), SHA1, SHA2,
-                                on_progress=lambda stage, percent, message:
-                                    phases.append((stage, percent, message)))
-        self.assertEqual((outcome, error), ("success", ""))
-        self.assertIn("SCP SHA256 verified prebuilt image", log)
-        load.assert_called_once_with(pathlib.Path("/tmp"), SHA2)
-        check.assert_called_once_with(pathlib.Path("/tmp"), SHA2)
-        self.assertEqual([p[0] for p in phases],
-                         ["pulling", "backup", "merging", "restarting",
-                          "verifying", "verifying"])
-        self.assertFalse(any(cmd[:2] == ["docker", "pull"] or
-                             cmd[:3] == ["docker", "compose", "build"]
-                             for cmd in commands))
-        self.assertTrue(any(cmd[:3] == ["docker", "compose", "up"] and
-                            "--no-build" in cmd and "--pull" in cmd
-                            for cmd in commands))
+                        with patch.object(agent, "verify_deployment", return_value="PASSED"):
+                            msg = agent.restore_interrupted_local_deploy(repo)
+            self.assertIn("restored", msg)
+            self.assertFalse(agent.transaction_path(repo).exists())
+            self.assertFalse(any(x.args[0][:3] == ["docker", "compose", "up"]
+                                 for x in run.call_args_list))
 
     def test_post_deploy_checks_sha_container_and_http(self):
         class Response:
