@@ -271,6 +271,8 @@ class HostUpdaterTests(unittest.TestCase):
                 if args[:3] == ["docker", "compose", "ps"]:
                     return "container-1"
                 if args[:2] == ["docker", "inspect"]:
+                    if "Health.Status" in " ".join(args):
+                        return "healthy"
                     return "sha256:old-image"
                 if args[:3] == ["docker", "image", "inspect"]:
                     return "sha256:old-image"
