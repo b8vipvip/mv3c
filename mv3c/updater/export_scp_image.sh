@@ -73,7 +73,7 @@ else
 fi
 test -s "$WORK/$ARCHIVE"
 echo "SCP archive size: $(wc -c < "$WORK/$ARCHIVE") bytes"
-# Transfer fixed-size, checksum-verified chunks. A failed Actions run can
+# Transfer fixed-size, checksum-verified chunks using SSH stdin streaming.\n# This intentionally avoids OpenSSH scp default SFTP subsystem: command-mode SSH\n# is already validated by preflight, while a broken SFTP subsystem can hang.\n# A failed Actions run can
 # resume verified chunks on the next run instead of resending the entire ~700MB
 # archive. Use only OpenSSH/SCP; rsync is not required on the Ubuntu host.
 CHUNK_DIR="$REMOTE_DIR/.mv3c-parts-$GITHUB_SHA"
@@ -126,7 +126,8 @@ for piece in "${pieces[@]}"; do
   for attempt in 1 2 3; do
     echo "SCP chunk $i/$total: uploading $name ($(wc -c < "$piece") bytes), attempt $attempt/$SCP_CHUNK_RETRIES"
     if timeout --signal=TERM --kill-after=10s "$SCP_CHUNK_TIMEOUT_SECONDS" \
-      scp "${SCP_OPTIONS[@]}" "$piece" "$DEST:$CHUNK_DIR/$name.part"; then
+      ssh "${SSH_OPTIONS[@]}" -T -p "$PORT" "$DEST" \
+        "cat > '$CHUNK_DIR/$name.part'" < "$piece"; then
       remote_sha="$(ssh "${SSH_OPTIONS[@]}" -p "$PORT" "$DEST" \
         "cd '$CHUNK_DIR' && test -f '$name.part' && sha256sum '$name.part' | cut -d ' ' -f1" || true)"
       if [[ "$remote_sha" == "$digest" ]] &&
@@ -137,7 +138,7 @@ for piece in "${pieces[@]}"; do
       fi
       echo "::warning::SCP chunk $name failed remote SHA256 verification" >&2
     else
-      echo "::warning::SCP chunk $name interrupted or stalled after 480s" >&2
+      echo "::warning::SSH stream chunk $name interrupted or stalled after 480s" >&2
     fi
     sleep 4
   done
