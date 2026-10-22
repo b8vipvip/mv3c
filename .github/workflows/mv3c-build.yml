@@ -109,10 +109,9 @@ jobs:
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' mv3c:ci)" = "${GITHUB_SHA}"
-      - name: Package smoke-tested image as a reusable Actions artifact
+      - name: Check delivery configuration
         id: scp_package
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        timeout-minutes: 20
         env:
           MV3C_SCP_HOST: ${{ secrets.MV3C_SCP_HOST }}
           MV3C_SCP_USER: ${{ secrets.MV3C_SCP_USER }}
@@ -120,21 +119,28 @@ jobs:
           MV3C_SCP_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
         run: |
           if [[ -n "$MV3C_SCP_HOST" && -n "$MV3C_SCP_USER" && -n "$MV3C_SCP_PRIVATE_KEY" && -n "$MV3C_SCP_KNOWN_HOSTS" ]]; then
-            bash mv3c/updater/create_scp_archive.sh "$RUNNER_TEMP/mv3c-scp-payload"
             echo 'ready=true' >> "$GITHUB_OUTPUT"
           else
             echo 'ready=false' >> "$GITHUB_OUTPUT"
-            echo '::warning::SCP secrets incomplete; Actions image verified but delivery is not configured'
+            echo '::warning::SCP secrets incomplete; Actions image verified but delivery skipped'
           fi
-      - name: Cache exact CI image bytes for transfer-only retries
+      - name: Restore exact image from Actions cache when rebuilding the same commit
+        id: scp_cache
         if: steps.scp_package.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/cache/restore@v4
         with:
-          name: mv3c-scp-${{ github.sha }}
           path: ${{ runner.temp }}/mv3c-scp-payload
-          retention-days: 3
-          compression-level: 0
-          if-no-files-found: error
+          key: mv3c-scp-image-${{ github.sha }}
+      - name: Package tested image exactly once when cache is absent
+        if: steps.scp_package.outputs.ready == 'true' && steps.scp_cache.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: bash mv3c/updater/create_scp_archive.sh "$RUNNER_TEMP/mv3c-scp-payload"
+      - name: Save verified image to short-lived Actions cache for transfer-only retries
+        if: steps.scp_package.outputs.ready == 'true' && steps.scp_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/mv3c-scp-payload
+          key: mv3c-scp-image-${{ github.sha }}
       - name: Upload saved verified image with resumable 16MiB SCP chunks
         if: steps.scp_package.outputs.ready == 'true'
         timeout-minutes: 100
