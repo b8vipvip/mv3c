@@ -66,6 +66,24 @@ class HostUpdaterTests(unittest.TestCase):
             "checkRequestedAt": now, "config": {"intervalMinutes": 60},
         }))
 
+    def test_lock_contention_blocks_bootstrap_but_allows_timer_skip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for bootstrap, should_fail in ((True, True), (False, False)):
+                argv = ["agent.py", "--repo", directory]
+                if bootstrap:
+                    argv.append("--bootstrap-local")
+                with patch.object(agent.sys, "argv", argv), \\
+                     patch.object(agent.os, "geteuid", return_value=0), \\
+                     patch.object(agent.Path, "open") as open_lock, \\
+                     patch.object(agent.fcntl, "flock", side_effect=BlockingIOError):
+                    open_lock.return_value.__enter__.return_value.fileno.return_value = 9
+                    if should_fail:
+                        with self.assertRaisesRegex(agent.UpdateError,
+                                                    "Bootstrap was NOT run"):
+                            agent.main()
+                    else:
+                        self.assertEqual(agent.main(), 0)
+
     def test_host_git_commands_enforce_noninteractive_ssh(self):
         with patch.object(agent, "run", return_value="ok") as run:
             self.assertEqual(agent.git(pathlib.Path("/tmp"), "fetch", "origin", "main"), "ok")
