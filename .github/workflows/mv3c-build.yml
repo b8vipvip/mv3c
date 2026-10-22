@@ -16,7 +16,7 @@ permissions:
 jobs:
   docker-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 140
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Preflight pinned SSH/SCP host identity before Docker build
