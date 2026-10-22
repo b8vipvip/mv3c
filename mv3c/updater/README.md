@@ -156,3 +156,13 @@ sudo systemctl start mv3c-updater.timer
 - SHA-256 主要保证文件传输完整性；结合固定来源的 SSH Key、GitHub CI 和镜像提交标识完成多步验证。若 SSH 私钥被泄露，必须撤销授权。
 - 新版保留更新失败后的旧镜像回滚；数据库 schema 的不可逆迁移仍应单独备份。
 
+
+### 大镜像上传超时与断点续传（2026-10-22）
+
+GitHub Actions #94 的 SSH 预检通过、镜像生成约 729MB，但整包 SCP 在 **40 分钟**上限内一直传输并最终超时。这是 GitHub Runner 到 Ubuntu 的实际链路带宽/稳定性问题，和 Docker 构建失败、主机密钥失败不同。
+
+新上传器采用 **16MiB 分段 + 每段远端 SHA-256 核验 + 中断重试 + 分段进度日志**。已完成的分段暂存在 `/var/lib/mv3c-prebuilt/incoming/.mv3c-parts-<SHA>/`，只会在合并完整压缩包并通过整包 SHA-256 后发布 `.tar.gz` 与 `.sha256`；失败不会触发当前业务容器重启。单段最长传输 480 秒，最多重试 3 次，整次 SCP 最多 100 分钟。分段续传改善**失败恢复和可观测性**，但并不保证提高线路带宽。
+
+正常 `mv3c source Docker build` 在成功构建且测试通过后，将同一镜像 gzip 与校验和保存在 GitHub Actions 的 SHA 固定 Cache（默认仓库 Cache 限额 10GB）；传输失败时不要重新执行 Docker 构建，使用 GitHub Actions → **mv3c SCP transfer retry**，输入原来的 **source_run_id** 即可重复传输同一压缩包，服务端上已有的正确分段会自动跳过。重试入口只接受与当前 main 完整 SHA 一致、确实通过了构建/真实冒烟/更新器验证的官方源码构建运行。若 Cache 已被 GitHub 自动清理或对应提交不是最新 main，则应通过主构建工作流重新构建，不可绕过 CI。
+
+镜像上传成功后宿主机仍需进行旧更新器一次性迁移；上传本身不部署站点。服务端最初的 #94 使用旧整包 SCP，没有生成可供重试的 Actions 缓存，因此**无法用本功能恢复 #94**，需要在合并此功能后重新执行一次 main 构建。
