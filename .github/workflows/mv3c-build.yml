@@ -87,10 +87,8 @@ jobs:
           docker compose exec -T mv3c node /app/mv3c/updater/tests/integration.cjs
           docker compose exec -T mv3c node /app/mv3c/updater/bridge.cjs state > /tmp/mv3c-updater-state.json
           node -e "const x=require('/tmp/mv3c-updater-state.json');if(!x.config||x.config.channel!=='main')process.exit(1);console.log('Updater database bridge ready')"
-      # GitHub Actions builds AND validates the actual image, then ships the
-      # immutable artifact via SSH/SCP. No registry and no host-side build.
-      # The receiving SSH account can only write to the inbox; it cannot run
-      # Docker, update the code checkout or modify app data.
+      # CI validates the commit. Production hosts independently pull the same
+      # SHA and build with persistent Docker layer and BuildKit npm caches.
       - name: Check immutable image revision
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
