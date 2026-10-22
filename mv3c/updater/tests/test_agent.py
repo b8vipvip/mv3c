@@ -72,10 +72,12 @@ class HostUpdaterTests(unittest.TestCase):
                 argv = ["agent.py", "--repo", directory]
                 if bootstrap:
                     argv.append("--bootstrap-local")
-                with patch.object(agent.sys, "argv", argv), \\
-                     patch.object(agent.os, "geteuid", return_value=0), \\
-                     patch.object(agent.Path, "open") as open_lock, \\
-                     patch.object(agent.fcntl, "flock", side_effect=BlockingIOError):
+                with (
+                    patch.object(agent.sys, "argv", argv),
+                    patch.object(agent.os, "geteuid", return_value=0),
+                    patch.object(agent.Path, "open") as open_lock,
+                    patch.object(agent.fcntl, "flock", side_effect=BlockingIOError),
+                ):
                     open_lock.return_value.__enter__.return_value.fileno.return_value = 9
                     if should_fail:
                         with self.assertRaisesRegex(agent.UpdateError,
