@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+from collections import deque
 import fcntl
 import shutil
 import json
@@ -34,6 +35,7 @@ USER_AGENT = "mv3c-updater/4.0"
 # Local Docker images remain in the host cache across updates. The GitHub
 # Actions image is tested for the exact SHA, but does not need to be transferred.
 MIN_DOCKER_FREE_BYTES = 3 * 1024 ** 3
+BUILD_LOG_PATH = Path("/var/log/mv3c-updater-build.log")
 
 
 def image_for_sha(sha: str) -> str:
@@ -88,8 +90,46 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
+                     env: dict[str, str] | None) -> str:
+    """Stream build output to a root-only host log and retain useful errors.
+
+    A failed registry pull can emit thousands of progress lines AFTER the
+    actual error. Never keep only stdout[-3000:] or lose the failure reason.
+    The fixed log is overwritten per build and contains no app credentials.
+    """
+    fd = os.open(BUILD_LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        try:
+            completed = subprocess.run(args, cwd=cwd, stdout=stream,
+                                       stderr=subprocess.STDOUT, timeout=timeout,
+                                       env=env, check=False)
+            code = completed.returncode
+        except subprocess.TimeoutExpired:
+            code = 124
+    important = deque(maxlen=12)
+    tail = deque(maxlen=22)
+    with BUILD_LOG_PATH.open("r", encoding="utf-8", errors="replace") as stored:
+        for line in stored:
+            line = line.rstrip()[:1000]
+            tail.append(line)
+            if re.search(r"(?i)(?:\berror[: ]|failed to|unexpected eof|connection reset|"
+                         r"deadline exceeded|tls handshake|timed out|timeout|"
+                         r"no space left|out of memory|network is unreachable|"
+                         r"not found|denied|429 too many requests)", line):
+                important.append(line)
+    summary = "\n".join(important)[:2000] + "\nLast output:\n" + "\n".join(tail)[-1800:]
+    if code:
+        raise UpdateError("docker build failed (exit {}), full log: {}\n{}".format(
+            code, BUILD_LOG_PATH, summary))
+    return "Docker build succeeded; full log: " + str(BUILD_LOG_PATH) + "\n" + "\n".join(tail)[-1000:]
+
+
 def run(args: list[str], cwd: Path, *, input_data: str | None = None,
         timeout: int = 120, env: dict[str, str] | None = None) -> str:
+    if args[:2] == ["docker", "build"]:
+        return run_docker_build(args, cwd, timeout=timeout, env=env)
     try:
         completed = subprocess.run(
             args, cwd=cwd, input=input_data, text=True, env=env,
@@ -409,6 +449,11 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
     except Exception as error:
         failure = str(error)[:1600]
         log.append("Deployment failed: " + failure)
+        # The database diagnostic report retains the build error, but admins
+        # commonly inspect systemd output first. Never hide the reason behind
+        # a generic rolled_back status.
+        print("mv3c deployment failure before rollback: " + failure[:1000],
+              file=sys.stderr, flush=True)
         if not backed_up:
             log.append("Preflight failed; live container, Git and image unchanged")
             return "failed", "\n".join(log)[-24000:], failure
@@ -618,6 +663,10 @@ def execute(repo: Path) -> None:
              sha=target if outcome == "success" else old, attempted=target,
              verification=validation_line)
     print("mv3c update:", outcome, flush=True)
+    if outcome not in ("success", "skipped"):
+        # Preserve the database completion first, then let systemd signal the
+        # failed attempted deployment instead of reporting a green oneshot.
+        raise UpdateError("Deployment " + outcome + ": " + error[:1000])
 
 
 def main() -> int:
@@ -634,6 +683,12 @@ def main() -> int:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            if args.bootstrap_local:
+                raise UpdateError(
+                    "Bootstrap was NOT run: another mv3c updater holds the lock. "
+                    "Stop the timer, wait for the existing service to finish, "
+                    "then retry migration before installing a new updater."
+                )
             print("Another mv3c update check is already running")
             return 0
         if args.bootstrap_local:

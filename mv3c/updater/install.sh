@@ -95,8 +95,9 @@ Unit=mv3c-updater.service
 WantedBy=timers.target
 UNIT
 systemctl daemon-reload
+# The timer schedules the first run. Do not synchronously start the oneshot
+# here: it can take up to 90 minutes and race with a one-time bootstrap.
 systemctl enable --now mv3c-updater.timer
-systemctl start mv3c-updater.service
 echo
 echo "mv3c 宿主机更新服务已启用："
 systemctl --no-pager status mv3c-updater.timer || true

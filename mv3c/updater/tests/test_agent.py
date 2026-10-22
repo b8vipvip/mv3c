@@ -66,6 +66,26 @@ class HostUpdaterTests(unittest.TestCase):
             "checkRequestedAt": now, "config": {"intervalMinutes": 60},
         }))
 
+    def test_lock_contention_blocks_bootstrap_but_allows_timer_skip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for bootstrap, should_fail in ((True, True), (False, False)):
+                argv = ["agent.py", "--repo", directory]
+                if bootstrap:
+                    argv.append("--bootstrap-local")
+                with (
+                    patch.object(agent.sys, "argv", argv),
+                    patch.object(agent.os, "geteuid", return_value=0),
+                    patch.object(agent.Path, "open") as open_lock,
+                    patch.object(agent.fcntl, "flock", side_effect=BlockingIOError),
+                ):
+                    open_lock.return_value.__enter__.return_value.fileno.return_value = 9
+                    if should_fail:
+                        with self.assertRaisesRegex(agent.UpdateError,
+                                                    "Bootstrap was NOT run"):
+                            agent.main()
+                    else:
+                        self.assertEqual(agent.main(), 0)
+
     def test_host_git_commands_enforce_noninteractive_ssh(self):
         with patch.object(agent, "run", return_value="ok") as run:
             self.assertEqual(agent.git(pathlib.Path("/tmp"), "fetch", "origin", "main"), "ok")
@@ -173,6 +193,27 @@ class HostUpdaterTests(unittest.TestCase):
             agent.image_for_sha("latest")
         with self.assertRaises(agent.UpdateError):
             agent.image_for_sha("abcd")
+
+    def test_failed_build_log_keeps_first_registry_error(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as temp:
+            logfile = pathlib.Path(temp) / "build.log"
+            def fake_build(_args, **kwargs):
+                stream = kwargs["stdout"]
+                stream.write(b"#10 ERROR: failed to fetch image: network timeout\\n")
+                for index in range(80):
+                    stream.write(("#10 downloading layer %s\\n" % index).encode())
+                return SimpleNamespace(returncode=1)
+            with patch.object(agent, "BUILD_LOG_PATH", logfile):
+                with patch.object(agent.subprocess, "run", side_effect=fake_build):
+                    with self.assertRaises(agent.UpdateError) as caught:
+                        agent.run(["docker", "build", "-t", "mv3c:sha-" + SHA2, "."],
+                                  pathlib.Path(temp), timeout=30)
+            error = str(caught.exception)
+            self.assertIn("failed to fetch image: network timeout", error)
+            self.assertIn(str(logfile), error)
+            self.assertIn("downloading layer 79", logfile.read_text())
+            self.assertEqual(logfile.stat().st_mode & 0o777, 0o600)
 
     def test_local_build_reuses_docker_layers_and_npm_cache(self):
         commands = []

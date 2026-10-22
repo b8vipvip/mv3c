@@ -61,6 +61,8 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 
 若 bootstrap 失败：**保留旧容器、Docker 镜像与数据卷**，不要手动删除镜像或强行 Git reset。查看错误日志，必要时按实际结果恢复更新器 timer。更新器自身在构建失败时负责 Git 回滚；若宿主机异常重启则会在下次执行恢复事务日志。
 
+**迁移锁与回滚排查：** 若看到 `Another mv3c update check is already running`，说明其他更新任务持有锁，首次 bootstrap 尚未启动，不得将其视为迁移成功。先停止 timer，确认已有 `mv3c-updater.service` 执行结束，再重新运行 bootstrap；无需删除锁文件。新的 bootstrap 遇到锁冲突会返回非零退出码，阻止部署脚本错误地继续安装。安装脚本只启用 timer，不再同步等待可能耗时很长的 oneshot 更新器。若看到 `mv3c update: rolled_back`，表示部署失败后已恢复旧版本，**不是**新版本部署成功。到管理后台「版本更新」→「最近更新记录」下载该次部署诊断报告，其 `error` / `Deployment log` 才是定位构建、网络或镜像失败的关键证据；宿主机 `journalctl -u mv3c-updater.service` 也会输出简短失败原因。
+
 之前添加的 `MV3C_SCP_*` Actions Secrets 不再参与部署；可以在验证迁移后手动撤销上传密钥并删除对应 Secrets。专用的 `mv3c-transfer` 用户如果已存在，不建议在未检查其它用途前直接删除。
 
 ## 缓存、资源与故障排查
@@ -70,7 +72,8 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 - **内存**：构建默认使用 `NODE_MAX_OLD_SPACE_SIZE=3072`（MiB），可通过 systemd 环境变量 `MV3C_BUILD_NODE_HEAP_MB=2048` 等按宿主机内存调整，范围 1024–8192。需要给 Docker/Node 构建留足内存与 swap，不能保证所有小内存 VPS 都能顺利构建。
 - **磁盘**：构建前要求 Docker 数据目录至少 3 GiB 可用（并非构建一定只占 3 GiB），新旧镜像和构建缓存会暂时并存。先用 `df -h /var/lib/docker`、`docker system df` 检查，避免删除 MongoDB 或业务数据卷。
 - **Git 获取**：默认优先非交互 SSH，失败回退固定 HTTPS 地址；必须保持 `main`、Git 工作区没有已跟踪文件修改，且通过固定来源的 CI。前端容器无 Docker socket 权限。
-- **更新日志**：`sudo journalctl -u mv3c-updater.service -n 200 --no-pager`。后台更新记录可下载本次任务诊断报告，包含阶段、错误原因和验收结果。
+- **更新日志**：`sudo journalctl -u mv3c-updater.service -n 200 --no-pager`。后台更新记录可下载本次任务诊断报告。宿主机还会将最新一次 **完整 Docker 构建输出**保存在仅 root 可读的 `/var/log/mv3c-updater-build.log`，供 `sudo tail -n 120 /var/log/mv3c-updater-build.log` 检查（每次构建覆盖，不需要再次部署即可提取日志）。遇到错误会从完整输出中提取关键错误行，避免被 Docker 下载进度刷屏覆盖。
+- **受限镜像仓库**：历史 Dockerfile 同时通过 `apk add uv` 安装 `uv`，又从 GHCR 外部镜像复制 `uv/uvx`，使服务器本机构建额外依赖 GHCR 的镜像层下载。现改为仅依赖 Alpine 包管理器安装的 `uv` 与 `uvx`，构建时检查两个命令。不能由旧的下载进度片段证明故障层一定来自 GHCR；如果仍卡在 `FROM node:...` 或 apk 下载，需要用新的完整构建日志定位。由于 Dockerfile 变化可能使后续层缓存失效，首次改版构建可能重新执行 npm ci，但会尽量复用 BuildKit 包缓存。
 - **健康检查**：更新后必须核验运行镜像、容器健康及两个 HTTP 接口。数据库结构不可逆升级需要单独备份；镜像回滚并不等同于数据库数据回滚。
 
 如需手动查看当前运行状态：
