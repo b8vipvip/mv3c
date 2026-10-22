@@ -78,7 +78,7 @@ fi
 
 # Avoid filling a small system disk when the archive and its assembled copy
 # briefly coexist. Preserve all running containers and volumes.
-free_kb="$(ssh "${SSH_OPTIONS[@]}" -p "$PORT" "$DEST" "df -Pk '$REMOTE_DIR' | awk 'END{print \\\$4}'")"
+free_kb="$(ssh "${SSH_OPTIONS[@]}" -p "$PORT" "$DEST" "df -Pk '$REMOTE_DIR' | awk 'END{print \$4}'")"
 [[ "$free_kb" =~ ^[0-9]+$ ]] || { echo "Unable to check destination disk space" >&2; exit 61; }
 if (( free_kb < 4000000 )); then
   echo "::error::Server has less than 4GB free; refusing to upload another image archive" >&2
