@@ -154,6 +154,9 @@ router.use('/v1/skills', skills);
 router.use('/v1', openai);
 
 router.use(requireJwtAuth);
+const enforceGuestQuota = require('~/server/middleware/enforceGuestQuota');
+// One admission guard for all model-bound chat ingress (normal, queued turns and steers).
+router.use('/chat', enforceGuestQuota);
 // Capture the short-lived trigger identity immediately after authentication. Downstream
 // middleware reads this stable decision instead of re-verifying an expired token.
 router.use((req, _res, next) => {
@@ -1225,8 +1228,6 @@ router.delete(
 router.use('/', v1);
 
 const chatRouter = express.Router();
-const enforceGuestQuota = require('~/server/middleware/enforceGuestQuota');
-chatRouter.use(enforceGuestQuota);
 const useMessageIpLimiter = isEnabled(LIMIT_MESSAGE_IP);
 const useMessageUserLimiter = isEnabled(LIMIT_MESSAGE_USER);
 chatRouter.use(chatConfigMiddleware);
