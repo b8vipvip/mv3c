@@ -86,6 +86,18 @@ class HostUpdaterTests(unittest.TestCase):
                     else:
                         self.assertEqual(agent.main(), 0)
 
+    def test_same_sha_bootstrap_only_skips_verified_release_image(self):
+        repo = pathlib.Path("/tmp")
+        with patch.object(agent, "verify_deployment", return_value="PASSED") as verify:
+            self.assertFalse(agent.bootstrap_needs_deploy(repo, SHA2, SHA2))
+            verify.assert_called_once_with(repo, SHA2)
+        with patch.object(agent, "verify_deployment",
+                          side_effect=agent.UpdateError("Release image version mismatch")):
+            self.assertTrue(agent.bootstrap_needs_deploy(repo, SHA2, SHA2))
+        with patch.object(agent, "verify_deployment") as verify:
+            self.assertTrue(agent.bootstrap_needs_deploy(repo, SHA1, SHA2))
+            verify.assert_not_called()
+
     def test_host_git_commands_enforce_noninteractive_ssh(self):
         with patch.object(agent, "run", return_value="ok") as run:
             self.assertEqual(agent.git(pathlib.Path("/tmp"), "fetch", "origin", "main"), "ok")
