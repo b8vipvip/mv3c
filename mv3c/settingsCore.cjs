@@ -202,7 +202,11 @@ function runtimeConfig(doc, keyHex) {
       titleConvo: false,
       summarize: false,
       modelDisplayLabel: 'mv3c',
-      addParams: { useResponsesApi: false, prompt_mode: 'full' },
+      // chat2api permits 600s Worker tasks; LangChain's shorter default
+      // request timeout would abort the upstream at exactly 300s. Give the
+      // sole server Worker deadline a 60s transport margin, never retry a
+      // possibly still-running generation behind its authority.
+      addParams: { useResponsesApi: false, prompt_mode: 'full', timeout: 660000, maxRetries: 0 },
       dropParams: ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty'],
     }] };
   }
