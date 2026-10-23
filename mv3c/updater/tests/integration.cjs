@@ -40,11 +40,12 @@ async function main() {
   assert.equal(initial.status, 200);
   const configResponse = await fetch(api + '/settings', {
     method: 'PUT', headers,
-    body: JSON.stringify({ autoEnabled: false, channel: 'main', intervalMinutes: 15 }),
+    body: JSON.stringify({ autoEnabled: false, channel: 'release', intervalMinutes: 15 }),
   });
   assert.equal(configResponse.status, 200);
   const configured = await configResponse.json();
   assert.equal(configured.config.autoEnabled, false);
+  assert.equal(configured.config.channel, 'release');
   const check = await fetch(api + '/check', { method: 'POST', headers });
   assert.equal(check.status, 200);
   const queuedResponse = await fetch(api + '/deploy', { method: 'POST', headers });
