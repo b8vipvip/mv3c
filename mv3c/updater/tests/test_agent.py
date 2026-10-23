@@ -480,11 +480,15 @@ class HostUpdaterTests(unittest.TestCase):
     def test_post_deploy_checks_sha_container_and_http(self):
         class Response:
             status = 200
+            def __init__(self, url):
+                self.url = url
             def __enter__(self):
                 return self
             def __exit__(self, *args):
                 return False
             def read(self, size):
+                if self.url.endswith("/version"):
+                    return ('{"sha":"' + SHA2 + '","version":"unreleased"}').encode()
                 return b'{"appTitle":"mv3c"}'
         def fake_run(args, _repo, **_kwargs):
             if args[:4] == ["docker", "compose", "ps", "-q"]:
@@ -497,10 +501,10 @@ class HostUpdaterTests(unittest.TestCase):
         with patch.object(agent, "git", return_value=SHA2):
             with patch.object(agent, "run", side_effect=fake_run):
                 with patch.object(agent.urllib.request, "urlopen",
-                                  return_value=Response()) as check:
+                                  side_effect=lambda url, timeout: Response(url)) as check:
                     result = agent.verify_deployment(pathlib.Path("/tmp"), SHA2)
         self.assertIn("Post-deploy validation PASSED", result)
-        self.assertEqual(check.call_count, 2)
+        self.assertEqual(check.call_count, 3)
         with patch.object(agent, "git", return_value=SHA1):
             with self.assertRaisesRegex(agent.UpdateError, "SHA mismatch"):
                 agent.verify_deployment(pathlib.Path("/tmp"), SHA2)
