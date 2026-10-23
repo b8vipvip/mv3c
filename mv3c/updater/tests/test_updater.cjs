@@ -10,6 +10,8 @@ test('update configuration accepts only fixed channels and intervals', () => {
   assert.throws(() => updates.validateConfig({ repository: 'attacker/repo' }));
   assert.throws(() => updates.validateConfig({ intervalMinutes: 1 }));
   assert.throws(() => updates.validateConfig({ channel: '../../evil' }));
+  assert.throws(() => updates.validateConfig({ channel: 'main' }));
+  assert.equal(updates.DEFAULT_CONFIG.channel, 'release');
 });
 
 test('host report validates SHA, URL and prevents arbitrary field updates', () => {
@@ -20,6 +22,9 @@ test('host report validates SHA, URL and prevents arbitrary field updates', () =
   assert.throws(() => updates.validateReport({ currentSha: 'not-a-sha' }));
   assert.throws(() => updates.validateReport({ command: 'rm -rf /' }));
   assert.throws(() => updates.validateReport({ latestUrl: 'https://evil.example.com/' }));
+  assert.deepEqual(updates.validateReport({ currentVersion: 'v0.1.0', latestVersion: 'v0.2.0' }),
+    { currentVersion: 'v0.1.0', latestVersion: 'v0.2.0' });
+  assert.throws(() => updates.validateReport({ latestVersion: 'latest' }));
 });
 
 test('admin update state never exposes secret keys and detects stale host agents', () => {
@@ -35,6 +40,9 @@ test('admin update state never exposes secret keys and detects stale host agents
   assert.equal(formatted.currentSha, doc.currentSha);
   assert.equal(formatted.pendingJob.id, 'job1');
   assert.equal(formatted.config.autoEnabled, false);
+  assert.equal(formatted.config.channel, 'release', 'legacy main policy is migrated on read');
+  assert.equal(formatted.currentVersion, '');
+  assert.equal(formatted.latestVersion, '');
 });
 
 test('progress accepts only bounded stages and safe fields', () => {
