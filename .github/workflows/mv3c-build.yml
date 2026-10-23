@@ -52,6 +52,21 @@ jobs:
             exit 1
           fi
           docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep '^mv3c:'
+      - name: Audit production filesystem footprint
+        run: |
+          # Do not clean anything here. Preserve measurements for future
+          # workspace-scoped slimming without guessing what runtime requires.
+          docker run --rm --entrypoint sh mv3c:ci -c '
+            set -eu
+            test -f /app/api/server/index.js
+            test -f /app/mv3c/entrypoint.sh
+            test -d /app/client/dist
+            test -d /app/node_modules
+            for path in /app/node_modules /app/api /app/client /app/packages /app/mv3c; do
+              du -sh "$path"
+            done
+          '
+          docker history --human --no-trunc mv3c:ci | head -n 25
       - name: Start env-free mv3c and verify public startup
         timeout-minutes: 10
         run: |
