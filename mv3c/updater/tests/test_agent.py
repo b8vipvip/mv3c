@@ -215,6 +215,91 @@ class HostUpdaterTests(unittest.TestCase):
             self.assertIn("downloading layer 79", logfile.read_text())
             self.assertEqual(logfile.stat().st_mode & 0o777, 0o600)
 
+    def test_cache_report_is_monitor_only_and_parses_docker_units(self):
+        self.assertEqual(agent.parse_docker_size("4.204GB"), 4204000000)
+        self.assertEqual(agent.parse_docker_size("453MiB"), 453 * 1024 ** 2)
+        with self.assertRaises(ValueError):
+            agent.parse_docker_size("7 widgets")
+        with patch.object(agent, "run", return_value='{"Type":"Build Cache","Size":"4.204GB"}') as runner:
+            self.assertEqual(agent.build_cache_usage(pathlib.Path("/tmp")), 4204000000)
+        self.assertEqual(runner.call_args.args[0][:3], ["docker", "system", "df"])
+        self.assertFalse(any("prune" in word for word in runner.call_args.args[0]))
+
+    def test_preflight_fails_closed_before_docker_mutation(self):
+        with patch.object(agent, "disk_free_bytes", return_value=7 * 1024 ** 3):
+            with patch.object(agent, "run") as runner:
+                with self.assertRaisesRegex(agent.UpdateError, "8GiB required"):
+                    agent.check_build_capacity(pathlib.Path("/tmp"))
+                runner.assert_not_called()
+
+    def test_post_build_reserve_prevents_container_switch(self):
+        calls = []
+        def command(args, _repo, **_kwargs):
+            calls.append(args)
+            return "OK"
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            with (
+                patch.object(agent, "check_build_capacity"),
+                patch.object(agent, "disk_free_bytes", return_value=1024**3),
+                patch.object(agent, "build_local_image"),
+                patch.object(agent, "run", side_effect=command),
+                patch.object(agent, "git"),
+                patch.object(agent, "wait_healthy"),
+                patch.object(agent, "verify_deployment", return_value="PASSED"),
+            ):
+                result = agent.deploy(repo, SHA1, SHA2)
+        self.assertEqual(result[0], "rolled_back")
+        self.assertIn("less than 2GiB", result[2])
+        self.assertFalse(any(c[:3] == ["docker", "compose", "up"] for c in calls))
+
+    def test_project_scoped_sha_image_cleanup_preserves_live_and_rollback(self):
+        stale = "c" * 40
+        active_id = "sha256:current"
+        rollback_id = "sha256:rollback"
+        old_id = "sha256:stale"
+        actions = []
+        def command(args, _repo, **_kwargs):
+            actions.append(args)
+            if args[:3] == ["docker", "image", "inspect"] and "--format" in args:
+                return active_id if args[-1] == "mv3c:local" else rollback_id
+            if args[:3] == ["docker", "ps", "-aq"]:
+                return "running-container\n"
+            if args[:3] == ["docker", "inspect", "--format"]:
+                return active_id
+            if args[:3] == ["docker", "image", "ls"]:
+                return ("mv3c:sha-" + SHA2 + "\n" +
+                        "mv3c:sha-" + SHA1 + "\n" +
+                        "mv3c:sha-" + stale + "\n" +
+                        "some-other-project:sha-" + stale)
+            if args[:3] == ["docker", "image", "inspect"]:
+                tag = args[-1]
+                sha = tag.removeprefix("mv3c:sha-")
+                ident = {SHA1: rollback_id, SHA2: active_id, stale: old_id}[sha]
+                return agent.json.dumps([{
+                    "Id": ident, "Created": "2026-10-20T08:00:00Z",
+                    "Config": {"Labels": {"org.opencontainers.image.revision": sha}},
+                }])
+            if args[:3] == ["docker", "image", "rm"]:
+                return "Untagged"
+            raise AssertionError(args)
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(agent, "run", side_effect=command):
+                removed = agent.cleanup_stale_mv3c_image_tags(pathlib.Path(directory))
+        self.assertEqual(removed, ["mv3c:sha-" + stale])
+        self.assertEqual([a for a in actions if a[:3] == ["docker", "image", "rm"]],
+                         [["docker", "image", "rm", "mv3c:sha-" + stale]])
+        self.assertFalse(any("prune" in arg for a in actions for arg in a))
+
+    def test_pending_transaction_blocks_image_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            agent.save_transaction(repo, SHA1, SHA2)
+            with patch.object(agent, "run") as command:
+                with self.assertRaisesRegex(agent.UpdateError, "journal exists"):
+                    agent.cleanup_stale_mv3c_image_tags(repo)
+                command.assert_not_called()
+
     def test_local_build_reuses_docker_layers_and_npm_cache(self):
         commands = []
         def fake_run(args, _repo, **kwargs):
@@ -247,7 +332,7 @@ class HostUpdaterTests(unittest.TestCase):
         from collections import namedtuple
         Usage = namedtuple("Usage", "total used free")
         with patch.object(agent.shutil, "disk_usage", return_value=Usage(10, 9, 1)):
-            with self.assertRaisesRegex(agent.UpdateError, "less than 3 GiB"):
+            with self.assertRaisesRegex(agent.UpdateError, "at least 8GiB required"):
                 agent.check_build_capacity(pathlib.Path("/tmp"))
 
     def test_successful_local_build_is_verified_before_container_switch(self):
@@ -258,7 +343,9 @@ class HostUpdaterTests(unittest.TestCase):
             return "OK"
         with tempfile.TemporaryDirectory() as tmp:
             repo = pathlib.Path(tmp)
-            with patch.object(agent, "check_build_capacity"):
+            with patch.object(agent, "check_build_capacity"), patch.object(
+                agent, "disk_free_bytes", return_value=40 * 1024 ** 3
+            ):
                 with patch.object(agent, "build_local_image") as build:
                     with patch.object(agent, "run", side_effect=fake_run):
                         with patch.object(agent, "git"):

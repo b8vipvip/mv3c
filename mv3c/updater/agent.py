@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 from collections import deque
+from decimal import Decimal
 import fcntl
 import shutil
 import json
@@ -34,7 +35,11 @@ CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
 USER_AGENT = "mv3c-updater/4.0"
 # Local Docker images remain in the host cache across updates. The GitHub
 # Actions image is tested for the exact SHA, but does not need to be transferred.
-MIN_DOCKER_FREE_BYTES = 3 * 1024 ** 3
+MIN_DOCKER_FREE_BYTES = 8 * 1024 ** 3
+BUILD_CACHE_SOFT_LIMIT_BYTES = 4 * 1024 ** 3
+MAX_RETAINED_SHA_TAGS = 0
+MIN_POST_BUILD_FREE_BYTES = 2 * 1024 ** 3
+MAX_SHA_TAG_REMOVALS_PER_DEPLOY = 5
 BUILD_LOG_PATH = Path("/var/log/mv3c-updater-build.log")
 
 
@@ -55,14 +60,112 @@ def verify_built_image(repo: Path, sha: str) -> None:
                           + sha[:12] + ", got " + revision[:80])
 
 
-def check_build_capacity(repo: Path) -> None:
+def parse_docker_size(raw: str) -> int:
+    """Read docker system df Size values; reject unknown units instead of guessing."""
+    match = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGTPE]?i?B)\s*",
+                         raw, flags=re.IGNORECASE)
+    if not match:
+        raise ValueError("Unsupported Docker size: " + str(raw)[:60])
+    number, unit = match.groups()
+    scale = {"B": 1, "KB": 1000, "MB": 1000**2, "GB": 1000**3,
+             "TB": 1000**4, "PB": 1000**5, "EB": 1000**6,
+             "KIB": 1024, "MIB": 1024**2, "GIB": 1024**3,
+             "TIB": 1024**4, "PIB": 1024**5, "EIB": 1024**6}
+    return int(Decimal(number) * scale[unit.upper()])
+
+
+def build_cache_usage(repo: Path) -> int | None:
+    """Shared Docker BuildKit accounting, for monitoring ONLY (not GC)."""
+    try:
+        records = run(["docker", "system", "df", "--format", "{{json .}}"],
+                      repo, timeout=30).splitlines()
+        for record in records:
+            item = json.loads(record)
+            if item.get("Type") == "Build Cache":
+                return parse_docker_size(item.get("Size", ""))
+    except (UpdateError, ValueError, TypeError, KeyError, AttributeError) as error:
+        print("MV3C BuildKit disk accounting unavailable:", str(error)[:180],
+              flush=True)
+    return None
+
+
+def disk_free_bytes(repo: Path) -> int:
     docker_root = Path("/var/lib/docker")
     location = docker_root if docker_root.is_dir() else repo
-    free = shutil.disk_usage(location).free
-    if free < MIN_DOCKER_FREE_BYTES:
-        raise UpdateError("Docker build blocked: less than 3 GiB available on "
-                          + str(location) + "; free disk space without pruning data volumes")
+    return shutil.disk_usage(location).free
 
+
+def disk_status(repo: Path) -> str:
+    free = disk_free_bytes(repo)
+    cache = build_cache_usage(repo)
+    summary = "Docker free {:.2f}GiB (minimum before build: 8GiB)".format(
+        free / 1024**3)
+    if cache is not None:
+        summary += "; shared BuildKit cache {:.2f}GiB (MV3C alert threshold: 4GiB)".format(
+            cache / 1024**3)
+        if cache > BUILD_CACHE_SOFT_LIMIT_BYTES:
+            summary += "; WARNING: shared cache over soft limit, no cross-project purge"
+    return summary
+
+
+def check_build_capacity(repo: Path) -> None:
+    free = disk_free_bytes(repo)
+    if free < MIN_DOCKER_FREE_BYTES:
+        raise UpdateError(
+            "Docker build blocked: {:.2f}GiB free, at least 8GiB required. "
+            "Do not prune shared BuildKit cache or data volumes automatically."
+            .format(free / 1024**3))
+    print("MV3C pre-build disk gate: " + disk_status(repo), flush=True)
+
+
+def cleanup_stale_mv3c_image_tags(repo: Path) -> list[str]:
+    """Only untag old MV3C-generated immutable SHA images, never shared caches.
+
+    Called exclusively AFTER healthy deployment, under the updater flock.
+    Docker also independently refuses non-forced deletes of referenced images.
+    """
+    if transaction_path(repo).exists():
+        raise UpdateError("Refusing image maintenance while deployment journal exists")
+    current_id = run(["docker", "image", "inspect", "--format", "{{.Id}}",
+                      "mv3c:local"], repo, timeout=20)
+    rollback_id = ""
+    try:
+        rollback_id = run(["docker", "image", "inspect", "--format", "{{.Id}}",
+                           "mv3c:rollback"], repo, timeout=20)
+    except UpdateError:
+        # Deleted recovery tag is allowed: never remove running container images.
+        pass
+    containers = run(["docker", "ps", "-aq"], repo, timeout=20).splitlines()
+    protected = {current_id, rollback_id}
+    if containers:
+        protected.update(run(["docker", "inspect", "--format", "{{.Image}}",
+                              *containers], repo, timeout=30).splitlines())
+    tags = run(["docker", "image", "ls", "--filter", "reference=mv3c:sha-*",
+                "--format", "{{.Repository}}:{{.Tag}}"], repo, timeout=30).splitlines()
+    candidates: list[tuple[str, str, str]] = []
+    for tag in set(tags):
+        if not re.fullmatch(r"mv3c:sha-[a-f0-9]{40}", tag):
+            continue
+        info = json.loads(run(["docker", "image", "inspect", tag], repo,
+                              timeout=30))[0]
+        labels = (info.get("Config") or {}).get("Labels") or {}
+        if labels.get("org.opencontainers.image.revision") != tag[9:]:
+            continue
+        image_id = info.get("Id", "")
+        if image_id in protected:
+            continue
+        candidates.append((info.get("Created", ""), tag, image_id))
+    # Current immutable SHA and rollback images are already protected by ID.
+    # Superseded extra SHA tags need not occupy space after a healthy deploy.
+    candidates.sort(reverse=True)
+    removed: list[str] = []
+    for _created, tag, _image_id in candidates[MAX_RETAINED_SHA_TAGS:]:
+        if len(removed) >= MAX_SHA_TAG_REMOVALS_PER_DEPLOY:
+            break
+        # No -f; Docker refuses images referenced by stopped/running containers.
+        run(["docker", "image", "rm", tag], repo, timeout=60)
+        removed.append(tag)
+    return removed
 
 def build_local_image(repo: Path, sha: str) -> None:
     """Reuse host layers, persistent BuildKit cache mounts and npm tarballs."""
@@ -429,6 +532,10 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
         advance("building", 54, "本机 BuildKit 增量构建，保留已有 Docker 层及 npm 缓存")
         build_local_image(repo, target)
+        if disk_free_bytes(repo) < MIN_POST_BUILD_FREE_BYTES:
+            raise UpdateError(
+                "Candidate built but less than 2GiB disk free; refusing to "
+                "switch the running container. Preserve old healthy service.")
         log.append("Cached host Docker build and image revision check PASSED: "
                    + target[:12])
         # Only change the stable image tag after the candidate has built and
@@ -445,6 +552,18 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         advance("verifying", 94, "校验当前提交、运行镜像、readyz 和配置 API")
         log.append(verify_deployment(repo, target))
         journal.unlink(missing_ok=True)
+        # Cleanup is not part of the deployment transaction. Failing to prune
+        # an old SHA tag must never roll back a healthy production service.
+        try:
+            removed = cleanup_stale_mv3c_image_tags(repo)
+            log.append("MV3C SHA image retention: removed {} stale tag(s)".format(
+                len(removed)))
+            for tag in removed:
+                log.append("Untagged stale MV3C candidate: " + tag)
+            log.append("Disk after deployment: " + disk_status(repo))
+        except Exception as maintenance_error:
+            log.append("Post-deploy disk maintenance warning (service still healthy): "
+                       + str(maintenance_error)[:800])
         return "success", "\n".join(log)[-24000:], ""
     except Exception as error:
         failure = str(error)[:1600]
