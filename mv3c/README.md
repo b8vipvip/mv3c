@@ -72,9 +72,8 @@ docker compose -f docker-compose.mv3c.yml logs --tail=150 mv3c
 # 重启
 docker compose -f docker-compose.mv3c.yml restart mv3c
 
-# 更新源码并重新构建（命令行 Git 连接方式由 origin 决定）
-sudo -H git pull --ff-only origin main
-docker compose -f docker-compose.mv3c.yml up -d --build
+# 正式更新必须通过宿主机更新器：先发布 GitHub Release，再在后台「版本更新」检查／部署
+sudo systemctl status mv3c-updater.timer --no-pager
 ~~~
 
 不要运行 docker compose down -v，否则可能删除 MongoDB 用户数据和自动生成的根密钥。备份时必须**同时备份** mv3c-mongodb 和 mv3c-data 两个卷，缺少后者将无法解密已保存的 chat2api API Key。
@@ -93,7 +92,7 @@ sudo systemctl status mv3c-updater.timer
 
 建议将 Git 仓库放在 **root 所有的 /opt/mv3c**；安装脚本会检查来源仓库、分支和工作区是否干净。后台自动和手动更新都**优先 SSH，失败时自动回退到固定的 GitHub HTTPS 地址**；安装脚本会测试两种方式，SSH 成功则优先设置 SSH origin，仅 HTTPS 成功则使用 HTTPS。安装后，管理员在 /admin →「版本更新」管理策略，无需在 .env 中设置版本更新选项。
 
-默认启用自动更新、每 10 分钟检查 GitHub main 分支；只有 mv3c validation 和 mv3c source Docker build 两项 GitHub Actions **均成功**，才会构建并更新 Docker 容器。也可切换到 GitHub Release 通道（仓库必须先发布 Release），或关闭自动更新并手动触发。部署失败时会尝试回滚代码和镜像，**不会回滚数据库迁移**。
+默认启用自动更新、每 10 分钟检查 GitHub 最新**正式 Release**，不会直接部署 main 未发布的提交。每次 main 的两项 GitHub Actions（`mv3c validation`、`mv3c source Docker build`）均成功后，`mv3c official release` 工作流自动发布 `v0.1.0` 起的正式版本，并依次递增补丁号（`v0.1.1` 等）。宿主机更新器只部署已经正式发布、且对应 SHA 两项 CI 均通过的 Release；在本机以 BuildKit 缓存增量构建，不上传大镜像。版本管理页面显示**当前正式版版本号、最新正式版及 Git SHA**；`GET /api/config/version` 返回运行中容器的 `version` 与 `sha`。部署失败会回滚代码与镜像，**不会回滚数据库迁移**。
 
 **网页容器没有 Docker Socket 权限**；更新实际由宿主机 systemd 服务执行。详细安装、排错与回滚说明：[版本更新文档](updater/README.md)。
 
