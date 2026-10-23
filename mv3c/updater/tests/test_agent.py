@@ -157,7 +157,7 @@ class HostUpdaterTests(unittest.TestCase):
                             agent.target_for_channel(pathlib.Path("/tmp"), "release")
 
     def test_version_for_sha_resolves_exact_semver(self):
-        with patch.object(agent, "git", return_value="v0.1.0\\nv0.2.3\\nother\\n"):
+        with patch.object(agent, "git", return_value="v0.1.0\nv0.2.3\nother\n"):
             self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "v0.2.3")
         with patch.object(agent, "git", return_value=""):
             self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "")
