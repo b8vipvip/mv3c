@@ -3,6 +3,7 @@ import { Skeleton } from '@librechat/client';
 import { apiBaseUrl } from 'librechat-data-provider';
 import { cn, toAbsoluteFilePath } from '~/utils';
 import DialogImage from './DialogImage';
+import { chat2apiMediaUrls } from './chat2apiMedia';
 
 /** Max display height for chat images (Tailwind JIT class) */
 export const IMAGE_MAX_H = 'max-h-[45vh]' as const;
@@ -53,13 +54,18 @@ const Image = ({
   /** Root-relative server paths (`/images/...` static, `/api/...` downloads and
    *  share routes) are resolved against the API base so they load under a
    *  subpath deployment. */
-  const absoluteImageUrl = useMemo(() => toAbsoluteFilePath(imagePath, apiBaseUrl()), [imagePath]);
-  // chat2api owns both asset variants: render the small /thumbnail bitmap,
-  // but open and download the original image after the user clicks it.
-  const originalImageUrl = useMemo(
-    () => absoluteImageUrl.replace(/\/thumbnail(?=\?|$)/, ''),
-    [absoluteImageUrl],
+  const archivedAsset = useMemo(
+    () =>
+      chat2apiMediaUrls(
+        toAbsoluteFilePath(imagePath, apiBaseUrl()),
+        typeof window !== 'undefined' && window.location.protocol === 'https:',
+      ),
+    [imagePath],
   );
+  // chat2api-generated files use the lightweight thumbnail in conversation,
+  // and open/download the immutable full-resolution original.
+  const absoluteImageUrl = archivedAsset.preview;
+  const originalImageUrl = archivedAsset.original;
 
   const downloadImage = async () => {
     try {
