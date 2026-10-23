@@ -61,7 +61,7 @@ def verify_built_image(repo: Path, sha: str) -> None:
 
 def parse_docker_size(raw: str) -> int:
     """Read docker system df Size values; reject unknown units instead of guessing."""
-    match = re.fullmatch(r"\\s*([0-9]+(?:\\.[0-9]+)?)\\s*([KMGTPE]?i?B)\\s*",
+    match = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGTPE]?i?B)\s*",
                          raw, flags=re.IGNORECASE)
     if not match:
         raise ValueError("Unsupported Docker size: " + str(raw)[:60])
