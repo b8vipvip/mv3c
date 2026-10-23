@@ -66,6 +66,20 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 
 之前添加的 `MV3C_SCP_*` Actions Secrets 不再参与部署；可以在验证迁移后手动撤销上传密钥并删除对应 Secrets。专用的 `mv3c-transfer` 用户如果已存在，不建议在未检查其它用途前直接删除。
 
+## Python / MCP 工具下载源（项目独立配置）
+
+MV3C 的主 Docker 构建使用 npm，并通过 Alpine `apk` 安装 `python3`、`py3-pip` 和 `uv`，**没有**执行 `pip install`。因此宿主机 `/etc/pip.conf` 不会改变 Docker 构建过程，也不会自动作用到容器中的 `uvx`。
+
+针对 MV3C 运行时可能执行的 Python / MCP 工具下载，Compose 将以下变量传入 MV3C 容器：`UV_DEFAULT_INDEX`（uv / uvx）和 `PIP_INDEX_URL`（pip）。两者默认官方 `https://pypi.org/simple`，避免改变其他部署环境的行为。境内服务器如需改用清华镜像，在 **Git 不跟踪的** `/opt/mv3c/.env` 中追加：
+
+```dotenv
+MV3C_PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+修改后在维护窗口通过原有正式更新流程重新创建 MV3C 服务容器后才会生效；只重读文件不会动态修改正在运行进程的环境。请不要在运行期间执行全局 Docker 缓存清理，不要手动覆盖仓库中受 Git 管理的 Compose 文件。其他 Docker 服务不会受到这个选项影响。
+
+这不是自动镜像站故障切换：`uvx` 在所选镜像站缺少包或镜像站不可用时仍可能失败。可以把配置改回 `https://pypi.org/simple`，再重建容器配置。不要全局同时添加官方 PyPI 作为 `extra-index-url`，以免引入依赖混淆风险。
+
 ## 运行镜像瘦身（多阶段 Dockerfile）
 
 从本轮起，MV3C 使用共享 Node/Alpine `base`、完整依赖和前端编译 `build`、最小运行文件 `runtime` 三个 Docker 构建阶段：
