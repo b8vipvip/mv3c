@@ -313,23 +313,73 @@ def report(repo: Path, **fields: object) -> None:
     bridge(repo, "report", fields)
 
 
+def github_api_token() -> str:
+    """Read a privileged host token; never transmit GitHub Actions secrets to Docker."""
+    token = os.environ.get("MV3C_GITHUB_API_TOKEN", "").strip()
+    if not token:
+        path = Path("/etc/mv3c-updater/github-token")
+        if path.is_file():
+            mode = path.stat().st_mode & 0o777
+            if mode & 0o077:
+                raise UpdateError("GitHub API token file must be root-private (chmod 600)")
+            token = path.read_text(encoding="utf-8").strip()
+    if not token:
+        # Reuse an already authenticated host gh CLI, without exposing the token.
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token"], capture_output=True, text=True,
+                check=False, timeout=5,
+            )
+            if result.returncode == 0:
+                token = result.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if token and (len(token) > 2048 or any(c in token for c in "\\r\\n")):
+        raise UpdateError("Malformed GitHub API credential")
+    return token
+
+
 def json_from_github(url: str) -> dict:
     if not url.startswith(API + "/"):
         raise UpdateError("Unexpected GitHub API URL")
-    req = urllib.request.Request(
-        url, headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": USER_AGENT,
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = github_api_token()
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as response:
             if response.geturl() != url:
                 raise UpdateError("GitHub API redirect refused")
             return json.loads(response.read(2_000_000))
     except urllib.error.HTTPError as error:
-        raise UpdateError("GitHub API returned HTTP {}".format(error.code)) from error
+        # A public GitHub API IP can be rate limited independently of the SSH
+        # Git transport. Fail closed and report the actual cause, never skip CI.
+        detail = "GitHub API returned HTTP {}".format(error.code)
+        if error.code in (403, 429):
+            remaining = error.headers.get("X-RateLimit-Remaining", "")
+            retry_after = error.headers.get("Retry-After", "")
+            try:
+                payload = json.loads(error.read(8192))
+                message = str(payload.get("message", ""))[:180].replace("\\n", " ")
+            except (ValueError, OSError, UnicodeError):
+                message = ""
+            if remaining == "0" or "rate limit" in message.lower():
+                detail += " (GitHub API rate limit reached)"
+            elif "resource not accessible" in message.lower():
+                detail += " (GitHub token lacks Actions read permission)"
+            else:
+                detail += " (GitHub API refused request)"
+            if retry_after.isdigit():
+                detail += "; retry after {} seconds".format(min(int(retry_after), 3600))
+            if not token:
+                detail += "; host has no authenticated API token"
+            detail += "; GitHub CI verification was NOT bypassed"
+        raise UpdateError(detail) from error
 
 
 def ci_is_green(sha: str, *, api_fetch=json_from_github) -> tuple[bool, str]:
