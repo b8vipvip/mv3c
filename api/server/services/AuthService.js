@@ -412,7 +412,7 @@ const registerUser = async (user, additionalData = {}) => {
 
     // Only the first user in the unscoped, single-tenant deployment bootstraps ADMIN.
     // Tenant administrators must be provisioned through a trusted administrative flow.
-    const isFirstRegisteredUser = !tenantId && (await countUsers()) === 0;
+    const isFirstRegisteredUser = !tenantId && (await countUsers({ provider: { $ne: 'mv3c-guest' } })) === 0;
 
     const salt = bcrypt.genSaltSync(10);
     const newUserData = {
