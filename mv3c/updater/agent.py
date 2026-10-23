@@ -815,7 +815,7 @@ def execute(repo: Path) -> None:
                   {"lastError": ""} if good and not job else {}))
     except Exception as error:
         message = str(error)[:1800]
-        report(repo, checkedAt=utc_now(), lastError=message,
+        report(repo, checkedAt=utc_now(), lastError=message, ciMessage="",
                **({"status": "blocked"} if not job else {}))
         complete("failed", error=message,
                  log="Unable to resolve or verify the GitHub commit: " + message,
