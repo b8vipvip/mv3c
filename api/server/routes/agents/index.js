@@ -1225,6 +1225,8 @@ router.delete(
 router.use('/', v1);
 
 const chatRouter = express.Router();
+const enforceGuestQuota = require('~/server/middleware/enforceGuestQuota');
+chatRouter.use(enforceGuestQuota);
 const useMessageIpLimiter = isEnabled(LIMIT_MESSAGE_IP);
 const useMessageUserLimiter = isEnabled(LIMIT_MESSAGE_USER);
 chatRouter.use(chatConfigMiddleware);
