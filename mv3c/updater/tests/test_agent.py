@@ -51,6 +51,46 @@ class HostUpdaterTests(unittest.TestCase):
         with self.assertRaises(agent.UpdateError):
             agent.ci_is_green("invalid", api_fetch=ok)
 
+    def test_github_api_uses_host_credential_without_logging_it(self):
+        class Response:
+            def __init__(self, url):
+                self.url = url
+            def geturl(self):
+                return self.url
+            def read(self, _limit):
+                return b'{"workflow_runs":[]}'
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        captured = []
+        def fake_open(request, timeout):
+            captured.append(request)
+            return Response(request.full_url)
+
+        with patch.dict(agent.os.environ, {"MV3C_GITHUB_API_TOKEN": "secret-test-value"}):
+            with patch.object(agent.urllib.request, "urlopen", side_effect=fake_open):
+                result = agent.json_from_github(agent.API + "/actions/runs")
+        self.assertEqual(result["workflow_runs"], [])
+        self.assertEqual(captured[0].get_header("Authorization"), "Bearer secret-test-value")
+
+    def test_github_api_403_fails_closed_with_safe_diagnosis(self):
+        from io import BytesIO
+        import urllib.error
+        def rate_limit(*_args, **_kwargs):
+            raise urllib.error.HTTPError(
+                agent.API + "/actions/runs", 403, "Forbidden",
+                {"X-RateLimit-Remaining": "0", "Retry-After": "30"},
+                BytesIO(b'{"message":"API rate limit exceeded"}'))
+        with patch.dict(agent.os.environ, {"MV3C_GITHUB_API_TOKEN": "secret-test-value"}):
+            with patch.object(agent.urllib.request, "urlopen", side_effect=rate_limit):
+                with self.assertRaisesRegex(agent.UpdateError, "rate limit reached") as captured:
+                    agent.json_from_github(agent.API + "/actions/runs")
+        self.assertIn("retry after 30 seconds", str(captured.exception))
+        self.assertNotIn("secret-test-value", str(captured.exception))
+        self.assertIn("NOT bypassed", str(captured.exception))
+
     def test_requested_check_and_periodic_check(self):
         now = agent.utc_now()
         self.assertTrue(agent.check_needed({"config": {"intervalMinutes": 10}}))
