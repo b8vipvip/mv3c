@@ -264,13 +264,13 @@ class HostUpdaterTests(unittest.TestCase):
             if args[:3] == ["docker", "image", "inspect"] and "--format" in args:
                 return active_id if args[-1] == "mv3c:local" else rollback_id
             if args[:3] == ["docker", "ps", "-aq"]:
-                return "running-container\\n"
+                return "running-container\n"
             if args[:3] == ["docker", "inspect", "--format"]:
                 return active_id
             if args[:3] == ["docker", "image", "ls"]:
-                return ("mv3c:sha-" + SHA2 + "\\n" +
-                        "mv3c:sha-" + SHA1 + "\\n" +
-                        "mv3c:sha-" + stale + "\\n" +
+                return ("mv3c:sha-" + SHA2 + "\n" +
+                        "mv3c:sha-" + SHA1 + "\n" +
+                        "mv3c:sha-" + stale + "\n" +
                         "some-other-project:sha-" + stale)
             if args[:3] == ["docker", "image", "inspect"]:
                 tag = args[-1]
@@ -332,7 +332,7 @@ class HostUpdaterTests(unittest.TestCase):
         from collections import namedtuple
         Usage = namedtuple("Usage", "total used free")
         with patch.object(agent.shutil, "disk_usage", return_value=Usage(10, 9, 1)):
-            with self.assertRaisesRegex(agent.UpdateError, "less than 3 GiB"):
+            with self.assertRaisesRegex(agent.UpdateError, "at least 8GiB required"):
                 agent.check_build_capacity(pathlib.Path("/tmp"))
 
     def test_successful_local_build_is_verified_before_container_switch(self):
