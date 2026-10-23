@@ -36,7 +36,7 @@ const { hasCapability, hasConfigCapability } = require('~/server/middleware/role
 const { getLdapConfig } = require('~/server/services/Config/ldap');
 const { getRumConfig } = require('~/server/services/Config/rum');
 const { getAppConfig } = require('~/server/services/Config/app');
-const { getSiteSettings } = require('~/server/services/Config/mv3cSettings');
+const { getSiteSettings, getPublicSettings } = require('~/server/services/Config/mv3cSettings');
 
 const router = express.Router();
 const emailLoginEnabled =
@@ -72,7 +72,8 @@ function isBirthday() {
  * See client consumers under `client/src/components/Auth/` and `client/src/routes/Layouts/Startup.tsx`.
  */
 async function buildPreLoginPayload() {
-  const site = await getSiteSettings();
+  const publicSettings = await getPublicSettings();
+  const site = publicSettings.site;
   const isOpenIdEnabled =
     !!process.env.OPENID_CLIENT_ID &&
     (isEnabled(process.env.OPENID_USE_PKCE) || !!process.env.OPENID_CLIENT_SECRET?.trim()) &&
@@ -90,6 +91,7 @@ async function buildPreLoginPayload() {
   /** @type {Partial<TStartupConfig>} */
   const payload = {
     appTitle: site.title,
+    guestExperienceEnabled: publicSettings.guest.enabled,
     discordLoginEnabled: !!process.env.DISCORD_CLIENT_ID && !!process.env.DISCORD_CLIENT_SECRET,
     facebookLoginEnabled: !!process.env.FACEBOOK_CLIENT_ID && !!process.env.FACEBOOK_CLIENT_SECRET,
     githubLoginEnabled: !!process.env.GITHUB_CLIENT_ID && !!process.env.GITHUB_CLIENT_SECRET,
