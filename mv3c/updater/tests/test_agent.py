@@ -215,6 +215,23 @@ class HostUpdaterTests(unittest.TestCase):
             self.assertIn("downloading layer 79", logfile.read_text())
             self.assertEqual(logfile.stat().st_mode & 0o777, 0o600)
 
+    def test_dockerfile_keeps_build_dependencies_out_of_runtime_layers(self):
+        dockerfile = (pathlib.Path(__file__).resolve().parents[3] /
+                      "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("FROM node:24.16.0-alpine AS base", dockerfile)
+        self.assertIn("FROM base AS build", dockerfile)
+        self.assertIn("FROM base AS runtime", dockerfile)
+        self.assertIn("COPY --from=build --chown=node:node /app/ /app/", dockerfile)
+        build_stage = dockerfile.split("FROM base AS build", 1)[1].split(
+            "FROM base AS runtime", 1)[0]
+        runtime_stage = dockerfile.split("FROM base AS runtime", 1)[1]
+        self.assertIn("npm ci --no-audit --prefer-offline", build_stage)
+        self.assertIn("npm run frontend", build_stage)
+        self.assertIn("npm prune --omit=dev", build_stage)
+        self.assertNotIn("npm ci ", runtime_stage)
+        self.assertIn('CMD ["npm", "run", "backend"]', runtime_stage)
+        self.assertIn("org.opencontainers.image.revision", runtime_stage)
+
     def test_dockerfile_avoids_unbounded_alpine_upgrade_and_has_signed_mirrors(self):
         dockerfile = (pathlib.Path(__file__).resolve().parents[3] /
                       "Dockerfile").read_text(encoding="utf-8")
