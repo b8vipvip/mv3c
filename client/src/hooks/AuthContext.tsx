@@ -48,6 +48,7 @@ import {
 import { resetChatFilterSessionAtom } from '~/components/Conversations/chatFilters';
 import { TAuthConfig, TUserContext, TAuthContext, TResError } from '~/common';
 import { resetFacetsAtom } from '~/components/Conversations/facets';
+import { shouldAutoEnterGuest } from '~/utils/mv3cGuestLanding';
 import useTimeout from './useTimeout';
 import store from '~/store';
 
@@ -307,9 +308,7 @@ const AuthContextProvider = ({
   const startPublicGuestSession = useCallback(async (): Promise<boolean> => {
     if (authConfig?.test || authConfig?.optional || isExternalRedirectRef.current) return false;
     const pathname = window.location.pathname;
-    const publicChatRoute = pathname === '/' || pathname === '/c/new' ||
-      /^\/c\/[A-Za-z0-9_-]+$/.test(pathname);
-    if (!publicChatRoute || isRequiredTwoFactorSetupRoute()) return false;
+    if (!shouldAutoEnterGuest(pathname) || isRequiredTwoFactorSetupRoute()) return false;
     if (guestBootstrapInFlightRef.current) return true;
     guestBootstrapInFlightRef.current = true;
     try {
