@@ -121,6 +121,7 @@ jobs:
       - name: Validate updater inside the live Docker stack
         timeout-minutes: 3
         run: |
+          docker compose exec -T mv3c node -e 'const assert=require("node:assert/strict"); assert.equal(process.env.UV_DEFAULT_INDEX, "https://pypi.org/simple"); assert.equal(process.env.PIP_INDEX_URL, "https://pypi.org/simple"); console.log("Python/MCP runtime index environment OK")'
           docker compose exec -T mv3c node --test /app/mv3c/updater/tests/test_updater.cjs
           docker compose exec -T mv3c node --test /app/mv3c/updater/tests/test_runtime_logs.cjs
           docker compose exec -T mv3c node /app/mv3c/updater/tests/integration.cjs
