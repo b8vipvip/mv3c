@@ -49,7 +49,7 @@ type RuntimeLogStats = {
   usedBytes: number; maxBytes: number; fileCount: number; ranges: LogRange[];
   capture: string;
 };
-type UpdateConfig = { autoEnabled: boolean; channel: 'main' | 'release'; intervalMinutes: number };
+type UpdateConfig = { autoEnabled: boolean; channel: 'release'; intervalMinutes: number };
 type UpdateProgress = {
   stage: string; percent: number; message: string; updatedAt: string;
   steps: { stage: string; percent: number; message: string; at: string }[];
@@ -69,6 +69,8 @@ type UpdateState = {
   agentOnline: boolean;
   status: string;
   currentSha: string;
+  currentVersion: string;
+  latestVersion: string;
   latestSha: string;
   latestLabel: string;
   latestUrl: string;
@@ -158,7 +160,7 @@ export default function Mv3cAdmin() {
   const [updates, setUpdates] = useState<UpdateState | null>(null);
   const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
-    autoEnabled: true, channel: 'main', intervalMinutes: 10,
+    autoEnabled: true, channel: 'release', intervalMinutes: 10,
   });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -707,7 +709,7 @@ export default function Mv3cAdmin() {
                 <div>
                   <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    代码拉取：优先 GitHub SSH（git@github.com:b8vipvip/mv3c.git）；SSH 不可用时自动回退至固定的 GitHub HTTPS 地址。自动与手动更新策略一致，只部署 GitHub Actions 验证通过的提交。
+                    代码拉取：优先 GitHub SSH（git@github.com:b8vipvip/mv3c.git）；SSH 不可用时自动回退至固定的 GitHub HTTPS 地址。自动与手动更新策略一致，只部署已在 GitHub 发布且两项 CI 均验证通过的正式版；部署使用服务器缓存。
                   </p>
                 </div>
                 {!updates ? (
@@ -725,18 +727,18 @@ export default function Mv3cAdmin() {
                       <div className="rounded-lg bg-surface-secondary p-4">
                         <p className="text-xs text-text-secondary">当前已部署版本</p>
                         <p className="mt-1 font-mono text-lg">
-                          {updates.currentSha ? updates.currentSha.slice(0, 12) : '等待更新服务上报'}
+                          {updates.currentVersion || '尚未部署正式版'}
                         </p>
                       </div>
                       <div className="rounded-lg bg-surface-secondary p-4">
-                        <p className="text-xs text-text-secondary">GitHub 最新版本</p>
+                        <p className="text-xs text-text-secondary">GitHub 最新正式版</p>
                         <p className="mt-1 font-mono text-lg">
-                          {updates.latestLabel || '尚未检查'}
+                          {updates.latestVersion || '尚未发布'}
                         </p>
                         {updates.latestUrl && (
                           <a className="text-sm text-blue-500 underline"
                             href={updates.latestUrl} target="_blank" rel="noopener noreferrer">
-                            查看 GitHub 提交
+                            查看 GitHub Release
                           </a>
                         )}
                       </div>
@@ -841,16 +843,16 @@ export default function Mv3cAdmin() {
                           onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, autoEnabled: e.target.checked,
                           })); }} />
-                        GitHub 有新版本且 CI 通过时自动构建并部署
+                        GitHub 发布新的正式版且 CI 通过时自动构建并部署
                       </label>
                       <label className="block space-y-2">
                         <span className="block text-sm font-medium">更新通道</span>
                         <select className={fieldClass} value={updateConfig.channel}
                           onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
-                            ...c, channel: e.target.value as 'main' | 'release',
+                            ...c, channel: e.target.value as 'release',
                           })); }}>
-                          <option value="main">main 分支（最新通过 CI 的提交）</option>
-                          <option value="release">正式版（GitHub 最新 Release）</option>
+                          
+                          <option value="release">仅正式版（GitHub Release）</option>
                         </select>
                       </label>
                       <label className="block space-y-2">
