@@ -19,7 +19,7 @@ RUN set -eu; \
       https://mirrors.aliyun.com/alpine \
       https://mirrors.tuna.tsinghua.edu.cn/alpine \
       https://dl-cdn.alpinelinux.org/alpine; do \
-      printf '%s/%s/main\\n%s/%s/community\\n' \
+      printf '%s/%s/main\n%s/%s/community\n' \
         "$mirror" "$alpine_branch" "$mirror" "$alpine_branch" \
         > /etc/apk/repositories; \
       echo "MV3C APK package installation via $mirror ($alpine_branch)"; \
