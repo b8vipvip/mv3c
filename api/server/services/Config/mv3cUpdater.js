@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const ID = 'global';
 const DEFAULT_CONFIG = Object.freeze({
   autoEnabled: true,
-  channel: 'main',
+  channel: 'release',
   intervalMinutes: 10,
 });
 const SHA = /^[0-9a-f]{40}$/i;
@@ -31,7 +31,8 @@ async function initialize() {
   }, { upsert: true });
 }
 function format(doc) {
-  const config = { ...DEFAULT_CONFIG, ...(doc?.config || {}) };
+  // Previously saved main mode is migrated at read time; deployment is release-only.
+  const config = { ...DEFAULT_CONFIG, ...(doc?.config || {}), channel: 'release' };
   const heartbeat = doc?.agentHeartbeat ? new Date(doc.agentHeartbeat) : null;
   const agentOnline = heartbeat && Number.isFinite(heartbeat.getTime()) &&
     Date.now() - heartbeat.getTime() < 180000;
@@ -40,7 +41,11 @@ function format(doc) {
     agentOnline: Boolean(agentOnline),
     status: doc?.status || 'idle',
     currentSha: doc?.currentSha || '',
+    // Read the running image's trusted build metadata when the updater DB lags a restart.
+    currentVersion: /^v\d+\.\d+\.\d+$/.test(process.env.MV3C_VERSION || '')
+      ? process.env.MV3C_VERSION : (doc?.currentVersion || ''),
     latestSha: doc?.latestSha || '',
+    latestVersion: doc?.latestVersion || '',
     latestLabel: doc?.latestLabel || '',
     latestUrl: doc?.latestUrl || '',
     updateAvailable: Boolean(doc?.updateAvailable),
@@ -70,7 +75,7 @@ function validateConfig(body) {
   const result = {};
   for (const [key, value] of Object.entries(body)) {
     if (key === 'autoEnabled' && typeof value === 'boolean') result[key] = value;
-    else if (key === 'channel' && ['main', 'release'].includes(value)) result[key] = value;
+    else if (key === 'channel' && value === 'release') result[key] = value;
     else if (key === 'intervalMinutes' && [5, 10, 15, 30, 60].includes(value)) {
       result[key] = value;
     } else throw new TypeError('Invalid update setting: ' + key);
@@ -185,6 +190,7 @@ function renderReport(entry) {
     'Old SHA: ' + (entry.fromSha || '-'),
     'Target SHA: ' + (entry.attemptedSha || '-'),
     'Installed SHA: ' + (entry.sha || '-'),
+    'Official version: ' + (entry.version || '-'),
     'Verification: ' + (entry.verification || '-'),
     'Error: ' + (entry.error || '-'),
     '',
@@ -218,6 +224,8 @@ function validateReport(payload) {
   const allowed = {
     currentSha: (v) => typeof v === 'string' && (!v || SHA.test(v)),
     latestSha: (v) => typeof v === 'string' && (!v || SHA.test(v)),
+    currentVersion: (v) => typeof v === 'string' && (!v || /^v\d+\.\d+\.\d+$/.test(v)),
+    latestVersion: (v) => typeof v === 'string' && (!v || /^v\d+\.\d+\.\d+$/.test(v)),
     latestLabel: (v) => typeof v === 'string' && v.length <= 128,
     latestUrl: (v) => typeof v === 'string' && v.length <= 500 &&
       (!v || v.startsWith('https://github.com/b8vipvip/mv3c/')),
@@ -258,6 +266,10 @@ async function completeJob(payload) {
   const error = String(payload.error || '').slice(0, 2000);
   const sha = String(payload.sha || '');
   const attemptedSha = String(payload.attemptedSha || '');
+  const version = String(payload.version || '');
+  if (version && !/^v\d+\.\d+\.\d+$/.test(version)) {
+    throw new TypeError('Invalid official release version');
+  }
   if ((sha && !SHA.test(sha)) || (attemptedSha && !SHA.test(attemptedSha)) ||
       (fromSha && !SHA.test(fromSha))) {
     throw new TypeError('Invalid commit SHA');
@@ -280,7 +292,8 @@ async function completeJob(payload) {
       lastError: error,
       lastLog: log,
       agentHeartbeat: now,
-      ...(payload.outcome === 'success' ? { currentSha: sha, lastSuccessAt: now,
+      ...(payload.outcome === 'success' ? { currentSha: sha, currentVersion: version,
+        lastSuccessAt: now,
         updateAvailable: false } : {}),
       ...(['failed', 'rolled_back'].includes(payload.outcome) && attemptedSha
         ? { blockedSha: attemptedSha } : {}),
@@ -292,7 +305,7 @@ async function completeJob(payload) {
           jobId: payload.jobId, outcome: payload.outcome,
           mode: active.mode, requestedBy: active.requestedBy,
           requestedAt: active.requestedAt, startedAt, finishedAt: now, durationMs,
-          fromSha, attemptedSha, sha, error, verification, log,
+          fromSha, attemptedSha, sha, version, error, verification, log,
           steps: active.progress?.steps || [],
         }],
         $slice: -20,

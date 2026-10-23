@@ -109,10 +109,13 @@ COPY --from=build --chown=node:node /app/ /app/
 # git resolution (if .git is present), and finally to empty values.
 ARG BUILD_COMMIT=
 ARG BUILD_BRANCH=
+ARG BUILD_VERSION=unreleased
 ARG BUILD_DATE=
 ENV BUILD_COMMIT=${BUILD_COMMIT}
+ENV MV3C_VERSION=${BUILD_VERSION}
 LABEL org.opencontainers.image.source="https://github.com/b8vipvip/mv3c" \
       org.opencontainers.image.revision="${BUILD_COMMIT}" \
+      org.opencontainers.image.version="${BUILD_VERSION}" \
       org.opencontainers.image.description="mv3c GitHub Actions verified release image"
 ENV BUILD_BRANCH=${BUILD_BRANCH}
 ENV BUILD_DATE=${BUILD_DATE}

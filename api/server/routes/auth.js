@@ -50,6 +50,7 @@ const setBalanceConfig = createSetBalanceConfig({
   upsertBalanceFields,
 });
 
+const guest = require('~/server/services/Config/mv3cGuest');
 const router = express.Router();
 const twoFactorManagementLimiter = createTwoFactorManagementLimiter({
   getAppConfig: () => getAppConfig({ baseOnly: true }),
@@ -65,6 +66,9 @@ const getCloudFrontAuthCookieRefreshResult = (req, res) => {
 };
 
 const ldapAuth = !!process.env.LDAP_URL && !!process.env.LDAP_USER_SEARCH_BASE;
+// Guests use the normal JWT/refresh-session pipeline, not public registration.
+router.post('/guest', middleware.requireSameOrigin, middleware.registerLimiter, guest.start);
+router.get('/guest/status', middleware.requireJwtAuth, guest.status);
 //Local
 router.post('/logout', middleware.requireJwtAuth, logoutController);
 router.post(

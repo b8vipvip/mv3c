@@ -26,7 +26,7 @@ from pathlib import Path
 REPO = "b8vipvip/mv3c"
 API = "https://api.github.com/repos/" + REPO
 SHA = re.compile(r"^[a-f0-9]{40}$")
-TAG = re.compile(r"^v?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?$")
+TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 SSH_ORIGIN = "git@github.com:b8vipvip/mv3c.git"
 HTTPS_ORIGIN = "https://github.com/b8vipvip/mv3c.git"
 TRUSTED_ORIGINS = {SSH_ORIGIN, HTTPS_ORIGIN, "https://github.com/b8vipvip/mv3c"}
@@ -167,6 +167,15 @@ def cleanup_stale_mv3c_image_tags(repo: Path) -> list[str]:
         removed.append(tag)
     return removed
 
+def version_for_sha(repo: Path, sha: str) -> str:
+    """Return the semver tag pointing exactly at this deployed revision."""
+    if not SHA.fullmatch(sha):
+        raise UpdateError("Invalid Git SHA for version lookup")
+    versions = [tag.strip() for tag in git(repo, "tag", "--points-at", sha).splitlines()
+                if TAG.fullmatch(tag.strip())]
+    return max(versions, key=lambda tag: tuple(map(int, tag[1:].split(".")))) if versions else ""
+
+
 def build_local_image(repo: Path, sha: str) -> None:
     """Reuse host layers, persistent BuildKit cache mounts and npm tarballs."""
     heap = os.environ.get("MV3C_BUILD_NODE_HEAP_MB", "3072")
@@ -179,7 +188,8 @@ def build_local_image(repo: Path, sha: str) -> None:
         "--build-arg", "NODE_MAX_OLD_SPACE_SIZE=" + heap,
         "--build-arg", "NPM_CI_TIMEOUT_SECONDS=1800",
         "--build-arg", "BUILD_COMMIT=" + sha,
-        "--build-arg", "BUILD_BRANCH=main",
+        "--build-arg", "BUILD_BRANCH=release",
+        "--build-arg", "BUILD_VERSION=" + (version_for_sha(repo, sha) or "unreleased"),
         "-t", image_for_sha(sha), ".",
     ], repo, timeout=4500, env=env)
     verify_built_image(repo, sha)
@@ -372,25 +382,23 @@ def is_descendant(repo: Path, previous: str, target: str) -> bool:
 
 
 def target_for_channel(repo: Path, channel: str) -> tuple[str, str]:
-    if channel not in ("main", "release"):
-        raise UpdateError("Unsupported update channel")
-    transport = fetch_prefer_ssh(
-        repo, "refs/heads/main:refs/remotes/origin/main"
-    )
-    if channel == "main":
-        sha = git(repo, "rev-parse", "refs/remotes/origin/main")
-        label = "main · " + sha[:12] + " · " + transport
-    else:
-        release = json_from_github(API + "/releases/latest")
-        tag = release.get("tag_name", "")
-        if not isinstance(tag, str) or not TAG.fullmatch(tag):
-            raise UpdateError("GitHub release has an unsupported version tag")
-        tag_transport = fetch_prefer_ssh(repo, "tag", tag)
-        sha = git(repo, "rev-list", "-n", "1", "refs/tags/" + tag)
-        label = tag + " · " + tag_transport
+    """Resolve strictly the newest published, non-prerelease version tag."""
+    if channel != "release":
+        raise UpdateError("Only published GitHub Releases may be deployed")
+    release = json_from_github(API + "/releases/latest")
+    tag = release.get("tag_name", "")
+    if (not isinstance(tag, str) or not TAG.fullmatch(tag)
+            or release.get("draft") is True or release.get("prerelease") is True):
+        raise UpdateError("GitHub has no valid stable Release")
+    fetch_prefer_ssh(repo, "refs/heads/main:refs/remotes/origin/main")
+    fetch_prefer_ssh(repo, "tag", tag)
+    sha = git(repo, "rev-list", "-n", "1", "refs/tags/" + tag)
     if not SHA.fullmatch(sha):
-        raise UpdateError("Invalid Git commit from remote")
-    return sha, label
+        raise UpdateError("Invalid Git commit from published Release")
+    main_sha = git(repo, "rev-parse", "refs/remotes/origin/main")
+    if not SHA.fullmatch(main_sha) or not is_descendant(repo, sha, main_sha):
+        raise UpdateError("Published release tag is not on trusted main history")
+    return sha, tag
 
 
 def wait_healthy(repo: Path, timeout: int = 210) -> None:
@@ -439,8 +447,18 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
     )
     if running_image != tagged_image:
         raise UpdateError("Running container image does not match newly built image")
+    expected_version = version_for_sha(repo, expected_sha)
+    if expected_version:
+        image_version = run([
+            "docker", "image", "inspect", "--format",
+            '{{index .Config.Labels "org.opencontainers.image.version"}}',
+            "mv3c:local",
+        ], repo, timeout=20)
+        if image_version != expected_version:
+            raise UpdateError("Docker image Release version mismatch")
     for url in ("http://127.0.0.1:3080/readyz",
-                "http://127.0.0.1:3080/api/config"):
+                "http://127.0.0.1:3080/api/config",
+                "http://127.0.0.1:3080/api/config/version"):
         try:
             with urllib.request.urlopen(url, timeout=15) as response:
                 if response.status != 200:
@@ -448,12 +466,17 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
                 data = response.read(200_000)
                 if url.endswith("/api/config") and not isinstance(json.loads(data), dict):
                     raise UpdateError("Startup configuration is not a JSON object")
+                if url.endswith("/api/config/version"):
+                    version_payload = json.loads(data)
+                    if (version_payload.get("sha") != expected_sha or
+                            version_payload.get("version") != (expected_version or "unreleased")):
+                        raise UpdateError("Live server version and commit do not match deployment")
         except (urllib.error.URLError, ValueError) as error:
             raise UpdateError("HTTP smoke verification failed: " + url + " " +
                               str(error)[:200]) from error
     return ("Post-deploy validation PASSED: git SHA=" + actual[:12]
             + "; running image matches built tag; container healthy;"
-            + " /readyz HTTP 200; /api/config HTTP 200")
+            + " /readyz HTTP 200; /api/config HTTP 200; live version attested")
 
 
 def transaction_path(repo: Path) -> Path:
@@ -676,7 +699,7 @@ def execute(repo: Path) -> None:
     except Exception as error:
         report(repo, status="blocked", lastError=str(error)[:1800])
         raise
-    report(repo, currentSha=old)
+    report(repo, currentSha=old, currentVersion=version_for_sha(repo, old))
     if state.get("activeJob"):
         recover_interrupted_job(repo, state["activeJob"], old)
         return
@@ -686,6 +709,7 @@ def execute(repo: Path) -> None:
     # Claim manual work before GitHub checks: progress should say what the
     # worker is doing instead of reporting "queued" for a long fetch.
     job = bridge(repo, "claim") if state.get("pendingJob") else None
+    label = ""  # Failures before release resolution cannot report an unspecified version.
     def progress(stage: str, percent: int, message: str, *,
                  from_sha: str = "", target_sha: str = "") -> None:
         if job:
@@ -713,12 +737,13 @@ def execute(repo: Path) -> None:
             "jobId": job["id"], "outcome": outcome, "log": log,
             "error": error, "sha": sha, "fromSha": old,
             "attemptedSha": attempted, "verification": verification,
+            "version": label if outcome == "success" else "",
         })
 
     try:
         progress("checking", 8, "检查当前 Git 状态与更新通道", from_sha=old)
         progress("fetching", 16, "优先 SSH 获取 GitHub 提交（失败回退 HTTPS）")
-        target, label = target_for_channel(repo, state["config"]["channel"])
+        target, label = target_for_channel(repo, "release")
         if not is_descendant(repo, old, target):
             raise UpdateError("Target commit is not a fast-forward descendant of deployed version")
         available = target != old
@@ -726,8 +751,9 @@ def execute(repo: Path) -> None:
         good, reason = ci_is_green(target) if available else (True, "")
         ci_pending = not good and reason.startswith(
             ("GitHub CI 尚未完成：", "GitHub CI 正在运行："))
-        report(repo, currentSha=old, latestSha=target, latestLabel=label,
-               latestUrl="https://github.com/" + REPO + "/commit/" + target,
+        report(repo, currentSha=old, currentVersion=version_for_sha(repo, old),
+               latestSha=target, latestVersion=label, latestLabel=label,
+               latestUrl="https://github.com/" + REPO + "/releases/tag/" + label,
                checkedAt=utc_now(), updateAvailable=available,
                ciMessage=reason if ci_pending else "",
                **({"status": "checking", "lastError": ""}
@@ -771,7 +797,7 @@ def execute(repo: Path) -> None:
     if not job:
         return
 
-    print("Deploying verified commit", target, flush=True)
+    print("Deploying published mv3c Release", label, target, flush=True)
     outcome, log, error = deploy(repo, old, target, on_progress=progress)
     validation_line = next(
         (line for line in log.splitlines()
@@ -817,7 +843,7 @@ def main() -> int:
             if restored:
                 print(restored, flush=True)
             current = verify_repo(repo)
-            target, _label = target_for_channel(repo, "main")
+            target, _label = target_for_channel(repo, "release")
             if not is_descendant(repo, current, target):
                 raise UpdateError("Bootstrap target is not a fast-forward descendant")
             green, reason = ci_is_green(target)

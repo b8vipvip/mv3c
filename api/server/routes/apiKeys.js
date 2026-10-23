@@ -25,7 +25,14 @@ const checkRemoteAgentsUse = generateCheckAccess({
   getRoleByName,
 });
 
-router.post('/', requireJwtAuth, checkRemoteAgentsUse, handlers.createApiKey);
+// A guest must not mint a remote API key that bypasses the guest chat quota.
+router.post('/', requireJwtAuth, (req, res, next) => {
+  if (req.user?.provider === 'mv3c-guest') {
+    return res.status(403).json({ code: 'MV3C_GUEST_ROUTE_RESTRICTED',
+      message: '游客不可创建远程 API Key' });
+  }
+  return next();
+}, checkRemoteAgentsUse, handlers.createApiKey);
 
 router.get('/', requireJwtAuth, checkRemoteAgentsUse, handlers.listApiKeys);
 

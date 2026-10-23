@@ -81,6 +81,7 @@ function KeyboardShortcutsProvider() {
 
 function RootLayout() {
   const [showTerms, setShowTerms] = useState(false);
+  const [guestLimitReached, setGuestLimitReached] = useState(false);
   const [bannerHeight, setBannerHeight] = useState(0);
   /** Shared with the drawer so the two agree on the breakpoint-transition frame. */
   const {
@@ -120,7 +121,28 @@ function RootLayout() {
     },
     [setSidebarExpanded],
   );
-  const { isAuthenticated, logout, user } = useAuthContext();
+  const { isAuthenticated, logout, user, token } = useAuthContext();
+  const isGuest = (user as (typeof user & { provider?: string }) | undefined)?.provider === 'mv3c-guest';
+  useEffect(() => {
+    if (!isGuest || !token) { setGuestLimitReached(false); return; }
+    let live = true;
+    const refresh = async () => {
+      try {
+        const result = await fetch('/api/auth/guest/status', {
+          headers: { Authorization: `Bearer ${token}` }, credentials: 'same-origin',
+        });
+        if (result.ok) {
+          const data = await result.json();
+          if (live) setGuestLimitReached(Boolean(data.limitReached || !data.enabled));
+        }
+      } catch { /* A temporary network failure must not mark a guest exhausted. */ }
+    };
+    const onLimit = () => setGuestLimitReached(true);
+    window.addEventListener('mv3c:guest-limit', onLimit);
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 15000);
+    return () => { live = false; window.clearInterval(timer); window.removeEventListener('mv3c:guest-limit', onLimit); };
+  }, [isGuest, token]);
   /** Releases feature-catalog queries after first paint on browser idle. */
   useCatalogWarmup(isAuthenticated);
 
@@ -255,6 +277,21 @@ function RootLayout() {
               <MessagesRetention />
               <AnalyticsConsent gtmId={config?.analyticsGtmId} />
             </AgentsMapContext.Provider>
+            {isGuest && guestLimitReached && (
+              <div role="dialog" aria-modal="true" aria-labelledby="guest-limit-title"
+                className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4">
+                <div className="w-full max-w-md rounded-2xl bg-surface-primary p-6 text-text-primary shadow-xl">
+                  <h2 id="guest-limit-title" className="text-xl font-semibold">游客体验额度已用完</h2>
+                  <p className="mt-3 text-sm text-text-secondary">您已达到游客体验 Token 额度，登录后即可继续使用；如站点开放注册，也可创建账号。</p>
+                  <div className="mt-6 flex flex-wrap gap-3">
+                    {config?.registrationEnabled && (
+                      <button className="rounded-lg bg-blue-600 px-5 py-2 font-medium text-white" onClick={() => logout('/register')}>注册账号</button>
+                    )}
+                    <button className="rounded-lg border border-border-medium px-5 py-2" onClick={() => logout('/login?redirect=false')}>登录账号</button>
+                  </div>
+                </div>
+              </div>
+            )}
             {config?.interface?.termsOfService?.modalAcceptance === true && (
               <TermsAndConditionsModal
                 open={showTerms}

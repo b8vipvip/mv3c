@@ -1,10 +1,10 @@
-# MV3C 本机缓存构建与自动部署
+# MV3C GitHub 正式版发布与服务器缓存部署
 
 ## 更新流程（与 chat2api 一致）
 
-GitHub Actions 负责 **源码与 Docker 冒烟验证**，不向服务器上传 Docker 镜像，也不要求 GHCR、SCP 或额外的 Actions 上传 Secret。
+GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 CI 全部成功后，`mv3c official release` 工作流自动创建版本标签（首次 `v0.1.0`、之后逐次递增补丁版本）并发布非预发布的 GitHub Release。**只有已发布正式版才允许进入生产部署**，不会部署未经发布的 main 提交。不向服务器上传 Docker 镜像，也不依赖 GHCR、SCP 或额外的 Actions 上传 Secret。
 
-服务器上的 `mv3c-updater.timer` 每分钟检查后台更新任务（自动检查间隔由后台配置）。任务只允许来自固定仓库 `b8vipvip/mv3c` 的 main 快进提交或正式 Release，且**目标提交的两项 Actions 必须均为成功**：
+服务器上的 `mv3c-updater.timer` 每分钟检查后台更新任务（自动检查间隔由后台配置）。任务只允许固定仓库 `b8vipvip/mv3c` 已发布、非预发布的正式 Release 标签（同时必须属于可信 main 历史），且**该标签 SHA 的两项 Actions 必须均成功**：
 
 1. 通过 SSH 优先、HTTPS 备选的方式从 GitHub 拉取源码，验证目标提交及 CI。
 2. 检查 Docker 数据目录空余容量（至少 **8 GiB**），不足时拒绝构建，当前容器不受影响；同时记录共享 BuildKit 缓存用量，并保留当前的 `mv3c:rollback` 镜像。
@@ -34,7 +34,7 @@ sudo systemctl status mv3c-updater.timer --no-pager
 
 仓库应由 root 拥有（`/opt/mv3c` 为推荐路径），服务端需安装 Docker Compose v2、启用 BuildKit，并可访问 GitHub 源码和首次依赖下载所需的 npm、Alpine 等软件源。
 
-后台登录后前往「版本更新」，可选择 main / Release、自动更新或手动部署、查看阶段和下载任务日志。
+后台登录后前往「版本更新」，统一以正式版 Release 作为唯一更新通道；可启用／关闭自动检查，或者手动检查、部署并下载诊断日志。版本号写入 Docker 镜像环境变量 `MV3C_VERSION` 和 OCI `org.opencontainers.image.version` 标签，后台显示当前和最新版本；部署后会校验运行中的 `/api/config/version` 与 Git SHA、版本号一致。
 
 ## 从旧的 SCP / 预构建镜像更新器迁移（仅执行一次）
 
@@ -48,10 +48,10 @@ sudo systemctl stop mv3c-updater.timer
 sudo git -C /opt/mv3c fetch https://github.com/b8vipvip/mv3c.git \
   main:refs/remotes/origin/main
 
-# 从已拉取的 main 提交提取新更新器（不需先把旧 Git checkout 重置）
+# 从已拉取的 main 提交提取新更新器（不需先把旧 Git checkout 重置）；必须先有正式 GitHub Release
 sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/agent.py > /root/mv3c-local-bootstrap.py'
 
-# 使用新代码一次性升级；要求 GitHub CI 已通过，利用本机缓存构建并验收
+# 使用新代码一次性升级；目标必须是已通过 GitHub CI 的正式 Release，利用本机缓存构建并验收
 sudo python3 /root/mv3c-local-bootstrap.py --repo /opt/mv3c --bootstrap-local
 
 # 只有确认 bootstrap 成功、站点健康后，重新安装/启用正式更新器

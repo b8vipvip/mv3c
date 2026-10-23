@@ -1,0 +1,83 @@
+name: mv3c official release
+
+on:
+  workflow_run:
+    workflows: ["mv3c source Docker build"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: mv3c-official-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    # Only a successful, in-repository main push can publish a production release.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify same SHA passed both complete main branch workflows
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          latest="$(gh api "repos/$REPOSITORY/commits/main" --jq .sha)"
+          if [ "$latest" != "$EXPECTED_SHA" ]; then
+            echo "Superseded main commit: $EXPECTED_SHA; latest=$latest"
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/actions/runs?head_sha=$EXPECTED_SHA&event=push&per_page=100" > /tmp/mv3c-runs.json
+          python3 - <<'PY'
+          import json, os, sys
+          data = json.load(open('/tmp/mv3c-runs.json'))
+          expected = {'mv3c validation', 'mv3c source Docker build'}
+          latest = {}
+          for run in sorted(data.get('workflow_runs', []),
+                            key=lambda r: r.get('created_at', ''), reverse=True):
+              if run.get('name') in expected and run.get('head_sha') == os.environ['EXPECTED_SHA']:
+                  latest.setdefault(run['name'], run)
+          for name in sorted(expected):
+              run = latest.get(name)
+              if not run or run.get('status') != 'completed' or run.get('conclusion') != 'success':
+                  sys.exit('Release blocked: ' + name + ' is not successful')
+          PY
+          echo "verified_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Publish immutable GitHub Release (automatic patch increment)
+        if: steps.gate.outputs.verified_sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VERIFIED_SHA: ${{ steps.gate.outputs.verified_sha }}
+        run: |
+          set -euo pipefail
+          gh release list --repo "$REPOSITORY" --limit 100 --json tagName > /tmp/mv3c-releases.json
+          tag="$(python3 - <<'PY'
+          import json, re
+          tags = [tuple(map(int, match.groups())) for item in json.load(open('/tmp/mv3c-releases.json'))
+                  if (match := re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', item['tagName']))]
+          if not tags:
+              print('v0.1.0')
+          else:
+              major, minor, patch = max(tags)
+              print(f'v{major}.{minor}.{patch + 1}')
+          PY
+          )"
+          echo "Official release: $tag -> $VERIFIED_SHA"
+          # gh creates an immutable source tag at the exact verified commit.
+          gh release create "$tag" --repo "$REPOSITORY" --target "$VERIFIED_SHA" \
+            --title "mv3c $tag" --generate-notes --latest
+          echo "### Published mv3c $tag" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit: \`$VERIFIED_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Production updater will independently validate and deploy this Release." >> "$GITHUB_STEP_SUMMARY"

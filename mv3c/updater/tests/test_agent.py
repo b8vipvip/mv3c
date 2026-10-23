@@ -118,34 +118,49 @@ class HostUpdaterTests(unittest.TestCase):
                 with self.assertRaisesRegex(agent.UpdateError, "固定"):
                     agent.verify_repo(repo)
 
-    def test_main_target_uses_only_pinned_origin(self):
-        with patch.object(agent, "fetch_prefer_ssh", return_value="HTTPS 回退") as fetch:
-            with patch.object(agent, "git", return_value=SHA2):
-                sha, label = agent.target_for_channel(pathlib.Path("/tmp"), "main")
-        self.assertEqual(sha, SHA2)
-        self.assertIn(SHA2[:12], label)
-        self.assertIn("HTTPS 回退", label)
-        fetch.assert_called_once_with(
-            pathlib.Path("/tmp"), "refs/heads/main:refs/remotes/origin/main")
+    def test_unpublished_main_branch_cannot_be_deployed(self):
+        with self.assertRaisesRegex(agent.UpdateError, "Only published"):
+            agent.target_for_channel(pathlib.Path("/tmp"), "main")
         with self.assertRaises(agent.UpdateError):
             agent.target_for_channel(pathlib.Path("/tmp"), "evil")
 
-    def test_release_tag_is_validated_before_git_fetch(self):
+    def test_release_tag_is_validated_before_any_git_fetch(self):
         with patch.object(agent, "json_from_github", return_value={"tag_name": "../../evil"}):
-            with patch.object(agent, "fetch_prefer_ssh", return_value="SSH") as fetch:
-                with self.assertRaises(agent.UpdateError):
+            with patch.object(agent, "fetch_prefer_ssh") as fetch:
+                with self.assertRaisesRegex(agent.UpdateError, "valid stable"):
                     agent.target_for_channel(pathlib.Path("/tmp"), "release")
-                fetch.assert_called_once_with(
-                    pathlib.Path("/tmp"), "refs/heads/main:refs/remotes/origin/main")
+                fetch.assert_not_called()
 
-    def test_release_tag_fetch_prefers_ssh(self):
-        with patch.object(agent, "json_from_github", return_value={"tag_name": "v1.2.3"}):
+    def test_release_tag_fetch_prefers_ssh_and_checks_main_ancestry(self):
+        with patch.object(agent, "json_from_github", return_value={
+            "tag_name": "v1.2.3", "draft": False, "prerelease": False
+        }):
             with patch.object(agent, "fetch_prefer_ssh", return_value="SSH") as fetch:
                 with patch.object(agent, "git", return_value=SHA2):
-                    sha, label = agent.target_for_channel(pathlib.Path("/tmp"), "release")
+                    with patch.object(agent, "is_descendant", return_value=True):
+                        sha, label = agent.target_for_channel(pathlib.Path("/tmp"), "release")
         self.assertEqual(sha, SHA2)
-        self.assertEqual(label, "v1.2.3 · SSH")
+        self.assertEqual(label, "v1.2.3")
+        self.assertEqual(fetch.call_count, 2)
         self.assertEqual(fetch.call_args_list[1].args[1:], ("tag", "v1.2.3"))
+
+    def test_release_rejects_untrusted_tag_ancestry_or_prerelease(self):
+        with patch.object(agent, "json_from_github", return_value={"tag_name": "v1.2.3",
+                                                                   "prerelease": True}):
+            with self.assertRaises(agent.UpdateError):
+                agent.target_for_channel(pathlib.Path("/tmp"), "release")
+        with patch.object(agent, "json_from_github", return_value={"tag_name": "v1.2.3"}):
+            with patch.object(agent, "fetch_prefer_ssh"):
+                with patch.object(agent, "git", return_value=SHA2):
+                    with patch.object(agent, "is_descendant", return_value=False):
+                        with self.assertRaisesRegex(agent.UpdateError, "trusted main"):
+                            agent.target_for_channel(pathlib.Path("/tmp"), "release")
+
+    def test_version_for_sha_resolves_exact_semver(self):
+        with patch.object(agent, "git", return_value="v0.1.0\nv0.2.3\nother\n"):
+            self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "v0.2.3")
+        with patch.object(agent, "git", return_value=""):
+            self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "")
 
     def test_fetch_prefers_ssh_and_falls_back_to_https(self):
         repo = pathlib.Path("/tmp")
@@ -353,12 +368,14 @@ class HostUpdaterTests(unittest.TestCase):
                 return SHA2
             return "#1 CACHED\\n#2 build successful"
         with patch.object(agent, "run", side_effect=fake_run):
-            agent.build_local_image(pathlib.Path("/tmp"), SHA2)
+            with patch.object(agent, "git", return_value="v1.2.3"):
+                agent.build_local_image(pathlib.Path("/tmp"), SHA2)
         build, kwargs = commands[0]
         self.assertEqual(build[:3], ["docker", "build", "--progress=plain"])
         self.assertEqual(build[-1], ".")
         self.assertIn("NODE_MAX_OLD_SPACE_SIZE=3072", build)
         self.assertIn("BUILD_COMMIT=" + SHA2, build)
+        self.assertIn("BUILD_VERSION=v1.2.3", build)
         self.assertIn("NPM_CI_TIMEOUT_SECONDS=1800", build)
         self.assertNotIn("--no-cache", build)
         self.assertNotIn("--pull", build)
@@ -463,11 +480,15 @@ class HostUpdaterTests(unittest.TestCase):
     def test_post_deploy_checks_sha_container_and_http(self):
         class Response:
             status = 200
+            def __init__(self, url):
+                self.url = url
             def __enter__(self):
                 return self
             def __exit__(self, *args):
                 return False
             def read(self, size):
+                if self.url.endswith("/version"):
+                    return ('{"sha":"' + SHA2 + '","version":"unreleased"}').encode()
                 return b'{"appTitle":"mv3c"}'
         def fake_run(args, _repo, **_kwargs):
             if args[:4] == ["docker", "compose", "ps", "-q"]:
@@ -480,10 +501,10 @@ class HostUpdaterTests(unittest.TestCase):
         with patch.object(agent, "git", return_value=SHA2):
             with patch.object(agent, "run", side_effect=fake_run):
                 with patch.object(agent.urllib.request, "urlopen",
-                                  return_value=Response()) as check:
+                                  side_effect=lambda url, timeout: Response(url)) as check:
                     result = agent.verify_deployment(pathlib.Path("/tmp"), SHA2)
         self.assertIn("Post-deploy validation PASSED", result)
-        self.assertEqual(check.call_count, 2)
+        self.assertEqual(check.call_count, 3)
         with patch.object(agent, "git", return_value=SHA1):
             with self.assertRaisesRegex(agent.UpdateError, "SHA mismatch"):
                 agent.verify_deployment(pathlib.Path("/tmp"), SHA2)

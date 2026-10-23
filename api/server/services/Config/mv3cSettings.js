@@ -14,7 +14,7 @@ async function readSettings() {
   return collection().findOne({ _id: SETTINGS_ID });
 }
 async function countRegisteredUsers() {
-  return mongoose.connection.db.collection('users').countDocuments({});
+  return mongoose.connection.db.collection('users').countDocuments({ provider: { $ne: 'mv3c-guest' } });
 }
 async function getPublicSettings() {
   const [doc, userCount] = await Promise.all([readSettings(), countRegisteredUsers()]);
@@ -43,6 +43,9 @@ async function saveSettings(body, actor) {
   for (const [name, value] of Object.entries(patch.chat2api ?? {})) {
     fields['chat2api.' + (name === 'apiKey' ? 'apiKeyCipher' : name)] =
       name === 'apiKey' ? encryptSecret(value, process.env.CREDS_KEY) : value;
+  }
+  for (const [name, value] of Object.entries(patch.guest ?? {})) {
+    fields['guest.' + name] = value;
   }
   if (!Object.keys(fields).length) throw new TypeError('No settings to update');
   fields.updatedAt = new Date();
