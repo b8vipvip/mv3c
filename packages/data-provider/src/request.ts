@@ -508,7 +508,10 @@ if (typeof window !== 'undefined') {
         return Promise.reject(error);
       }
 
-      if (isRefreshRequest && getAuthRecoveryState().refreshPromise) {
+      // A refresh request is the session probe itself. Never recursively refresh
+      // it or redirect here: AuthContext must decide between the guest landing
+      // and explicit login after its own silent-refresh result.
+      if (isRefreshRequest) {
         return Promise.reject(error);
       }
 
