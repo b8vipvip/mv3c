@@ -282,9 +282,11 @@ function RootLayout() {
                 className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4">
                 <div className="w-full max-w-md rounded-2xl bg-surface-primary p-6 text-text-primary shadow-xl">
                   <h2 id="guest-limit-title" className="text-xl font-semibold">游客体验额度已用完</h2>
-                  <p className="mt-3 text-sm text-text-secondary">您已达到游客体验 Token 额度，注册或登录后即可继续使用。</p>
+                  <p className="mt-3 text-sm text-text-secondary">您已达到游客体验 Token 额度，登录后即可继续使用；如站点开放注册，也可创建账号。</p>
                   <div className="mt-6 flex flex-wrap gap-3">
-                    <button className="rounded-lg bg-blue-600 px-5 py-2 font-medium text-white" onClick={() => logout('/register')}>注册账号</button>
+                    {config?.registrationEnabled && (
+                      <button className="rounded-lg bg-blue-600 px-5 py-2 font-medium text-white" onClick={() => logout('/register')}>注册账号</button>
+                    )}
                     <button className="rounded-lg border border-border-medium px-5 py-2" onClick={() => logout('/login?redirect=false')}>登录账号</button>
                   </div>
                 </div>
