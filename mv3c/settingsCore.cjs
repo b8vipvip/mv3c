@@ -13,6 +13,7 @@ const DEFAULT_PROVIDER = Object.freeze({
   models: ['gpt-6-sol', 'gpt-5.6-sol'],
   fetchModels: true,
 });
+const DEFAULT_GUEST = Object.freeze({ enabled: true, tokenLimit: 100000 });
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,127}$/;
 
 function assertPlainObject(value, name) {
@@ -46,7 +47,7 @@ function validateBaseURL(value) {
 
 function validatePatch(body) {
   assertPlainObject(body, 'settings');
-  const allowed = new Set(['site', 'chat2api']);
+  const allowed = new Set(['site', 'chat2api', 'guest']);
   for (const name of Object.keys(body)) {
     if (!allowed.has(name)) throw new TypeError('Unknown settings section: ' + name);
   }
@@ -113,6 +114,24 @@ function validatePatch(body) {
     }
     result.chat2api = provider;
   }
+  if (body.guest !== undefined) {
+    assertPlainObject(body.guest, 'guest');
+    const guest = {};
+    for (const [name, value] of Object.entries(body.guest)) {
+      if (name === 'enabled') {
+        if (typeof value !== 'boolean') throw new TypeError('guest.enabled must be boolean');
+        guest.enabled = value;
+      } else if (name === 'tokenLimit') {
+        if (!Number.isSafeInteger(value) || value < 1000 || value > 10000000) {
+          throw new TypeError('guest.tokenLimit must be an integer between 1000 and 10000000');
+        }
+        guest.tokenLimit = value;
+      } else {
+        throw new TypeError('Unknown guest setting: ' + name);
+      }
+    }
+    result.guest = guest;
+  }
   return result;
 }
 
@@ -145,6 +164,7 @@ function publicSettings(doc, userCount = 1) {
   return {
     site: { ...site, registrationEnabled:
       doc?.site?.registrationEnabled ?? userCount === 0 },
+    guest: { ...DEFAULT_GUEST, ...(doc?.guest ?? {}) },
     chat2api: {
       enabled: provider.enabled,
       baseURL: provider.baseURL,
@@ -190,6 +210,6 @@ function runtimeConfig(doc, keyHex) {
 }
 
 module.exports = {
-  DEFAULT_SITE, DEFAULT_PROVIDER, validateBaseURL, validatePatch,
+  DEFAULT_SITE, DEFAULT_PROVIDER, DEFAULT_GUEST, validateBaseURL, validatePatch,
   encryptSecret, decryptSecret, publicSettings, runtimeConfig,
 };
