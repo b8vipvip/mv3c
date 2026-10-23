@@ -51,7 +51,7 @@ const addTitle = async (
     return;
   }
 
-  if (client.options.titleConvo === false) {
+  if (client?.options?.titleConvo === false && req?.user?.provider !== 'mv3c-guest') {
     return;
   }
 
