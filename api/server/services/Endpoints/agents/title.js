@@ -51,7 +51,7 @@ const addTitle = async (
     return;
   }
 
-  if (client.options.titleConvo === false) {
+  if (client?.options?.titleConvo === false && req?.user?.provider !== 'mv3c-guest') {
     return;
   }
 
@@ -88,7 +88,12 @@ const addTitle = async (
         signal.addEventListener('abort', () => abortController.abort(), { once: true });
       }
     }
-    if (client && typeof client.titleConvo === 'function') {
+    if (req?.user?.provider === 'mv3c-guest') {
+      // Guests should not spend a second model request just to name their chat.
+      // Use the first user message, then persist/emit via the SAME title owner below.
+      const summary = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '';
+      titlePromise = Promise.resolve(summary.slice(0, 60) || '新对话');
+    } else if (client && typeof client.titleConvo === 'function') {
       titlePromise = Promise.race([
         client
           .titleConvo({
@@ -102,6 +107,7 @@ const addTitle = async (
         timeoutPromise,
       ]);
     } else {
+      clearTimeout(timeoutId);
       return;
     }
 
