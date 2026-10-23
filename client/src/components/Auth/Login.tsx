@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { OpenIDIcon, useToastContext } from '@librechat/client';
-import { ErrorTypes, registerPage } from 'librechat-data-provider';
+import { ErrorTypes, apiBaseUrl, registerPage } from 'librechat-data-provider';
 import { useOutletContext, useSearchParams, useLocation } from 'react-router-dom';
 import type { TLoginLayoutContext } from '~/common';
 import type { TranslationKeys } from '~/hooks';
@@ -25,7 +25,28 @@ const oauthErrorKeys: Record<string, TranslationKeys> = {
 function Login() {
   const localize = useLocalize();
   const { showToast } = useToastContext();
-  const { error, setError, login } = useAuthContext();
+  const { error, setError, login, completeAuthentication } = useAuthContext();
+  const [guestBusy, setGuestBusy] = useState(false);
+  const [guestError, setGuestError] = useState('');
+  const enterAsGuest = async () => {
+    setGuestBusy(true);
+    setGuestError('');
+    try {
+      const response = await fetch(`${apiBaseUrl()}/api/auth/guest`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.token || !data?.user) {
+        throw new Error(data?.message || '游客体验暂时不可用');
+      }
+      completeAuthentication(data.token, data.user);
+    } catch (err) {
+      setGuestError(err instanceof Error ? err.message : '游客体验暂时不可用');
+    } finally {
+      setGuestBusy(false);
+    }
+  };
   const { startupConfig } = useOutletContext<TLoginLayoutContext>();
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -121,6 +142,15 @@ function Login() {
           error={error}
           setError={setError}
         />
+      )}
+      {(startupConfig as (typeof startupConfig & { guestExperienceEnabled?: boolean }))?.guestExperienceEnabled === true && (
+        <div className="my-4 text-center">
+          <button type="button" onClick={() => void enterAsGuest()} disabled={guestBusy}
+            className="w-full rounded-lg border border-border-medium p-2 text-text-primary hover:bg-surface-secondary disabled:opacity-50">
+            {guestBusy ? '正在进入游客体验…' : '游客体验（无需注册）'}
+          </button>
+          {guestError && <p role="alert" className="mt-2 text-sm text-red-500">{guestError}</p>}
+        </div>
       )}
       {startupConfig?.registrationEnabled === true && (
         <p className="text-text-secondary my-4 text-center text-sm font-light">
