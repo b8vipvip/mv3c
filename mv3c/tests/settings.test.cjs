@@ -30,6 +30,16 @@ test('validatePatch rejects unknown fields, invalid keys and invalid models', ()
   assert.throws(() => core.validatePatch({ chat2api: { models: [] } }));
 });
 
+test('guest defaults and admin validation are bounded', () => {
+  assert.deepEqual(core.publicSettings(null).guest, { enabled: true, tokenLimit: 100000 });
+  assert.deepEqual(core.validatePatch({ guest: { enabled: false, tokenLimit: 120000 } }),
+    { guest: { enabled: false, tokenLimit: 120000 } });
+  for (const value of [-1, 0, 999, 10000001, 1.2, '100000', null]) {
+    assert.throws(() => core.validatePatch({ guest: { tokenLimit: value } }));
+  }
+  assert.throws(() => core.validatePatch({ guest: { unknown: true } }));
+});
+
 test('provider key is encrypted, authenticated, and never in admin payload', () => {
   const ciphertext = core.encryptSecret('sk-test-secret', KEY);
   assert.ok(!ciphertext.includes('sk-test-secret'));
