@@ -694,6 +694,7 @@ def execute(repo: Path) -> None:
     # Claim manual work before GitHub checks: progress should say what the
     # worker is doing instead of reporting "queued" for a long fetch.
     job = bridge(repo, "claim") if state.get("pendingJob") else None
+    label = ""  # Failures before release resolution cannot report an unspecified version.
     def progress(stage: str, percent: int, message: str, *,
                  from_sha: str = "", target_sha: str = "") -> None:
         if job:
@@ -781,7 +782,7 @@ def execute(repo: Path) -> None:
     if not job:
         return
 
-    print("Deploying verified commit", target, flush=True)
+    print("Deploying published mv3c Release", label, target, flush=True)
     outcome, log, error = deploy(repo, old, target, on_progress=progress)
     validation_line = next(
         (line for line in log.splitlines()
