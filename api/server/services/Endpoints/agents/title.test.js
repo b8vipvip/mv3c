@@ -71,6 +71,47 @@ describe('agents addTitle', () => {
     );
   });
 
+  it('generates a guest title from the first message without calling an AI model', async () => {
+    const client = makeClient('Unused model generated title');
+    const req = makeReq();
+    req.user.provider = 'mv3c-guest';
+    await addTitle(req, {
+      text: '  你好，  请帮我了解   MV3C  ',
+      client,
+      conversationId: 'guest-conversation',
+      immediate: true,
+      convoReady: Promise.resolve(),
+    });
+    expect(client.titleConvo).not.toHaveBeenCalled();
+    expect(mockSaveConvo).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        conversationId: 'guest-conversation',
+        title: '你好， 请帮我了解 MV3C',
+      }),
+      expect.objectContaining({ noUpsert: true }),
+    );
+  });
+
+  it('handles an empty guest prompt with a deterministic non-model fallback', async () => {
+    const req = makeReq();
+    req.user.provider = 'mv3c-guest';
+    const client = makeClient();
+    await addTitle(req, {
+      text: '',
+      client,
+      conversationId: 'guest-empty-prompt',
+      immediate: true,
+      convoReady: Promise.resolve(),
+    });
+    expect(client.titleConvo).not.toHaveBeenCalled();
+    expect(mockSaveConvo).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ title: '新对话' }),
+      expect.objectContaining({ noUpsert: true }),
+    );
+  });
+
   it('passes immediate:true through to client.titleConvo', async () => {
     const client = makeClient();
 
