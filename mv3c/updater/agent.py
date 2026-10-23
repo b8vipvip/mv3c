@@ -334,7 +334,7 @@ def github_api_token() -> str:
                 token = result.stdout.strip()
         except (OSError, subprocess.TimeoutExpired):
             pass
-    if token and (len(token) > 2048 or any(c in token for c in "\\r\\n")):
+    if token and (len(token) > 2048 or any(c in token for c in "\r\n")):
         raise UpdateError("Malformed GitHub API credential")
     return token
 
@@ -365,7 +365,7 @@ def json_from_github(url: str) -> dict:
             retry_after = error.headers.get("Retry-After", "")
             try:
                 payload = json.loads(error.read(8192))
-                message = str(payload.get("message", ""))[:180].replace("\\n", " ")
+                message = str(payload.get("message", ""))[:180].replace("\n", " ")
             except (ValueError, OSError, UnicodeError):
                 message = ""
             if remaining == "0" or "rate limit" in message.lower():
