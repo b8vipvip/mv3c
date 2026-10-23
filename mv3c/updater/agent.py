@@ -447,8 +447,18 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
     )
     if running_image != tagged_image:
         raise UpdateError("Running container image does not match newly built image")
+    expected_version = version_for_sha(repo, expected_sha)
+    if expected_version:
+        image_version = run([
+            "docker", "image", "inspect", "--format",
+            '{{index .Config.Labels "org.opencontainers.image.version"}}',
+            "mv3c:local",
+        ], repo, timeout=20)
+        if image_version != expected_version:
+            raise UpdateError("Docker image Release version mismatch")
     for url in ("http://127.0.0.1:3080/readyz",
-                "http://127.0.0.1:3080/api/config"):
+                "http://127.0.0.1:3080/api/config",
+                "http://127.0.0.1:3080/api/config/version"):
         try:
             with urllib.request.urlopen(url, timeout=15) as response:
                 if response.status != 200:
@@ -456,12 +466,17 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
                 data = response.read(200_000)
                 if url.endswith("/api/config") and not isinstance(json.loads(data), dict):
                     raise UpdateError("Startup configuration is not a JSON object")
+                if url.endswith("/api/config/version"):
+                    version_payload = json.loads(data)
+                    if (version_payload.get("sha") != expected_sha or
+                            version_payload.get("version") != (expected_version or "unreleased")):
+                        raise UpdateError("Live server version and commit do not match deployment")
         except (urllib.error.URLError, ValueError) as error:
             raise UpdateError("HTTP smoke verification failed: " + url + " " +
                               str(error)[:200]) from error
     return ("Post-deploy validation PASSED: git SHA=" + actual[:12]
             + "; running image matches built tag; container healthy;"
-            + " /readyz HTTP 200; /api/config HTTP 200")
+            + " /readyz HTTP 200; /api/config HTTP 200; live version attested")
 
 
 def transaction_path(repo: Path) -> Path:
