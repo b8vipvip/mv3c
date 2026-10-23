@@ -4,8 +4,9 @@
 # whenever package-lock and workspace package manifests have not changed.
 # BuildKit cache persists npm tarballs across builds when dependency inputs change.
 
-# Base node image
-FROM node:24.16.0-alpine AS node
+# Shared Alpine/Node runtime packages. The builder and the final runtime
+# reuse this same base; only the builder has the full development toolchain.
+FROM node:24.16.0-alpine AS base
 
 # Do not run an unconditional system-wide apk upgrade on each image build.
 # The pinned node:24.16.0-alpine base already provides its Alpine release;
@@ -54,6 +55,10 @@ WORKDIR /app
 
 USER node
 
+# Build-only workspace: npm ci may install multiple GiB of dev deps,
+# which must not survive as lower filesystem layers in the runtime image.
+FROM base AS build
+
 COPY --chown=node:node package.json package-lock.json ./
 COPY --chown=node:node api/package.json ./api/package.json
 COPY --chown=node:node client/package.json ./client/package.json
@@ -90,6 +95,13 @@ RUN --mount=type=cache,id=mv3c-npm-cache,target=/home/node/.npm,uid=1000,gid=100
     NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend && \
     npm prune --omit=dev --prefer-offline --no-audit --no-fund
 
+# Production output stage. Copy only the FINAL builder filesystem state,
+# after npm prune --omit=dev. This flattens away earlier layers containing
+# full development node_modules, keeping BuildKit caches in the builder.
+# Do not change /app volume paths or npm's root workspace layout.
+FROM base AS runtime
+COPY --from=build --chown=node:node /app/ /app/
+
 # Optional build metadata surfaced in Settings -> About for support triage.
 # Declared here (after the heavy install/build steps) so that commit/date
 # changing on every CI run does not bust the cache for dependency install
@@ -110,9 +122,3 @@ EXPOSE 3080
 ENV HOST=0.0.0.0
 CMD ["npm", "run", "backend"]
 
-# Optional: for client with nginx routing
-# FROM nginx:stable-alpine AS nginx-client
-# WORKDIR /usr/share/nginx/html
-# COPY --from=node /app/client/dist /usr/share/nginx/html
-# COPY client/nginx.conf /etc/nginx/conf.d/default.conf
-# ENTRYPOINT ["nginx", "-g", "daemon off;"]
