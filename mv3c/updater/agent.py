@@ -814,6 +814,21 @@ def execute(repo: Path) -> None:
         raise UpdateError("Deployment " + outcome + ": " + error[:1000])
 
 
+def bootstrap_needs_deploy(repo: Path, current: str, target: str) -> bool:
+    """Git SHA equality alone does not prove a versioned Release is running."""
+    if current != target:
+        return True
+    try:
+        verify_deployment(repo, target)
+    except Exception as error:
+        print("Bootstrap detected matching Git SHA but no verified Release image: "
+              + str(error)[:300], flush=True)
+        print("Rebuilding the same Release with existing Docker caches.", flush=True)
+        return True
+    print("Running Release image and server version already verified.", flush=True)
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="mv3c host update worker")
     parser.add_argument("--repo", required=True, type=Path, help="Host Git checkout path")
@@ -849,8 +864,7 @@ def main() -> int:
             green, reason = ci_is_green(target)
             if not green:
                 raise UpdateError("Bootstrap requires both completed GitHub CI runs: " + reason)
-            if current == target:
-                print("Bootstrap already at the latest commit; no deployment needed")
+            if not bootstrap_needs_deploy(repo, current, target):
                 return 0
             outcome, log, error = deploy(repo, current, target)
             print(log, flush=True)
