@@ -58,6 +58,9 @@ test('provider key is encrypted, authenticated, and never in admin payload', () 
   assert.equal(runtime.endpoints.custom[0].apiKey, 'sk-test-secret');
   assert.equal(runtime.endpoints.custom[0].addParams.prompt_mode, 'full');
   assert.equal(runtime.endpoints.custom[0].addParams.useResponsesApi, false);
+  // TX03 file/long-context runs may take 600s. mv3c must not end them at 300s.
+  assert.equal(runtime.endpoints.custom[0].addParams.timeout, 660000);
+  assert.equal(runtime.endpoints.custom[0].addParams.maxRetries, 0);
   assert.equal(runtime.endpoints.custom[0].titleConvo, false);
 });
 
