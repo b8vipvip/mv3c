@@ -215,6 +215,21 @@ class HostUpdaterTests(unittest.TestCase):
             self.assertIn("downloading layer 79", logfile.read_text())
             self.assertEqual(logfile.stat().st_mode & 0o777, 0o600)
 
+    def test_dockerfile_avoids_unbounded_alpine_upgrade_and_has_signed_mirrors(self):
+        dockerfile = (pathlib.Path(__file__).resolve().parents[3] /
+                      "Dockerfile").read_text(encoding="utf-8")
+        self.assertNotIn("RUN apk upgrade", dockerfile)
+        self.assertNotIn("--force-missing-repositories", dockerfile)
+        self.assertIn("if timeout 120 apk add --no-cache jemalloc python3 py3-pip uv",
+                      dockerfile)
+        self.assertIn("https://mirrors.aliyun.com/alpine", dockerfile)
+        self.assertIn("https://mirrors.tuna.tsinghua.edu.cn/alpine", dockerfile)
+        self.assertIn("https://dl-cdn.alpinelinux.org/alpine", dockerfile)
+        self.assertIn(r"main\n%s/%s/community\n", dockerfile)
+        self.assertIn('> /etc/apk/repositories;', dockerfile)
+        self.assertIn('if [ "$installed" != 1 ]; then', dockerfile)
+        self.assertIn("RUN uv --version && uvx --version", dockerfile)
+
     def test_cache_report_is_monitor_only_and_parses_docker_units(self):
         self.assertEqual(agent.parse_docker_size("4.204GB"), 4204000000)
         self.assertEqual(agent.parse_docker_size("453MiB"), 453 * 1024 ** 2)

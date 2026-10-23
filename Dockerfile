@@ -7,9 +7,32 @@
 # Base node image
 FROM node:24.16.0-alpine AS node
 
-RUN apk upgrade --no-cache
-RUN apk add --no-cache jemalloc
-RUN apk add --no-cache python3 py3-pip uv
+# Do not run an unconditional system-wide apk upgrade on each image build.
+# The pinned node:24.16.0-alpine base already provides its Alpine release;
+# upgrade base images as an explicitly tested dependency change instead.
+# On networks where dl-cdn.alpinelinux.org is unreachable, use HTTPS mirrors
+# with bounded per-mirror retries. apk continues verifying Alpine signatures.
+RUN set -eu; \
+    alpine_branch="v$(cut -d. -f1,2 /etc/alpine-release)"; \
+    installed=0; \
+    for mirror in \
+      https://mirrors.aliyun.com/alpine \
+      https://mirrors.tuna.tsinghua.edu.cn/alpine \
+      https://dl-cdn.alpinelinux.org/alpine; do \
+      printf '%s/%s/main\n%s/%s/community\n' \
+        "$mirror" "$alpine_branch" "$mirror" "$alpine_branch" \
+        > /etc/apk/repositories; \
+      echo "MV3C APK package installation via $mirror ($alpine_branch)"; \
+      if timeout 120 apk add --no-cache jemalloc python3 py3-pip uv; then \
+        installed=1; \
+        break; \
+      fi; \
+      echo "MV3C WARNING: APK repository unavailable: $mirror; trying next HTTPS mirror" >&2; \
+    done; \
+    if [ "$installed" != 1 ]; then \
+      echo "MV3C ERROR: every Alpine HTTPS mirror failed; no partial package installation accepted" >&2; \
+      exit 1; \
+    fi
 
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
