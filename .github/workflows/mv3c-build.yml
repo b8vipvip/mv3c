@@ -26,6 +26,7 @@ jobs:
             --build-arg NPM_CI_TIMEOUT_SECONDS=1800 \
             --build-arg BUILD_COMMIT=${{ github.sha }} \
             --build-arg BUILD_BRANCH=${{ github.ref_name }} \
+            --build-arg BUILD_VERSION=unreleased \
             --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
             -t mv3c:ci .
       - name: Measure build-stage and final-runtime image sizes
@@ -85,6 +86,8 @@ jobs:
             exit 1
           fi
           curl --silent --fail http://127.0.0.1:3080/api/config > /tmp/mv3c-startup.json
+          curl --silent --fail http://127.0.0.1:3080/api/config/version > /tmp/mv3c-version.json
+          node -e "const x=require('/tmp/mv3c-version.json');if(x.sha!==process.env.GITHUB_SHA||x.version!=='unreleased')process.exit(1);console.log('Runtime revision attestation OK')"
           node -e "const x=require('/tmp/mv3c-startup.json'); if(x.appTitle!=='mv3c'||x.registrationEnabled!==true) process.exit(1); console.log('env-free startup and first-user registration are ready')"
       - name: Exercise first admin login and persisted provider configuration
         timeout-minutes: 3
