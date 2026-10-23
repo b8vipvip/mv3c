@@ -34,6 +34,17 @@ jobs:
         run: |
           docker compose config --quiet
           docker compose -f docker-compose.mv3c.yml config --quiet
+          python3 - <<'PY'
+          import json, subprocess
+          for compose in ('docker-compose.yml', 'docker-compose.mv3c.yml'):
+              output = subprocess.check_output(
+                  ['docker', 'compose', '-f', compose, 'config', '--format', 'json'],
+                  text=True,
+              )
+              env = json.loads(output)['services']['mv3c']['environment']
+              assert env.get('SCHEDULES_SINGLE_PROCESS') == 'true', compose
+          print('Single-process scheduler assertion present in production and CI compose')
+          PY
       - name: Verify imported source branding
         run: |
           if [ -f client/index.html ]; then
