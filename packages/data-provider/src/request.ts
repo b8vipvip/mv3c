@@ -406,7 +406,12 @@ const withAuthorization = (options: RequestInit | undefined, token: string | nul
  * reported as a generic transport failure and retried against a condition that cannot clear.
  */
 const redirectIfTwoFactorSetupPayload = (payload: unknown): boolean => {
-  const setupToken = getTwoFactorSetupToken(parseSetupPayload(payload));
+  const candidate = parseSetupPayload(payload) as { code?: string } | null;
+  if (candidate?.code === 'MV3C_GUEST_LIMIT') {
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('mv3c:guest-limit'));
+    return true;
+  }
+  const setupToken = getTwoFactorSetupToken(candidate);
   if (!setupToken) {
     return false;
   }
@@ -487,6 +492,10 @@ if (typeof window !== 'undefined') {
       }
 
       if (error.response.status === 403) {
+        if (error.response.data?.code === 'MV3C_GUEST_LIMIT') {
+          window.dispatchEvent(new Event('mv3c:guest-limit'));
+          return Promise.reject(error);
+        }
         const setupToken = getTwoFactorSetupToken(error.response.data);
         if (setupToken) {
           redirectToTwoFactorSetupOnce(setupToken);
