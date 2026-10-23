@@ -229,6 +229,13 @@ function buildCloudFrontStartupConfig() {
   };
 }
 
+// Public, non-secret version attestation comes from immutable Docker build metadata.
+router.get('/version', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ version: process.env.MV3C_VERSION || 'unreleased',
+    sha: process.env.BUILD_COMMIT || '' });
+});
+
 router.get('/', async function (req, res) {
   try {
     const preLoginPayload = await buildPreLoginPayload();
