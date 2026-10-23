@@ -1,7 +1,11 @@
 'use strict';
 const { admit, deny, PROVIDER } = require('~/server/services/Config/mv3cGuest');
 module.exports = async function enforceGuestQuota(req, res, next) {
-  if (req.method !== 'POST' || req.user?.provider !== PROVIDER) return next();
+  // Control-only requests must remain available so an exhausted guest can abort work.
+  const controlOnly = new Set(['/abort', '/steer/cancel', '/steer/arm', '/steer/deliver']);
+  if (req.method !== 'POST' || controlOnly.has(req.path) || req.user?.provider !== PROVIDER) {
+    return next();
+  }
   try {
     const stats = await admit(String(req.user.id || req.user._id), req.body);
     if (stats.limitReached) return deny(res, stats);
