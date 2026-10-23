@@ -82,6 +82,7 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 - **磁盘**：构建前要求 Docker 数据目录至少 8 GiB 可用（并非构建一定只占 8 GiB），新旧镜像和构建缓存会暂时并存。先用 `df -h /var/lib/docker`、`docker system df` 检查，避免删除 MongoDB 或业务数据卷。
 - **Git 获取**：默认优先非交互 SSH，失败回退固定 HTTPS 地址；必须保持 `main`、Git 工作区没有已跟踪文件修改，且通过固定来源的 CI。前端容器无 Docker socket 权限。
 - **更新日志**：`sudo journalctl -u mv3c-updater.service -n 200 --no-pager`。后台更新记录可下载本次任务诊断报告。宿主机还会将最新一次 **完整 Docker 构建输出**保存在仅 root 可读的 `/var/log/mv3c-updater-build.log`，供 `sudo tail -n 120 /var/log/mv3c-updater-build.log` 检查（每次构建覆盖，不需要再次部署即可提取日志）。遇到错误会从完整输出中提取关键错误行，避免被 Docker 下载进度刷屏覆盖。
+- **Alpine 软件源故障与超时（2026-10）**：此前 `RUN apk upgrade --no-cache` 在受限主机上反复请求 `dl-cdn.alpinelinux.org/alpine/v3.24`，会导致长时间阻塞并以 `apk exit 99` 回滚。现在从固定、已测试的 Node/Alpine 基础镜像出发，不再每次无条件进行系统全量 `apk upgrade`；仅安装必需的 `jemalloc/python3/py3-pip/uv`，按顺序尝试阿里云、清华大学以及 Alpine 官方三个 HTTPS 软件源，每个源最多等待 120 秒。包索引和包签名继续由 apk 校验，所有源均失败则停止构建且旧容器继续运行，**绝不**使用 `--force-missing-repositories`。这项更改降低默认源不可达的失败概率，但不能保证主机对所有三个源都可达。若再失败，查看 `/var/log/mv3c-updater-build.log` 中的 `MV3C APK package installation via ...` 和最终网络错误；先诊断 DNS/TLS/代理/路由，不要继续盲目重试或清空 Docker 缓存。
 - **受限镜像仓库**：历史 Dockerfile 同时通过 `apk add uv` 安装 `uv`，又从 GHCR 外部镜像复制 `uv/uvx`，使服务器本机构建额外依赖 GHCR 的镜像层下载。现改为仅依赖 Alpine 包管理器安装的 `uv` 与 `uvx`，构建时检查两个命令。不能由旧的下载进度片段证明故障层一定来自 GHCR；如果仍卡在 `FROM node:...` 或 apk 下载，需要用新的完整构建日志定位。由于 Dockerfile 变化可能使后续层缓存失效，首次改版构建可能重新执行 npm ci，但会尽量复用 BuildKit 包缓存。
 - **健康检查**：更新后必须核验运行镜像、容器健康及两个 HTTP 接口。数据库结构不可逆升级需要单独备份；镜像回滚并不等同于数据库数据回滚。
 
