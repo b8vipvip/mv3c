@@ -73,6 +73,7 @@ test('diagnostic report keeps validated result, timestamps, verification and log
     log: 'Docker compose output',
   });
   assert.match(report, /Post-deploy validation PASSED/);
+  assert.match(report, /Official version:/);
   assert.match(report, /50% \| building \| Building/);
   assert.match(report, /Docker compose output/);
   assert.match(report, /3000/);
