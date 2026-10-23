@@ -1,0 +1,456 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+from pathlib import Path
+
+from .audit import write_audit
+from .model import Criterion, CriterionStatus, Event, Gate, GateStatus, GateStep, State, Task, utcnow
+
+_VERSION_RE = re.compile(r"(?<![\w.])v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?(?![\w.])", re.I)
+_RELEASE_RE = re.compile(r"\b(?:release|publish|published|shipping)\b|正式版|发布|发版", re.I)
+_SECONDARY_RELEASE_INTENT_RE = re.compile(
+    r"(?:^|\n)\s*(?:[-*]\s*)?(?:please\s+)?(?:release|publish|ship)\b"
+    r"|\b(?:release|publish)\b.{0,32}\b(?:required|must|required after|after merge|when green)\b"
+    r"|\b(?:must|should|then)\b.{0,32}\b(?:release|publish|ship)\b"
+    r"|正式发布|发布正式版|发版",
+    re.I,
+)
+_RELEASE_WORKFLOW_RE = re.compile(r"(?:^|[\s_-])(?:release|publish)(?:$|[\s_-])", re.I)
+_NON_RELEASE_PREFIX_RE = re.compile(r"^\s*(?:chore|docs|test|ci|build|deps|refactor)(?:\([^)]*\))?\s*:", re.I)
+_FAILURES = {"failure", "timed_out", "startup_failure"}
+
+
+def release_expected(*texts):
+    values = [str(value or "") for value in texts]
+    primary = values[0] if values else ""
+    if _RELEASE_RE.search(primary):
+        return True
+    if _NON_RELEASE_PREFIX_RE.search(primary):
+        return False
+    if _VERSION_RE.search(primary):
+        return True
+    secondary = "\n".join(values[1:])
+    return bool(_SECONDARY_RELEASE_INTENT_RE.search(secondary))
+
+
+def observed_task_id(repo, pr_number="", head_sha="", merge_sha=""):
+    if str(pr_number).strip():
+        anchor = "pr:" + str(pr_number).strip()
+    elif str(merge_sha).strip():
+        anchor = "merge:" + str(merge_sha).strip()
+    else:
+        anchor = "sha:" + str(head_sha).strip()
+    return "GA-" + hashlib.sha256((repo + ":" + anchor).encode()).hexdigest()[:12]
+
+
+def _passed(value):
+    return str(value or "").lower() == "success"
+
+
+def _release_workflow(name):
+    return bool(_RELEASE_WORKFLOW_RE.search(str(name or "")))
+
+
+def _release_required_with_override(override, *texts):
+    value = str(override or "").strip().lower()
+    if value in {"true", "1", "yes"}:
+        return True
+    if value in {"false", "0", "no"}:
+        return False
+    return release_expected(*texts)
+
+
+def capture(
+    repo,
+    event,
+    default_branch="",
+    branch="",
+    head_sha="",
+    pr_number="",
+    pr_title="",
+    pr_state="",
+    pr_merged="false",
+    merge_sha="",
+    run_id="",
+    actor="",
+    log_root=".gptauto/logs",
+    pr_body="",
+    workflow_name="",
+    workflow_conclusion="",
+    release_tag="",
+    release_state="",
+    pr_ci_conclusion="",
+    pr_ci_run_id="",
+    main_ci_conclusion="",
+    main_ci_run_id="",
+    release_conclusion="",
+    release_run_id="",
+    current_pr_head_sha="",
+    release_required_override="",
+    provenance="repository_observer",
+    release_published="",
+    release_id="",
+    pr_ci_status="",
+    pr_ci_actor="",
+    pr_ci_run_attempt="",
+    blocked_reason="",
+):
+    tid = observed_task_id(repo, pr_number, head_sha, merge_sha)
+    goal = pr_title.strip() or ("Observe repository change " + (merge_sha or head_sha)[:12])
+    merged = str(pr_merged).lower() == "true"
+    release_required = _release_required_with_override(release_required_override, pr_title, pr_body, release_tag)
+    evidence_provenance = str(provenance or "repository_observer").strip() or "repository_observer"
+    workflow_success = _passed(workflow_conclusion)
+    workflow_conclusion_lc = str(workflow_conclusion or "").lower()
+    pr_ci_conclusion_lc = str(pr_ci_conclusion or "").lower()
+    pr_ci_status_lc = str(pr_ci_status or "").lower()
+    approval_required = workflow_conclusion_lc == "action_required" or pr_ci_conclusion_lc == "action_required"
+    effective_blocked_reason = str(blocked_reason or "")
+    if approval_required and not effective_blocked_reason:
+        effective_blocked_reason = "workflow_approval_required"
+
+    release_event_published = event == "release" and str(release_state or "").lower() in {"published", "released"}
+    explicit_release_published = str(release_published or "").strip().lower() in {"true", "1", "yes"}
+    release_done = release_event_published or (explicit_release_published and _passed(release_conclusion))
+    main_ci_done = _passed(main_ci_conclusion) or (
+        event == "workflow_run"
+        and workflow_success
+        and not _release_workflow(workflow_name)
+        and bool(default_branch)
+        and branch == default_branch
+    )
+    pr_ci_done = _passed(pr_ci_conclusion) or (
+        event == "workflow_run"
+        and workflow_success
+        and bool(pr_number)
+        and not merged
+        and branch != default_branch
+        and not _release_workflow(workflow_name)
+    )
+    pr_ci_failed = (
+        pr_ci_status_lc == "completed" and pr_ci_conclusion_lc in _FAILURES
+    ) or (
+        event == "workflow_run"
+        and workflow_conclusion_lc in _FAILURES
+        and bool(pr_number)
+        and not merged
+        and branch != default_branch
+        and not _release_workflow(workflow_name)
+    )
+
+    effective_pr_ci_run_id = str(pr_ci_run_id or "")
+    effective_main_ci_run_id = str(main_ci_run_id or "")
+    effective_release_run_id = str(release_run_id or "")
+    if event == "workflow_run" and workflow_success:
+        if _release_workflow(workflow_name):
+            effective_release_run_id = effective_release_run_id or str(run_id or "")
+        elif merged and branch == default_branch:
+            effective_main_ci_run_id = effective_main_ci_run_id or str(run_id or "")
+        elif pr_number and not merged and branch != default_branch:
+            effective_pr_ci_run_id = effective_pr_ci_run_id or str(run_id or "")
+
+    plan = [
+        GateStep(Gate.INSPECT, status=GateStatus.PASSED, evidence=f"GitHub {event} event"),
+        GateStep(Gate.COMMIT, status=GateStatus.PASSED, evidence=head_sha or merge_sha),
+    ]
+    if pr_number:
+        pr_ci_gate = GateStatus.PASSED if pr_ci_done else GateStatus.FAILED if pr_ci_failed else GateStatus.WAITING
+        pr_ci_evidence = (
+            f"CI run {effective_pr_ci_run_id or run_id}"
+            if pr_ci_done
+            else f"CI run {effective_pr_ci_run_id or run_id} failed"
+            if pr_ci_failed
+            else f"CI run {effective_pr_ci_run_id or run_id} requires maintainer approval"
+            if approval_required
+            else "No successful PR CI evidence observed yet"
+        )
+        plan.extend(
+            [
+                GateStep(Gate.PR, status=GateStatus.PASSED, evidence=f"PR #{pr_number}"),
+                GateStep(Gate.PR_CI, required=False, status=pr_ci_gate, evidence=pr_ci_evidence),
+                GateStep(
+                    Gate.MERGE,
+                    status=GateStatus.PASSED if merged else GateStatus.WAITING,
+                    evidence=merge_sha if merged else "PR not merged at observation time",
+                ),
+            ]
+        )
+    if merged:
+        plan.append(
+            GateStep(
+                Gate.MAIN_CI,
+                status=GateStatus.PASSED if main_ci_done else GateStatus.WAITING,
+                evidence=f"main CI run {effective_main_ci_run_id or run_id}" if main_ci_done else "Post-merge CI not yet successful",
+            )
+        )
+        if release_required:
+            release_status = GateStatus.PASSED if release_done else GateStatus.WAITING
+            if event == "workflow_run" and _release_workflow(workflow_name) and workflow_conclusion_lc in _FAILURES:
+                release_status = GateStatus.FAILED
+            plan.append(
+                GateStep(
+                    Gate.RELEASE,
+                    status=release_status,
+                    evidence=(
+                        release_tag
+                        or (f"GitHub Release {release_id}" if release_id else f"Release run {effective_release_run_id or run_id}")
+                        if release_done
+                        else "Published release evidence not yet observed"
+                    ),
+                )
+            )
+
+    dod = [
+        Criterion(
+            "Repository change is traceable from GitHub evidence",
+            CriterionStatus.PASSED,
+            f"event={event}; head={head_sha}; pr={pr_number or '-'}",
+        )
+    ]
+    if pr_number:
+        dod.append(
+            Criterion(
+                "Pull request is merged",
+                CriterionStatus.PASSED if merged else CriterionStatus.PENDING,
+                merge_sha if merged else "",
+            )
+        )
+    if merged:
+        dod.append(
+            Criterion(
+                "Post-merge CI completed successfully",
+                CriterionStatus.PASSED if main_ci_done else CriterionStatus.PENDING,
+                f"run={effective_main_ci_run_id or run_id}" if main_ci_done else "",
+            )
+        )
+        if release_required:
+            dod.append(
+                Criterion(
+                    "Requested release completed successfully",
+                    CriterionStatus.PASSED if release_done else CriterionStatus.PENDING,
+                    release_tag or (f"release_id={release_id}" if release_id else f"release_run={effective_release_run_id or run_id}") if release_done else "",
+                )
+            )
+
+    if approval_required and pr_number and not merged:
+        state = State.BLOCKED
+    elif pr_number and not merged:
+        state = State.EXECUTE
+    elif merged:
+        if release_required:
+            state = State.DONE if (main_ci_done and release_done) else State.VERIFY
+        else:
+            state = State.DONE if main_ci_done else State.VERIFY
+    elif event == "workflow_run" and workflow_success and branch == default_branch:
+        state = State.DONE
+    elif event in {"push", "workflow_run", "release"}:
+        state = State.VERIFY
+    else:
+        state = State.EXECUTE
+
+    if event == "workflow_run" and workflow_conclusion_lc in _FAILURES and (merged or bool(pr_number)):
+        state = State.EXECUTE
+
+    completion_gate = "release" if release_required else ("main_ci" if merged else "merge")
+    t = Task(
+        tid,
+        goal,
+        repo,
+        dod,
+        state=state,
+        plan=plan,
+        metadata={
+            "provenance": evidence_provenance,
+            "task_type": "observed",
+            "branch": branch,
+            "head_sha": current_pr_head_sha or head_sha,
+            "event_head_sha": head_sha,
+            "current_pr_head_sha": current_pr_head_sha or head_sha,
+            "pr_number": pr_number,
+            "merge_sha": merge_sha,
+            "run_id": run_id,
+            "artifact_name": "gptauto-" + tid,
+            "actor": actor,
+            "default_branch": default_branch,
+            "event": event,
+            "workflow_name": workflow_name,
+            "workflow_conclusion": workflow_conclusion,
+            "release_tag": release_tag,
+            "release_required": release_required,
+            "completion_gate": completion_gate,
+            "pr_ci_status": pr_ci_status,
+            "pr_ci_conclusion": pr_ci_conclusion,
+            "pr_ci_actor": pr_ci_actor,
+            "pr_ci_run_attempt": pr_ci_run_attempt,
+            "pr_ci_run_id": effective_pr_ci_run_id,
+            "main_ci_run_id": effective_main_ci_run_id,
+            "release_run_id": effective_release_run_id,
+            "release_published": bool(release_done),
+            "release_id": str(release_id or ""),
+            "blocked_reason": effective_blocked_reason,
+        },
+    )
+    t.history = [
+        Event(
+            utcnow(),
+            state.value,
+            "repository event captured",
+            kind="observation",
+            evidence=json.dumps(
+                {
+                    "event": event,
+                    "actor": actor,
+                    "pr_state": pr_state,
+                    "workflow": workflow_name,
+                    "conclusion": workflow_conclusion,
+                    "pr_ci_status": pr_ci_status,
+                    "pr_ci_conclusion": pr_ci_conclusion,
+                    "release_tag": release_tag,
+                    "completion_gate": completion_gate,
+                    "blocked_reason": effective_blocked_reason,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    ]
+
+    previous_state = Path(log_root) / tid / "state.json"
+    if previous_state.exists():
+        try:
+            previous = Task.from_dict(json.loads(previous_state.read_text(encoding="utf-8")))
+        except (OSError, ValueError, KeyError, TypeError):
+            previous = None
+        if previous and previous.task_id == tid:
+            t.created_at = previous.created_at
+            merged_metadata = dict(previous.metadata)
+            merged_metadata.update({k: v for k, v in t.metadata.items() if v not in ("", None)})
+            for key in (
+                "event",
+                "run_id",
+                "workflow_name",
+                "workflow_conclusion",
+                "event_head_sha",
+                "branch",
+                "actor",
+                "pr_ci_status",
+                "pr_ci_conclusion",
+                "pr_ci_actor",
+                "pr_ci_run_attempt",
+                "blocked_reason",
+            ):
+                merged_metadata[key] = t.metadata.get(key, "")
+            t.metadata = merged_metadata
+            seen = {(e.at, e.kind, e.reason, e.gate, e.status, e.evidence) for e in previous.history}
+            current = [e for e in t.history if (e.at, e.kind, e.reason, e.gate, e.status, e.evidence) not in seen]
+            t.history = list(previous.history) + current
+
+    from .orchestrator import canonicalize_task
+
+    authority = canonicalize_task(t)
+
+    from .time_budget import apply as apply_time_budget
+
+    apply_time_budget(t)
+    paths = write_audit(t, log_root)
+    return {
+        "task_id": tid,
+        "state": t.state.value,
+        "phase": authority["phase"],
+        "generation": authority["generation"],
+        "terminal_done": authority["terminal_done"],
+        "allow_foreground_exit": authority["allow_foreground_exit"],
+        "provenance": evidence_provenance,
+        "artifact_name": "gptauto-" + tid,
+        "completion_gate": completion_gate,
+        "release_required": release_required,
+        "blocked_reason": authority.get("blocked_reason", ""),
+        "paths": paths,
+    }
+
+
+def main():
+    p = argparse.ArgumentParser()
+    s = p.add_subparsers(dest="cmd", required=True)
+    c = s.add_parser("capture")
+    for name in [
+        "event",
+        "repo",
+        "default-branch",
+        "branch",
+        "head-sha",
+        "pr-number",
+        "pr-title",
+        "pr-body",
+        "pr-state",
+        "pr-merged",
+        "merge-sha",
+        "run-id",
+        "actor",
+        "workflow-name",
+        "workflow-conclusion",
+        "release-tag",
+        "release-state",
+        "pr-ci-conclusion",
+        "pr-ci-run-id",
+        "main-ci-conclusion",
+        "main-ci-run-id",
+        "release-conclusion",
+        "release-run-id",
+        "current-pr-head-sha",
+        "release-required-override",
+        "provenance",
+        "release-published",
+        "release-id",
+        "pr-ci-status",
+        "pr-ci-actor",
+        "pr-ci-run-attempt",
+        "blocked-reason",
+    ]:
+        c.add_argument("--" + name, default="")
+    a = p.parse_args()
+    print(
+        json.dumps(
+            capture(
+                a.repo,
+                a.event,
+                a.default_branch,
+                a.branch,
+                a.head_sha,
+                a.pr_number,
+                a.pr_title,
+                a.pr_state,
+                a.pr_merged,
+                a.merge_sha,
+                a.run_id,
+                a.actor,
+                pr_body=a.pr_body,
+                workflow_name=a.workflow_name,
+                workflow_conclusion=a.workflow_conclusion,
+                release_tag=a.release_tag,
+                release_state=a.release_state,
+                pr_ci_conclusion=a.pr_ci_conclusion,
+                pr_ci_run_id=a.pr_ci_run_id,
+                main_ci_conclusion=a.main_ci_conclusion,
+                main_ci_run_id=a.main_ci_run_id,
+                release_conclusion=a.release_conclusion,
+                release_run_id=a.release_run_id,
+                current_pr_head_sha=a.current_pr_head_sha,
+                release_required_override=a.release_required_override,
+                provenance=a.provenance,
+                release_published=a.release_published,
+                release_id=a.release_id,
+                pr_ci_status=a.pr_ci_status,
+                pr_ci_actor=a.pr_ci_actor,
+                pr_ci_run_attempt=a.pr_ci_run_attempt,
+                blocked_reason=a.blocked_reason,
+            ),
+            ensure_ascii=False,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

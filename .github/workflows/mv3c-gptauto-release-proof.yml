@@ -1,0 +1,57 @@
+name: Release
+# GPTAuto release evidence adapter. The existing 'mv3c official release' workflow
+# is the ONE authority that publishes tags. This adapter never publishes.
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Verify the official Release for this exact main commit
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  official-release-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require published GitHub Release for exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ inputs.source_sha || github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Invalid target SHA"; exit 1; }
+          git fetch --tags origin
+          for attempt in $(seq 1 90); do
+            gh api "repos/$REPOSITORY/releases?per_page=100" > /tmp/release-evidence.json
+            tag="$(python3 - <<'PY'
+          import json, os, re, subprocess
+          sha = os.environ['TARGET_SHA']
+          for item in json.load(open('/tmp/release-evidence.json')):
+              tag = item.get('tag_name', '')
+              if item.get('draft') or item.get('prerelease') or not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
+                  continue
+              match = subprocess.run(['git', 'rev-list', '-n', '1', 'refs/tags/' + tag],
+                                     capture_output=True, text=True)
+              if match.returncode == 0 and match.stdout.strip() == sha:
+                  print(tag)
+                  break
+          PY
+            )"
+            if [[ -n "$tag" ]]; then
+              echo "Official published mv3c $tag verified at $TARGET_SHA"
+              exit 0
+            fi
+            echo "Waiting for original mv3c official release workflow ($attempt/90)"
+            sleep 20
+          done
+          echo "::error::No published stable mv3c Release for $TARGET_SHA"
+          exit 1

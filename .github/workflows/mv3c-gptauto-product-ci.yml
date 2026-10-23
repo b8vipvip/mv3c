@@ -1,0 +1,59 @@
+name: CI
+
+# GPTAuto product-proof adapter. It must never replace or weaken either mv3c CI.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  require-mv3c-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Wait for both original mv3c workflows on this exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGET_EVENT: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          # The existing release publisher keeps its own independent two-CI gate.
+          for attempt in $(seq 1 180); do
+            gh api "repos/$REPOSITORY/actions/runs?head_sha=$TARGET_SHA&per_page=100" > /tmp/mv3c-ci-proof.json
+            outcome="$(python3 - <<'PY'
+          import json, os
+          rows = json.load(open('/tmp/mv3c-ci-proof.json')).get('workflow_runs', [])
+          names = ('mv3c validation', 'mv3c source Docker build')
+          latest = {}
+          for run in sorted(rows, key=lambda r: (r.get('created_at',''),r.get('id',0)), reverse=True):
+              if run.get('name') in names and run.get('head_sha') == os.environ['TARGET_SHA'] and run.get('event') == os.environ['TARGET_EVENT']:
+                  latest.setdefault(run['name'], run)
+          if any(name not in latest for name in names):
+              print('WAIT')
+          elif any(latest[name].get('status') != 'completed' for name in names):
+              print('WAIT')
+          elif all(latest[name].get('conclusion') == 'success' for name in names):
+              print('SUCCESS')
+          else:
+              print('FAILED')
+          PY
+            )"
+            echo "mv3c product CI gate $attempt: $TARGET_SHA $TARGET_EVENT -> $outcome"
+            case "$outcome" in
+              SUCCESS) echo 'Exact-SHA validation and Docker smoke both passed'; exit 0 ;;
+              FAILED) echo '::error::One or both original mv3c workflows failed'; exit 1 ;;
+              WAIT) sleep 15 ;;
+              *) exit 1 ;;
+            esac
+          done
+          echo '::error::Timed out awaiting original mv3c product CI; not a success'
+          exit 1

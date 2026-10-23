@@ -1,0 +1,329 @@
+name: GPTAuto Executor
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [gptauto_observation]
+permissions:
+  contents: write
+  actions: write
+  pull-requests: write
+  issues: write
+concurrency:
+  group: gptauto-executor-${{ github.event.client_payload.task_id || github.event.client_payload.observer_run_id || github.run_id }}-${{ github.event.client_payload.head_sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download observer state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          OBSERVER_RUN_ID: ${{ github.event.client_payload.observer_run_id || '' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "$OBSERVER_RUN_ID" ]]; then
+            OBSERVER_RUN_ID="$(gh api "repos/$REPOSITORY/actions/workflows/gptauto-observer.yml/runs?status=success&per_page=20" --jq '.workflow_runs[0].id // empty')"
+          fi
+          [[ -n "$OBSERVER_RUN_ID" ]] || { echo "::error::No successful GPTAuto Observer run found"; exit 1; }
+          artifact_id="$(gh api "repos/$REPOSITORY/actions/runs/$OBSERVER_RUN_ID/artifacts" --jq '.artifacts[] | select(.name | startswith("gptauto-GA-")) | .id' | head -n1)"
+          [[ -n "$artifact_id" ]] || { echo "No GPTAuto artifact on observer run"; exit 0; }
+          mkdir -p /tmp/gptauto-state
+          gh api "repos/$REPOSITORY/actions/artifacts/$artifact_id/zip" > /tmp/gptauto.zip
+          unzip -q /tmp/gptauto.zip -d /tmp/gptauto-state
+          state="$(find /tmp/gptauto-state -name state.json -type f | head -n1)"
+          [[ -n "$state" ]] || { echo "::error::state.json missing from GPTAuto artifact"; exit 1; }
+          action="$(PYTHONPATH=.github python -m gptauto.executor "$state")"
+          echo "$action" | tee /tmp/gptauto-action.json
+          echo "action=$(jq -r '.action' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "task-id=$(jq -r '.task_id' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "pr-number=$(jq -r '.pr_number // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "head-sha=$(jq -r '.head_sha // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "merge-sha=$(jq -r '.merge_sha // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "run-id=$(jq -r '.run_id // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "release-required=$(jq -r '.release_required // false' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "repair-key=$(jq -r '.repair_key // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "dedupe-key=$(jq -r '.dedupe_key // empty' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "lease-active=$(jq -r '.completion_lease.active // false' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "foreground-status=$(jq -r '.completion_lease.foreground_completion_status // "continue_required"' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "foreground-disposition=$(jq -r '.completion_lease.foreground_disposition // "CONTINUE_REQUIRED"' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "allow-foreground-exit=$(jq -r '.completion_lease.allow_foreground_exit // false' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "requires-foreground-poll=$(jq -r '.completion_lease.requires_foreground_poll // true' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "host-control=$(jq -c '.completion_lease.host_control' <<<"$action")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish canonical host control
+        if: ${{ steps.state.outputs.lease-active == 'true' }}
+        env:
+          HOST_CONTROL: ${{ steps.state.outputs.host-control }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .gptauto/host-control
+          jq -e '.schema == "gptauto.host-control/v2" and .task_alive == true' <<<"$HOST_CONTROL" > ".gptauto/host-control/$TASK_ID.json"
+          echo "::notice::GPTAUTO_HOST_CONTROL task=$TASK_ID disposition=$(jq -r '.foreground_disposition' <<<"$HOST_CONTROL") next=$(jq -r '.next_host_action' <<<"$HOST_CONTROL")"
+
+      - name: Upload canonical host control
+        if: ${{ steps.state.outputs.lease-active == 'true' && hashFiles(format('.gptauto/host-control/{0}.json', steps.state.outputs.task-id)) != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gptauto-host-control-${{ steps.state.outputs.task-id }}
+          path: .gptauto/host-control/${{ steps.state.outputs.task-id }}.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Execute safe merge gate
+        if: ${{ steps.state.outputs.action == 'merge' }}
+        env:
+          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          EXPECTED_HEAD: ${{ steps.state.outputs.head-sha }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pr="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"
+          actual_head="$(jq -r '.head.sha' <<<"$pr")"
+          [[ "$actual_head" == "$EXPECTED_HEAD" ]] || { echo "::error::PR head moved; refusing stale merge"; exit 1; }
+          [[ "$(jq -r '.draft' <<<"$pr")" == "false" ]] || { echo "::error::PR is draft"; exit 1; }
+          [[ "$(jq -r '.mergeable' <<<"$pr")" != "false" ]] || { echo "::error::PR is not mergeable"; exit 1; }
+
+          for attempt in $(seq 1 12); do
+            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$EXPECTED_HEAD&per_page=100")"
+            latest_runs="$(jq '[.workflow_runs
+              | sort_by([.workflow_id, .event, .created_at, .id])
+              | group_by([.workflow_id, .event])
+              | map(last)
+              | .[]
+              | select(.name != "GPTAuto Observer" and .name != "GPTAuto Executor" and .name != "GPTAuto Reconcile")
+            ]' <<<"$runs")"
+            pending_runs="$(jq '[.[] | select(.status != "completed")]' <<<"$latest_runs")"
+            failed_runs="$(jq '[.[] | select(.status == "completed" and (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped"))]' <<<"$latest_runs")"
+            pending="$(jq 'length' <<<"$pending_runs")"
+            failed="$(jq 'length' <<<"$failed_runs")"
+            if [[ "$failed" != "0" ]]; then
+              jq -r '.[] | "::error::failed latest workflow: \(.name) event=\(.event) run=\(.id) conclusion=\(.conclusion // "null")"' <<<"$failed_runs"
+              exit 1
+            fi
+            if [[ "$pending" == "0" ]]; then
+              break
+            fi
+            jq -r '.[] | "::notice::waiting latest workflow: \(.name) event=\(.event) run=\(.id) status=\(.status)"' <<<"$pending_runs"
+            if [[ "$attempt" == "12" ]]; then
+              echo "Merge deferred: $pending latest workflow run(s) are still queued/in_progress. This is WAITING_GITHUB, not failure."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          gh api --method PUT "repos/$REPOSITORY/pulls/$PR_NUMBER/merge" \
+            -f merge_method=squash -f sha="$EXPECTED_HEAD" | tee /tmp/gptauto-merge.json
+          jq -e '.merged == true' /tmp/gptauto-merge.json >/dev/null
+          merge_sha="$(jq -r '.sha' /tmp/gptauto-merge.json)"
+          default_branch="$(gh api "repos/$REPOSITORY" --jq '.default_branch')"
+          gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$default_branch" \
+            -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$merge_sha" \
+            -f release_required="${{ steps.state.outputs.release-required }}"
+
+      - name: Adopt externally merged completion lease
+        if: ${{ steps.state.outputs.action == 'reconcile_adopt' }}
+        env:
+          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          MERGE_SHA: ${{ steps.state.outputs.merge-sha }}
+          RELEASE_REQUIRED: ${{ steps.state.outputs.release-required }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$TASK_ID" && -n "$PR_NUMBER" && -n "$MERGE_SHA" ]] || { echo "::error::Reconcile adoption is missing task/PR/merge identity."; exit 1; }
+          gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH" \
+            -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$MERGE_SHA" \
+            -f release_required="$RELEASE_REQUIRED"
+
+      - name: Retry transient failed jobs only
+        id: transient-retry
+        if: ${{ steps.state.outputs.action == 'repair_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          FAILED_RUN_ID: ${{ steps.state.outputs.run-id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "retried=false" >> "$GITHUB_OUTPUT"
+          [[ -n "$FAILED_RUN_ID" ]] || exit 0
+          run_json="$(gh api "repos/$REPOSITORY/actions/runs/$FAILED_RUN_ID")"
+          attempt="$(jq -r '.run_attempt // 1' <<<"$run_json")"
+          conclusion="$(jq -r '.conclusion // "failure"' <<<"$run_json")"
+          gh run view "$FAILED_RUN_ID" --repo "$REPOSITORY" --log-failed > /tmp/gptauto-failed.log 2>&1 || true
+          if PYTHONPATH=.github python -m gptauto.ci_policy --log /tmp/gptauto-failed.log --conclusion "$conclusion" --attempt "$attempt" >/dev/null; then
+            gh api --method POST "repos/$REPOSITORY/actions/runs/$FAILED_RUN_ID/rerun-failed-jobs" >/dev/null
+            echo "retried=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Transient CI evidence detected; re-running failed jobs only for run $FAILED_RUN_ID before spending a repair generation."
+          fi
+
+      - name: Emit repair request
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          FAILED_RUN_ID: ${{ steps.state.outputs.run-id }}
+          HEAD_SHA: ${{ steps.state.outputs.head-sha }}
+          REPAIR_KEY: ${{ steps.state.outputs.repair-key }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .gptauto/repair-requests
+          request=".gptauto/repair-requests/$TASK_ID.json"
+          jq -n --arg task "$TASK_ID" --arg run "$FAILED_RUN_ID" --arg pr "$PR_NUMBER" \
+            '{kind:"repair_request",task_id:$task,run_id:$run,pr_number:$pr,status:"open",repair_owner:"repair_pipeline"}' > "$request"
+          marker="<!-- gptauto-repair:$REPAIR_KEY -->"
+          existing="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          if ! grep -Fq "$marker" <<<"$existing"; then
+            gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
+          GPTAuto three-tier repair cycle is open for task $TASK_ID on current head $HEAD_SHA (latest failed run $FAILED_RUN_ID). Tier 1 deterministic repair runs first, Tier 2 Copilot CLI runs only if Tier 1 produces no patch, and Tier 3 preserves the same repair lease if automation cannot safely repair it."
+          fi
+
+      - name: Check autonomous repair credential
+        id: repair-credential
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' }}
+        env:
+          GPTAUTO_EXECUTOR_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -n "$GPTAUTO_EXECUTOR_TOKEN" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GPTAUTO_EXECUTOR_TOKEN is required for autonomous repair pushes; refusing GITHUB_TOKEN fallback because it can create maintainer-approval workflow gates."
+          fi
+
+      - name: Publish automation credential user action
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          HEAD_SHA: ${{ steps.state.outputs.head-sha }}
+        shell: bash
+        run: |
+          marker="<!-- gptauto-executor-token-required:$TASK_ID:$HEAD_SHA -->"
+          body="$marker
+          GPTAuto USER ACTION REQUIRED: configure repository secret GPTAUTO_EXECUTOR_TOKEN with a fine-grained PAT or GitHub App token that can update this repository. GPTAuto will not fall back to GITHUB_TOKEN for repair pushes because that can place the resulting PR workflows into 'awaiting approval'. The watchdog will retry the same task after the credential is configured."
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          grep -Fq "$marker" <<<"$comments" || gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$body"
+
+      - name: Dispatch three-tier repair pipeline
+        id: repair-dispatch
+        if: ${{ steps.state.outputs.action == 'repair_request' && steps.transient-retry.outputs.retried != 'true' && steps.repair-credential.outputs.ready == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          HEAD_SHA: ${{ steps.state.outputs.head-sha }}
+          FAILED_RUN_ID: ${{ steps.state.outputs.run-id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PR_NUMBER" && -n "$HEAD_SHA" && -n "$FAILED_RUN_ID" ]] || { echo "::error::Repair dispatch is missing PR/head/run identity."; exit 1; }
+          marker="<!-- gptauto-repair-dispatched:$TASK_ID:$HEAD_SHA -->"
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          if grep -Fq "$marker" <<<"$comments"; then
+            echo "Three-tier repair already dispatched for $TASK_ID / $HEAD_SHA; keeping the same repair lease."
+            exit 0
+          fi
+          gh workflow run gptauto-repair.yml --repo "$REPOSITORY" \
+            --ref "$(gh api "repos/$REPOSITORY" --jq '.default_branch')" \
+            -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f head_sha="$HEAD_SHA" -f failed_run_id="$FAILED_RUN_ID"
+          gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
+          GPTAuto dispatched the three-tier repair pipeline for task $TASK_ID on head $HEAD_SHA. The Completion Lease remains active until the repaired head passes its gates."
+
+      - name: Publish explicit GitHub approval user action
+        if: ${{ steps.state.outputs.action == 'user_action_required' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          RUN_ID: ${{ steps.state.outputs.run-id }}
+        shell: bash
+        run: |
+          marker="<!-- gptauto-user-action:$TASK_ID -->"
+          body="$marker
+          GPTAuto USER ACTION REQUIRED: GitHub reports action_required for workflow run $RUN_ID. Approve the workflow in this PR if GitHub is awaiting maintainer approval. This is not a code failure and no repair generation will be started. GPTAuto will resume on workflow in_progress/completed or by the watchdog."
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
+          grep -Fq "$marker" <<<"$comments" || gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$body"
+
+      - name: Persist completion lease
+        if: ${{ steps.state.outputs.lease-active == 'true' }}
+        env:
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          ACTION: ${{ steps.state.outputs.action }}
+        shell: bash
+        run: |
+          mkdir -p .gptauto/completion-leases
+          cp /tmp/gptauto-action.json ".gptauto/completion-leases/$TASK_ID.json"
+          echo "Completion lease remains active for $TASK_ID; current decision is $ACTION." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish foreground completion guard
+        if: ${{ steps.state.outputs.lease-active == 'true' && steps.state.outputs.pr-number != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          ACTION: ${{ steps.state.outputs.action }}
+          ALLOW_EXIT: ${{ steps.state.outputs.allow-foreground-exit }}
+        shell: bash
+        run: |
+          marker="<!-- gptauto-completion-lease:$TASK_ID -->"
+          if [[ "$ACTION" == "user_action_required" ]]; then
+            body="$marker
+          GPTAuto Completion Lease is BLOCKED for task $TASK_ID (decision: USER_ACTION_REQUIRED). A real user action is required before automation can continue. This is not terminal DONE; resume the same task after the requested action."
+          else
+            body="$marker
+          GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: $ACTION).
+
+          This engineering task is NOT complete. EXIT_GUARD=DENY while this Completion Lease is ACTIVE. A PR, commit, partial check, repair request, merge, release-in-progress, or merely waiting for GitHub Actions is non-terminal evidence."
+          fi
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100")"
+          comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" >/dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          ACTION: ${{ steps.state.outputs.action }}
+          TASK_ID: ${{ steps.state.outputs.task-id }}
+          RETRIED: ${{ steps.transient-retry.outputs.retried }}
+        run: |
+          {
+            echo "## GPTAuto Executor"
+            echo "- Task: \`$TASK_ID\`"
+            echo "- Action: \`$ACTION\`"
+            echo "- Transient failed-jobs-only retry: \`${RETRIED:-false}\`"
+            echo "- Repair pushes never fall back to GITHUB_TOKEN."
+            echo "- queued/in_progress checks get a bounded two-minute wait before WAITING_GITHUB handoff."
+            echo "- action_required is USER_ACTION_REQUIRED and never a repair failure."
+          } >> "$GITHUB_STEP_SUMMARY"
