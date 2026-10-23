@@ -11,6 +11,7 @@ import { useMessagePartsHost } from '~/Providers/MessagePartsHostContext';
 import { useCodeBlockContext, useMediaContext } from '~/Providers';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
 import { isSafeRasterImageDataUrl } from './inlineImageUrl';
+import { generatedFileHref } from './generatedFile';
 import ImagePreview from './Image';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
 import { useFileDownload } from '~/data-provider';
@@ -141,8 +142,27 @@ export const a: React.ElementType = memo(function MarkdownAnchor({ href, childre
   const props: { target?: string; onClick?: React.MouseEventHandler } = { target: '_blank' };
 
   if (!file_id || !filename) {
+    const generated = generatedFileHref(
+      href,
+      typeof window !== 'undefined' && window.location.protocol === 'https:',
+    );
+    if (generated) {
+      return (
+        <a
+          href={generated}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="border-border-light bg-surface-secondary text-text-primary my-2 inline-flex max-w-full items-center gap-2 rounded-lg border px-3 py-2 no-underline hover:underline"
+          title="下载已转存的生成文件"
+        >
+          <span aria-hidden="true">📎</span>
+          <span className="min-w-0 truncate">{children}</span>
+          <span className="text-text-secondary text-xs" aria-hidden="true">↓</span>
+        </a>
+      );
+    }
     return (
-      <a href={href} {...props}>
+      <a href={href} {...props} rel="noopener noreferrer">
         {children}
       </a>
     );
