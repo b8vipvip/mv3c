@@ -215,6 +215,15 @@ class HostUpdaterTests(unittest.TestCase):
             self.assertIn("downloading layer 79", logfile.read_text())
             self.assertEqual(logfile.stat().st_mode & 0o777, 0o600)
 
+    def test_runtime_python_index_is_project_scoped_and_configurable(self):
+        compose = (pathlib.Path(__file__).resolve().parents[3] /
+                   "docker-compose.yml").read_text(encoding="utf-8")
+        expected = "${MV3C_PYPI_INDEX_URL:-https://pypi.org/simple}"
+        self.assertIn("UV_DEFAULT_INDEX: " + expected, compose)
+        self.assertIn("PIP_INDEX_URL: " + expected, compose)
+        self.assertNotIn("UV_EXTRA_INDEX_URL:", compose)
+        self.assertNotIn("PIP_EXTRA_INDEX_URL:", compose)
+
     def test_dockerfile_keeps_build_dependencies_out_of_runtime_layers(self):
         dockerfile = (pathlib.Path(__file__).resolve().parents[3] /
                       "Dockerfile").read_text(encoding="utf-8")
