@@ -41,7 +41,9 @@ function format(doc) {
     agentOnline: Boolean(agentOnline),
     status: doc?.status || 'idle',
     currentSha: doc?.currentSha || '',
-    currentVersion: doc?.currentVersion || '',
+    // Read the running image's trusted build metadata when the updater DB lags a restart.
+    currentVersion: /^v\d+\.\d+\.\d+$/.test(process.env.MV3C_VERSION || '')
+      ? process.env.MV3C_VERSION : (doc?.currentVersion || ''),
     latestSha: doc?.latestSha || '',
     latestVersion: doc?.latestVersion || '',
     latestLabel: doc?.latestLabel || '',
@@ -188,6 +190,7 @@ function renderReport(entry) {
     'Old SHA: ' + (entry.fromSha || '-'),
     'Target SHA: ' + (entry.attemptedSha || '-'),
     'Installed SHA: ' + (entry.sha || '-'),
+    'Official version: ' + (entry.version || '-'),
     'Verification: ' + (entry.verification || '-'),
     'Error: ' + (entry.error || '-'),
     '',
