@@ -21,6 +21,9 @@ services:
       PIP_INDEX_URL: ${MV3C_PYPI_INDEX_URL:-https://pypi.org/simple}
       MONGO_URI: mongodb://mongodb:27017/mv3c
       SEARCH: "false"
+      # This Compose project has a single mv3c API replica with process-local generations.
+      # Enable shared Redis streams instead before ever scaling above one replica.
+      SCHEDULES_SINGLE_PROCESS: "true"
       LOG_TO_FILE: "false" # Replace upstream long-lived 20MB/error logs with bounded mv3c log
     ports:
       - "127.0.0.1:${MV3C_PORT:-3080}:3080"
