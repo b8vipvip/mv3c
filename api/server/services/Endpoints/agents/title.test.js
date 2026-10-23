@@ -73,6 +73,7 @@ describe('agents addTitle', () => {
 
   it('generates a guest title from the first message without calling an AI model', async () => {
     const client = makeClient('Unused model generated title');
+    client.options.titleConvo = false; // chat2api can disable extra title model calls
     const req = makeReq();
     req.user.provider = 'mv3c-guest';
     await addTitle(req, {
