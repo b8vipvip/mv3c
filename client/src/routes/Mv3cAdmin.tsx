@@ -90,7 +90,7 @@ type UpdateState = {
 };
 const updateStatusLabel: Record<string, string> = {
   idle: '空闲', checking: '正在检查', queued: '等待执行',
-  updating: '正在更新部署', blocked: '等待 CI 通过',
+  updating: '正在更新部署', blocked: '更新检查受阻',
   success: '更新成功', failed: '更新失败', rolled_back: '已回滚上一版本',
 };
 
@@ -750,7 +750,8 @@ export default function Mv3cAdmin() {
                           {updates.ciMessage}（等待下一次自动检查）
                         </p>
                       )}
-                      <p>状态：<strong>{updateStatusLabel[updates.status] || updates.status}</strong></p>
+                      <p>状态：<strong>{updates.status === 'blocked' && updates.ciMessage
+                        ? '等待 CI 通过' : updateStatusLabel[updates.status] || updates.status}</strong></p>
                       <p>新版本：<strong>{updates.updateAvailable ? '已发现' : '暂无或尚未检查'}</strong></p>
                       <p>上次检查：{updates.checkedAt
                         ? new Date(updates.checkedAt).toLocaleString() : '尚未检查'}</p>
@@ -831,11 +832,25 @@ export default function Mv3cAdmin() {
                         </button>
                       </div>
                     )}
-                    {updates.lastError && (
-                      <div role="alert" className="rounded-lg border border-red-500 p-3 text-sm text-red-500">
-                        {updates.lastError}
-                      </div>
-                    )}
+                    {updates.lastError && (() => {
+                      const checkOnlyFailure = updates.status === 'blocked' &&
+                        updates.lastOutcome === 'success' && !updates.activeJob && !updates.pendingJob;
+                      return (
+                        <div role={checkOnlyFailure ? 'status' : 'alert'}
+                          className={checkOnlyFailure
+                            ? 'rounded-lg border border-amber-500 p-3 text-sm text-amber-700'
+                            : 'rounded-lg border border-red-500 p-3 text-sm text-red-500'}>
+                          {checkOnlyFailure && (
+                            <p className="mb-1 font-semibold">上次正式版部署成功；本次 GitHub 版本检查受阻</p>
+                          )}
+                          <p>{updates.lastError}</p>
+                          {checkOnlyFailure && (
+                            <p className="mt-1">显示的最新版本可能来自上次成功检查；
+                              本次检查未通过，未跳过 CI 校验，也没有执行新的部署。</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="space-y-4 border-t border-border-medium pt-5">
                       <h3 className="font-semibold">自动更新策略</h3>
                       <label className="flex items-center gap-2">
