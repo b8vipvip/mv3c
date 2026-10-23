@@ -223,6 +223,10 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertIn("PIP_INDEX_URL: " + expected, compose)
         self.assertNotIn("UV_EXTRA_INDEX_URL:", compose)
         self.assertNotIn("PIP_EXTRA_INDEX_URL:", compose)
+        smoke = (pathlib.Path(__file__).resolve().parents[3] /
+                 "docker-compose.mv3c.yml").read_text(encoding="utf-8")
+        self.assertIn("UV_DEFAULT_INDEX: " + expected, smoke)
+        self.assertIn("PIP_INDEX_URL: " + expected, smoke)
 
     def test_dockerfile_keeps_build_dependencies_out_of_runtime_layers(self):
         dockerfile = (pathlib.Path(__file__).resolve().parents[3] /
