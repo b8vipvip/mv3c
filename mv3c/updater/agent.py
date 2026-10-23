@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 from collections import deque
+from decimal import Decimal
 import fcntl
 import shutil
 import json
@@ -70,7 +71,7 @@ def parse_docker_size(raw: str) -> int:
              "TB": 1000**4, "PB": 1000**5, "EB": 1000**6,
              "KIB": 1024, "MIB": 1024**2, "GIB": 1024**3,
              "TIB": 1024**4, "PIB": 1024**5, "EIB": 1024**6}
-    return int(float(number) * scale[unit.upper()])
+    return int(Decimal(number) * scale[unit.upper()])
 
 
 def build_cache_usage(repo: Path) -> int | None:
