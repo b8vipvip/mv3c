@@ -36,7 +36,7 @@ const { hasCapability, hasConfigCapability } = require('~/server/middleware/role
 const { getLdapConfig } = require('~/server/services/Config/ldap');
 const { getRumConfig } = require('~/server/services/Config/rum');
 const { getAppConfig } = require('~/server/services/Config/app');
-const { getSiteSettings, getPublicSettings } = require('~/server/services/Config/mv3cSettings');
+const { getPublicSettings } = require('~/server/services/Config/mv3cSettings');
 
 const router = express.Router();
 const emailLoginEnabled =
