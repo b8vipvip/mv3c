@@ -36,7 +36,8 @@ USER_AGENT = "mv3c-updater/4.0"
 # Actions image is tested for the exact SHA, but does not need to be transferred.
 MIN_DOCKER_FREE_BYTES = 8 * 1024 ** 3
 BUILD_CACHE_SOFT_LIMIT_BYTES = 4 * 1024 ** 3
-MAX_RETAINED_SHA_TAGS = 2
+MAX_RETAINED_SHA_TAGS = 0
+MIN_POST_BUILD_FREE_BYTES = 2 * 1024 ** 3
 MAX_SHA_TAG_REMOVALS_PER_DEPLOY = 5
 BUILD_LOG_PATH = Path("/var/log/mv3c-updater-build.log")
 
@@ -153,7 +154,8 @@ def cleanup_stale_mv3c_image_tags(repo: Path) -> list[str]:
         if image_id in protected:
             continue
         candidates.append((info.get("Created", ""), tag, image_id))
-    # Most recent two eligible candidate tags are always retained for reuse.
+    # Current immutable SHA and rollback images are already protected by ID.
+    # Superseded extra SHA tags need not occupy space after a healthy deploy.
     candidates.sort(reverse=True)
     removed: list[str] = []
     for _created, tag, _image_id in candidates[MAX_RETAINED_SHA_TAGS:]:
@@ -529,6 +531,10 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
         advance("building", 54, "本机 BuildKit 增量构建，保留已有 Docker 层及 npm 缓存")
         build_local_image(repo, target)
+        if disk_free_bytes(repo) < MIN_POST_BUILD_FREE_BYTES:
+            raise UpdateError(
+                "Candidate built but less than 2GiB disk free; refusing to "
+                "switch the running container. Preserve old healthy service.")
         log.append("Cached host Docker build and image revision check PASSED: "
                    + target[:12])
         # Only change the stable image tag after the candidate has built and
