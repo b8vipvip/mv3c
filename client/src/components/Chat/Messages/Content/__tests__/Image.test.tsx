@@ -163,6 +163,14 @@ describe('Image', () => {
     });
   });
 
+  it('renders archived chat2api media as preview but opens the original', () => {
+    const imagePath = 'https://chat2api.mv3.cn/api/media/med_1234567890123456/token1234567890';
+    render(<Image {...defaultProps} imagePath={imagePath} />);
+    expect(screen.getByRole('img')).toHaveAttribute('src', imagePath + '/thumbnail');
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByTestId('dialog-image')).toHaveAttribute('data-src', imagePath);
+  });
+
   describe('image URL resolution', () => {
     it('passes /images/ paths through with base URL', () => {
       render(<Image {...defaultProps} imagePath="/images/test.png" />);
