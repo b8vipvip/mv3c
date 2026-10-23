@@ -28,6 +28,45 @@ jobs:
             --build-arg BUILD_BRANCH=${{ github.ref_name }} \
             --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
             -t mv3c:ci .
+      - name: Measure build-stage and final-runtime image sizes
+        timeout-minutes: 5
+        run: |
+          # The full dependency-install/build layers belong to the builder,
+          # not the production runtime. BuildKit reuses its completed cache.
+          docker build --progress=plain --target build \
+            --build-arg NODE_MAX_OLD_SPACE_SIZE=4096 \
+            --build-arg NPM_CI_TIMEOUT_SECONDS=1800 \
+            -t mv3c:builder-ci .
+          builder_bytes=$(docker image inspect --format '{{.Size}}' mv3c:builder-ci)
+          runtime_bytes=$(docker image inspect --format '{{.Size}}' mv3c:ci)
+          echo "MV3C builder size: $builder_bytes bytes"
+          echo "MV3C runtime size: $runtime_bytes bytes"
+          echo "MV3C final image reduction: $((builder_bytes - runtime_bytes)) bytes"
+          echo "### Docker image size audit" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Build stage | Bytes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | ---: |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Build workspace | $builder_bytes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Production runtime | $runtime_bytes |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$runtime_bytes" -ge "$builder_bytes" ]; then
+            echo "ERROR: production image is not smaller than build workspace"
+            exit 1
+          fi
+          docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep '^mv3c:'
+      - name: Audit production filesystem footprint
+        run: |
+          # Do not clean anything here. Preserve measurements for future
+          # workspace-scoped slimming without guessing what runtime requires.
+          docker run --rm --entrypoint sh mv3c:ci -c '
+            set -eu
+            test -f /app/api/server/index.js
+            test -f /app/mv3c/entrypoint.sh
+            test -d /app/client/dist
+            test -d /app/node_modules
+            for path in /app/node_modules /app/api /app/client /app/packages /app/mv3c; do
+              du -sh "$path"
+            done
+          '
+          docker history --human --no-trunc mv3c:ci | head -n 25
       - name: Start env-free mv3c and verify public startup
         timeout-minutes: 10
         run: |

@@ -66,6 +66,16 @@ sudo journalctl -u mv3c-updater.service -n 100 --no-pager
 
 之前添加的 `MV3C_SCP_*` Actions Secrets 不再参与部署；可以在验证迁移后手动撤销上传密钥并删除对应 Secrets。专用的 `mv3c-transfer` 用户如果已存在，不建议在未检查其它用途前直接删除。
 
+## 运行镜像瘦身（多阶段 Dockerfile）
+
+从本轮起，MV3C 使用共享 Node/Alpine `base`、完整依赖和前端编译 `build`、最小运行文件 `runtime` 三个 Docker 构建阶段：
+
+- `build` 继续运行带 BuildKit `mv3c-npm-cache` 下载缓存的 `npm ci`、所有必需内部 workspace 的构建与前端构建，再执行 `npm prune --omit=dev`。
+- `runtime` 从干净的 `base` 继承 Node、Python、uv、jemalloc，再 **COPY 构建完成后的 /app**。它不再继承此前完整开发依赖安装产生的历史镜像层；保持所有运行时目录、`mv3c/entrypoint.sh`、`/app/data` 和 Compose 卷路径不变。
+- 不清理共享的 BuildKit 缓存，因此生产宿主机下次重新构建仍可复用 npm 包及稳定的依赖层。多阶段构建降低的是**最终镜像层体积与更新时同时保留两版镜像的成本**，不会保证 BuildKit 总缓存减少。
+- GitHub Actions 对完整编译阶段和最终运行阶段分别度量 `docker image inspect --format '{{.Size}}'`，要求最终镜像更小；原有首次用户注册、管理员配置、更新器集成及 readyz 的冒烟测试照常在最终 `runtime` 镜像运行。
+- 上线前仍使用 8 GiB 构建前检查与 2 GiB 切换前检查；须在多次服务器实机升级、磁盘峰值记录可信后，才重新评估阈值。不得仅凭 CI 的镜像大小推断宿主机的总 Docker 存储占用。
+
 ## 缓存、资源与故障排查
 
 ### 安全磁盘与共享缓存管理
