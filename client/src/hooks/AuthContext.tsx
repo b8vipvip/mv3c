@@ -93,6 +93,7 @@ const AuthContextProvider = ({
 }) => {
   const isExternalRedirectRef = useRef(false);
   const prerenderRefreshDeferredRef = useRef(false);
+  const guestBootstrapInFlightRef = useRef(false);
   const [user, setUser] = useRecoilState(store.user);
   const logoutRedirectRef = useRef<string | undefined>(undefined);
   const [token, setToken] = useState<string | undefined>(undefined);
@@ -301,6 +302,38 @@ const AuthContextProvider = ({
     [loginMutate],
   );
 
+  /** Restore an existing session FIRST, then silently create a guest only on public chat routes.
+   * Explicit login/register/2FA and admin routes must never auto-create guests. */
+  const startPublicGuestSession = useCallback(async (): Promise<boolean> => {
+    if (authConfig?.test || authConfig?.optional || isExternalRedirectRef.current) return false;
+    const pathname = window.location.pathname;
+    const publicChatRoute = pathname === '/' || pathname === '/c/new' ||
+      /^\/c\/[A-Za-z0-9_-]+$/.test(pathname);
+    if (!publicChatRoute || isRequiredTwoFactorSetupRoute()) return false;
+    if (guestBootstrapInFlightRef.current) return true;
+    guestBootstrapInFlightRef.current = true;
+    try {
+      const base = apiBaseUrl();
+      const settings = await fetch(`${base}/api/config`, { credentials: 'same-origin' });
+      if (!settings.ok || (await settings.json()).guestExperienceEnabled !== true) return false;
+      const response = await fetch(`${base}/api/auth/guest`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      if (!response.ok) return false;
+      const guest = await response.json();
+      if (!guest?.token || guest?.user?.provider !== 'mv3c-guest' ||
+          isExternalRedirectRef.current) return false;
+      completeAuthentication(guest.token, guest.user);
+      return true;
+    } catch {
+      // Disabled, unreachable, or failed guest sign-in should expose normal login.
+      return false;
+    } finally {
+      guestBootstrapInFlightRef.current = false;
+    }
+  }, [authConfig?.test, authConfig?.optional, completeAuthentication]);
+
   const silentRefresh = useCallback(() => {
     if (authConfig?.test === true) {
       return;
@@ -358,18 +391,15 @@ const AuthContextProvider = ({
           setUserContext({ user, token, isAuthenticated: true, redirect });
           return;
         }
-        console.log('Token is not present. User is not authenticated.');
         endSessionClientState();
-        setIsAuthReady(true);
-        if (authConfig?.test === true) {
-          return;
-        }
-        if (isRequiredTwoFactorSetupRoute()) {
-          return;
-        }
-        if (authConfig?.optional !== true) {
-          navigate(buildLoginRedirectUrl());
-        }
+        void startPublicGuestSession().then((entered) => {
+          if (entered) return;
+          setIsAuthReady(true);
+          if (authConfig?.test !== true && !isRequiredTwoFactorSetupRoute() &&
+              authConfig?.optional !== true) {
+            navigate(buildLoginRedirectUrl(), { replace: true });
+          }
+        });
       },
       onError: (error) => {
         if (isExternalRedirectRef.current) {
@@ -377,16 +407,14 @@ const AuthContextProvider = ({
         }
         console.log('refreshToken mutation error:', error);
         endSessionClientState();
-        setIsAuthReady(true);
-        if (authConfig?.test === true) {
-          return;
-        }
-        if (isRequiredTwoFactorSetupRoute()) {
-          return;
-        }
-        if (authConfig?.optional !== true) {
-          navigate(buildLoginRedirectUrl());
-        }
+        void startPublicGuestSession().then((entered) => {
+          if (entered) return;
+          setIsAuthReady(true);
+          if (authConfig?.test !== true && !isRequiredTwoFactorSetupRoute() &&
+              authConfig?.optional !== true) {
+            navigate(buildLoginRedirectUrl(), { replace: true });
+          }
+        });
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deps are stable at mount; adding refreshToken causes infinite re-fire
