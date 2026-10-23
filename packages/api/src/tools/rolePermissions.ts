@@ -93,7 +93,11 @@ export async function checkToolRolePermission({
     }
   }
 
-  if (!allowed) {
+  // Guest FILE_SEARCH denials are expected on the lightweight public chat path:
+  // preserve the denial but avoid treating it as an operational failure on every turn.
+  const expectedGuestSearchDenial =
+    user?.provider === 'mv3c-guest' && permissionType === PermissionTypes.FILE_SEARCH;
+  if (!allowed && !expectedGuestSearchDenial) {
     logger.warn(
       `[${permissionType}] Forbidden: Insufficient permissions for User ${user?.id}: ${Permissions.USE}`,
     );
