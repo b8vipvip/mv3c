@@ -14,6 +14,22 @@ SHA2 = "b" * 40
 
 
 class HostUpdaterTests(unittest.TestCase):
+    def test_only_canonical_updater_entrypoints_remain(self):
+        root = pathlib.Path(__file__).resolve().parents[3]
+        self.assertFalse((root / "mv3c/updater/migrate-git-only.sh").exists())
+        self.assertFalse((root / "config/deployed-update.js").exists())
+        self.assertFalse((root / "config/update.js").exists())
+        installer = (root / "mv3c/updater/install.sh").read_text()
+        self.assertIn("CONFLICTING_UNITS", installer)
+        self.assertIn("mv3c-updater.service", installer)
+        self.assertIn("mv3c-updater.timer", installer)
+        self.assertIn("systemctl is-active --quiet mv3c-updater.service", installer)
+        self.assertIn("Unexpected MV3C updater service drop-ins", installer)
+        self.assertIn("systemctl disable --now mv3c-updater.timer", installer)
+        script = (root / "mv3c/updater/agent.py").read_text()
+        self.assertNotIn("--bootstrap-local", script)
+        self.assertNotIn("reconcile_verified_bootstrap", script)
+
     def test_docker_build_error_report_keeps_original_npm_error(self):
         class Failed:
             returncode = 1
