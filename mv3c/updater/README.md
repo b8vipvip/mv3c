@@ -25,14 +25,20 @@ GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 C
 ```bash
 set -e
 sudo systemctl stop mv3c-updater.timer
-sudo git -C /opt/mv3c fetch git@github.com:b8vipvip/mv3c.git \
-  refs/heads/main:refs/remotes/origin/main
+# 仅用于取到带完整 SSH443/22/HTTPS 回退的迁移入口；默认先走 TLS HTTPS。
+# 若 HTTPS 无法访问，则尝试已有 SSH22；迁移脚本运行时优先 SSH443。
+sudo -H git -C /opt/mv3c -c http.version=HTTP/1.1 \
+  fetch https://github.com/b8vipvip/mv3c.git \
+    refs/heads/main:refs/remotes/origin/main || \
+sudo -H git -C /opt/mv3c \
+  fetch git@github.com:b8vipvip/mv3c.git \
+    refs/heads/main:refs/remotes/origin/main
 sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/migrate-git-only.sh > /root/mv3c-migrate-git-only.sh'
 sudo bash /root/mv3c-migrate-git-only.sh
 ```
 
-专用脚本自动等待已启动的 oneshot 更新任务释放锁、提取最新版 Git-only 更新器、严格校验发布证明、执行 Docker 缓存构建、验证上线镜像后才重新安装 systemd 更新器。**失败时不会安装旧更新器、不清空 Docker 缓存或卷、也不自动开始下一次更新。** 若遇到构建失败，请获取宿主机日志：
-`sudo grep -Ei 'npm (error|ERR)|EAI_AGAIN|ECONN|ETIMEDOUT|ERROR:|failed|No space' /var/log/mv3c-updater-build.log | tail -n 60`，再查看 `sudo tail -n 100 /var/log/mv3c-updater-build.log`。
+专用脚本以固定 GitHub Ed25519 主机密钥优先 SSH 443，再试 SSH 22，最后回退 HTTPS；自动等待已启动的 oneshot 更新任务释放锁、提取最新版 Git-only 更新器、严格校验发布证明、执行 Docker 缓存构建、验证上线镜像后才重新安装 systemd 更新器。**失败时不会安装旧更新器、不清空 Docker 缓存或卷、也不自动开始下一次更新。** 若遇到构建失败，先确认服务器至少有 8 GiB 空间，且 **不得再运行首次部署 `docker compose up -d --build` 覆盖回滚镜像**。从下面日志查明是 npm 网络、依赖、OOM 还是磁盘错误后再重试迁移。请获取宿主机日志：
+`sudo grep -Ei 'npm (error|ERR)|EAI_AGAIN|ECONN|ETIMEDOUT|ERROR:|failed|No space' /var/log/mv3c-updater-build.log | tail -n 60`，再查看 `sudo tail -n 100 /var/log/mv3c-updater-build.log`。Git 获取失败的诊断保留在 `/var/log/mv3c-migration-fetch.log`（仅 root 可读）。
 
 回滚验证会严格检查已备份的旧镜像 ID 与当前健康容器是否一致。若旧镜像由人工 `docker compose build` 构建，缺少 Release 元数据，可以在回滚时恢复为**健康的旧服务**并报告 `legacy unversioned` 警告；这种恢复不会被当作新版本部署成功。新候选镜像仍必须通过全部正式版 SHA、镜像和 API 验证。
 

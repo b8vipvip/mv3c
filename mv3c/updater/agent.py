@@ -235,17 +235,39 @@ def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
         except subprocess.TimeoutExpired:
             code = 124
     important = deque(maxlen=12)
+    causes = deque(maxlen=8)
+    earliest = []
     tail = deque(maxlen=22)
     with BUILD_LOG_PATH.open("r", encoding="utf-8", errors="replace") as stored:
         for line in stored:
             line = line.rstrip()[:1000]
             tail.append(line)
-            if re.search(r"(?i)(?:\berror[: ]|failed to|unexpected eof|connection reset|"
-                         r"deadline exceeded|tls handshake|timed out|timeout|"
-                         r"no space left|out of memory|network is unreachable|"
-                         r"not found|denied|429 too many requests)", line):
+            # Docker's final failed RUN statement often hides npm's actual
+            # error. Capture the original error markers before its long tail.
+            primary = re.search(
+                r"(?i)(?:npm\s+(?:ERR!|error)|EAI_AGAIN|ECONN(?:RESET|REFUSED)|"
+                r"ETIMEDOUT|ENOTFOUND|ENOSPC|ENOMEM|EINTEGRITY|ERR_PNPM|"
+                r"SIGKILL|signal\s+9|Killed process|out of memory|"
+                r"no space left on device)", line,
+            )
+            secondary = re.search(
+                r"(?i)(?:\berror[: ]|failed to|unexpected eof|connection reset|"
+                r"deadline exceeded|tls handshake|timed out|timeout|"
+                r"network is unreachable|not found|denied|429 too many requests)",
+                line,
+            )
+            if primary:
+                causes.append(line)
+                if len(earliest) < 4:
+                    earliest.append(line)
+            elif secondary:
                 important.append(line)
-    summary = "\n".join(important)[:2000] + "\nLast output:\n" + "\n".join(tail)[-1800:]
+    summary = (
+        "First root-cause candidates:\n" + "\n".join(earliest)[:1000] +
+        "\nLast root-cause candidates:\n" + "\n".join(causes)[-1500:] +
+        "\nOther errors:\n" + "\n".join(important)[-900:] +
+        "\nLast output:\n" + "\n".join(tail)[-1500:]
+    )
     if code:
         raise UpdateError("docker build failed (exit {}), full log: {}\n{}".format(
             code, BUILD_LOG_PATH, summary))
@@ -591,8 +613,15 @@ def verify_restored_service(repo: Path, expected_sha: str) -> str:
                 raise UpdateError("Legacy rollback config is invalid")
             if path == "/api/config/version":
                 live = json.loads(payload)
-                if live.get("sha") not in ("", expected_sha) or live.get("version") not in (
-                    "", "unreleased", version,
+                # A legacy manually built image can have an "unreleased"
+                # OCI label while its server still reports the legitimate
+                # previous Git release. This exception is for recovery ONLY.
+                prior_version = version_for_sha(repo, expected_sha)
+                allowed = {"", "unreleased", version}
+                if prior_version:
+                    allowed.add(prior_version)
+                if live.get("sha") not in ("", expected_sha) or (
+                    live.get("version") not in allowed
                 ):
                     raise UpdateError("Legacy rollback reports conflicting live version")
     return ("Rollback recovery PASSED: original running Docker image and Git checkout "

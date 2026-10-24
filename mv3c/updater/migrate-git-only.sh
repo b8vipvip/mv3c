@@ -16,10 +16,57 @@ for attempt in $(seq 1 30); do
   fi
   sleep 4
 done
-echo "Fetching main over verified Git SSH 22 (bootstrap uses SSH 443/22/HTTPS afterwards)"
-GIT_TERMINAL_PROMPT=0 timeout 60s git -C "$REPO" fetch --no-tags \
-  git@github.com:b8vipvip/mv3c.git \
-  refs/heads/main:refs/remotes/origin/main
+# The bootstrap itself must not require port 22: the final updater prefers
+# SSH 443 -> SSH 22 -> HTTPS, so stage the same transport choices here.
+SSH_ORIGIN="git@github.com:b8vipvip/mv3c.git"
+HTTPS_ORIGIN="https://github.com/b8vipvip/mv3c.git"
+KNOWN_HOSTS=/run/mv3c-github-known-hosts
+FETCH_LOG=/var/log/mv3c-migration-fetch.log
+[[ ! -L "$KNOWN_HOSTS" && ! -L "$FETCH_LOG" ]] || {
+  echo "Unsafe known_hosts or log symlink" >&2; exit 1;
+}
+umask 077
+printf '%s\n' \
+  'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+  'ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+  > "$KNOWN_HOSTS"
+chmod 600 "$KNOWN_HOSTS"
+: > "$FETCH_LOG"
+chmod 600 "$FETCH_LOG"
+SSH_COMMON="ssh -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519"
+SSH_443="$SSH_COMMON -o HostName=ssh.github.com -o Port=443 -o HostKeyAlias=ssh.github.com"
+SSH_22="$SSH_COMMON -o HostKeyAlias=github.com"
+REFSPEC="refs/heads/main:refs/remotes/origin/main"
+fetch_main() {
+  if [[ "$(git -C "$REPO" ls-remote --get-url "$SSH_ORIGIN")" == "$SSH_ORIGIN" ]]; then
+    echo "Bootstrap fetch: trying pinned GitHub SSH 443"
+    if GIT_SSH_COMMAND="$SSH_443" GIT_TERMINAL_PROMPT=0 timeout 55s \
+      git -C "$REPO" fetch --no-tags "$SSH_ORIGIN" "$REFSPEC" >> "$FETCH_LOG" 2>&1; then
+      echo "Bootstrap fetch succeeded via SSH 443"; return 0
+    fi
+    echo "Bootstrap fetch: trying pinned GitHub SSH 22"
+    if GIT_SSH_COMMAND="$SSH_22" GIT_TERMINAL_PROMPT=0 timeout 55s \
+      git -C "$REPO" fetch --no-tags "$SSH_ORIGIN" "$REFSPEC" >> "$FETCH_LOG" 2>&1; then
+      echo "Bootstrap fetch succeeded via SSH 22"; return 0
+    fi
+  else
+    echo "Git URL rewrite detected for SSH; skipping untrusted rewritten origin" >> "$FETCH_LOG"
+  fi
+  if [[ "$(git -C "$REPO" ls-remote --get-url "$HTTPS_ORIGIN")" == "$HTTPS_ORIGIN" ]]; then
+    echo "Bootstrap fetch: falling back to pinned GitHub HTTPS HTTP/1.1"
+    if GIT_TERMINAL_PROMPT=0 timeout 55s git -C "$REPO" \
+      -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=12 \
+      fetch --no-tags "$HTTPS_ORIGIN" "$REFSPEC" >> "$FETCH_LOG" 2>&1; then
+      echo "Bootstrap fetch succeeded via HTTPS"; return 0
+    fi
+  else
+    echo "Git URL rewrite detected for HTTPS; refusing untrusted source" >> "$FETCH_LOG"
+  fi
+  echo "All bootstrap Git transports failed; preserving existing checkout and containers." >&2
+  tail -n 12 "$FETCH_LOG" >&2
+  return 1
+}
+fetch_main
 BOOT=/root/mv3c-verified-git-bootstrap.py
 git -C "$REPO" show refs/remotes/origin/main:mv3c/updater/agent.py > "$BOOT"
 chmod 600 "$BOOT"

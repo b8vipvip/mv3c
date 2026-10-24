@@ -14,6 +14,43 @@ SHA2 = "b" * 40
 
 
 class HostUpdaterTests(unittest.TestCase):
+    def test_one_time_migration_has_transport_fallback_and_never_prunes(self):
+        script = PATH.parent / "migrate-git-only.sh"
+        contents = script.read_text(encoding="utf-8")
+        self.assertIn("HostKeyAlgorithms=ssh-ed25519", contents)
+        self.assertIn("HostName=ssh.github.com", contents)
+        self.assertIn("Bootstrap fetch succeeded via SSH 443", contents)
+        self.assertIn("Bootstrap fetch succeeded via SSH 22", contents)
+        self.assertIn("Bootstrap fetch succeeded via HTTPS", contents)
+        self.assertIn('fetch_main\n', contents)
+        self.assertNotIn("docker system prune", contents)
+        self.assertNotIn("docker builder prune", contents)
+        self.assertLess(contents.index("fetch_main\n"), contents.index("BOOT=/root"))
+
+    def test_docker_build_error_report_keeps_original_npm_error(self):
+        class Failed:
+            returncode = 1
+
+        def failed_build(_args, **kwargs):
+            stream = kwargs["stdout"]
+            stream.write(b"#20 10.1 npm ERR! EAI_AGAIN registry.npmjs.org\n")
+            stream.write(b"#20 10.2 npm error network fetch failed\n")
+            for number in range(40):
+                stream.write(f"#20 11.{number} Some ordinary progress output\n".encode())
+            stream.write(b"ERROR: failed to solve: process did not complete\n")
+            return Failed()
+
+        with tempfile.TemporaryDirectory() as folder:
+            with (
+                patch.object(agent, "BUILD_LOG_PATH", pathlib.Path(folder) / "build.log"),
+                patch.object(agent.subprocess, "run", side_effect=failed_build),
+            ):
+                with self.assertRaises(agent.UpdateError) as caught:
+                    agent.run_docker_build(["docker", "build", "."], pathlib.Path(folder),
+                                           timeout=20, env=None)
+            self.assertIn("npm ERR! EAI_AGAIN", str(caught.exception))
+            self.assertIn("First root-cause candidates", str(caught.exception))
+
     def test_proof_tag_requires_exact_version_sha_and_ci_results(self):
         repo = pathlib.Path("/tmp")
         body = (
@@ -123,12 +160,13 @@ class HostUpdaterTests(unittest.TestCase):
                 return False
             def read(self, _size):
                 if self.url.endswith("/version"):
-                    return b'{"version":"unreleased","sha":""}'
+                    return b'{"version":"v0.1.5","sha":""}'
                 return b'{}'
         with (
             patch.object(agent, "verify_deployment",
                          side_effect=agent.UpdateError("Docker image Release version mismatch")),
             patch.object(agent, "git", return_value=SHA1),
+            patch.object(agent, "version_for_sha", return_value="v0.1.5"),
             patch.object(agent, "run", side_effect=fake_run),
             patch.object(agent.urllib.request, "urlopen",
                          side_effect=lambda url, timeout: Response(url)),
