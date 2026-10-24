@@ -38,7 +38,7 @@ if (( ${#CONFLICTING_UNITS[@]} )); then
   exit 1
 fi
 # Refuse inherited service drop-ins which could add alternate ExecStart.
-for OVERRIDE_DIR in /etc/systemd/system/mv3c-updater.service.d /run/systemd/system/mv3c-updater.service.d; do
+for OVERRIDE_DIR in /etc/systemd/system/mv3c-updater.service.d /run/systemd/system/mv3c-updater.service.d /etc/systemd/system/mv3c-updater.timer.d /run/systemd/system/mv3c-updater.timer.d; do
   if [ -d "$OVERRIDE_DIR" ] && compgen -G "$OVERRIDE_DIR/*.conf" >/dev/null; then
     echo "Unexpected MV3C updater service drop-ins: $OVERRIDE_DIR" >&2
     exit 1
