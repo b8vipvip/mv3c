@@ -14,6 +14,50 @@ SHA2 = "b" * 40
 
 
 class HostUpdaterTests(unittest.TestCase):
+    def test_bootstrap_ledger_requires_live_release_verification(self):
+        repo = pathlib.Path("/tmp")
+        verified = "Post-deploy validation PASSED: git SHA=" + SHA2[:12]
+        with (
+            patch.object(agent, "version_for_sha", return_value="v0.1.12"),
+            patch.object(agent, "verify_deployment", return_value=verified) as check,
+            patch.object(agent, "bridge", return_value={"recorded": True}) as bridge,
+        ):
+            result = agent.reconcile_verified_bootstrap(repo, SHA2, {"history": []})
+        self.assertEqual(result, {"recorded": True})
+        check.assert_called_once_with(repo, SHA2)
+        bridge.assert_called_once_with(repo, "bootstrap-complete", {
+            "sha": SHA2, "version": "v0.1.12", "verification": verified,
+        })
+        with (
+            patch.object(agent, "version_for_sha") as version,
+            patch.object(agent, "verify_deployment") as verify,
+            patch.object(agent, "bridge") as bridge,
+        ):
+            result = agent.reconcile_verified_bootstrap(
+                repo, SHA2, {"pendingJob": {"id": "queued"}}
+            )
+            self.assertIn("skip", result)
+            version.assert_not_called()
+            verify.assert_not_called()
+            bridge.assert_not_called()
+
+    def test_bootstrap_ledger_does_not_duplicate_or_forge_success(self):
+        repo = pathlib.Path("/tmp")
+        state = {"history": [{"sha": SHA2, "outcome": "success"}]}
+        with patch.object(agent, "bridge") as bridge:
+            self.assertIn("already recorded",
+                          agent.reconcile_verified_bootstrap(repo, SHA2, state))
+            bridge.assert_not_called()
+        with (
+            patch.object(agent, "version_for_sha", return_value="v0.1.12"),
+            patch.object(agent, "verify_deployment",
+                         side_effect=agent.UpdateError("running image mismatch")),
+            patch.object(agent, "bridge") as bridge,
+        ):
+            with self.assertRaisesRegex(agent.UpdateError, "running image mismatch"):
+                agent.reconcile_verified_bootstrap(repo, SHA2, {"history": []})
+            bridge.assert_not_called()
+
     def test_one_time_migration_has_transport_fallback_and_never_prunes(self):
         script = PATH.parent / "migrate-git-only.sh"
         contents = script.read_text(encoding="utf-8")
