@@ -74,8 +74,52 @@ async function probeToolBridge(provider, options = {}) {
       model: provider.models[0],
     };
   }
-  const classified = classifyToolResponse(await response.json());
-  return { ...classified, elapsedMs: Date.now() - start, model: provider.models[0] };
+  const payload = await response.json();
+  const classified = classifyToolResponse(payload);
+  if (!classified.supported) {
+    return { ...classified, roundTripSupported: false, elapsedMs: Date.now() - start, model: provider.models[0] };
+  }
+
+  // Feed a synthetic tool result back through the standard OpenAI-compatible
+  // messages protocol. The sandbox probe does not execute any MCP tool.
+  const toolCall = payload.choices[0].message.tool_calls.find((call) =>
+    call?.type === 'function' && call.function?.name === PROBE_TOOL,
+  );
+  if (typeof toolCall?.id !== 'string' || !toolCall.id) {
+    return {
+      ...classified, roundTripSupported: false, roundTripReason: 'missing_call_id',
+      elapsedMs: Date.now() - start, model: provider.models[0],
+    };
+  }
+  const continuation = await fetcher(endpoint, {
+    method: 'POST',
+    redirect: 'error',
+    headers: {
+      Authorization: 'Bearer ' + provider.apiKey,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(options.timeoutMs ?? 45000),
+    body: JSON.stringify({
+      model: provider.models[0],
+      stream: false,
+      messages: [
+        { role: 'system', content: 'After receiving a function result, reply with the exact word mv3c-ready.' },
+        { role: 'user', content: 'Use the probe tool and then report its output.' },
+        { role: 'assistant', content: null, tool_calls: [toolCall] },
+        { role: 'tool', tool_call_id: toolCall.id, content: 'mv3c-ready' },
+      ],
+    }),
+  });
+  const output = continuation.ok ? await continuation.json() : {};
+  const finalText = output?.choices?.[0]?.message?.content;
+  const roundTripSupported = continuation.ok &&
+    typeof finalText === 'string' && finalText.trim().includes('mv3c-ready');
+  return {
+    ...classified, roundTripSupported,
+    roundTripReason: continuation.ok ? (roundTripSupported ? 'confirmed' : 'tool_output_not_reconciled')
+      : 'upstream_http_' + continuation.status,
+    elapsedMs: Date.now() - start, model: provider.models[0],
+  };
 }
 
 module.exports = { PROBE_TOOL, classifyToolResponse, probeToolBridge };
