@@ -140,6 +140,31 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertIn("validation_run_id=", workflow)
         self.assertIn("docker_run_id=", workflow)
 
+    def test_resource_sampling_and_buildkit_timing_diagnostics(self):
+        summary = agent.build_pressure_summary([
+            {"mem_available_mib": 2000, "swap_used_mib": 100, "io_full_avg10": 5.3,
+             "docker_free_gib": 5.5},
+            {"mem_available_mib": 780, "swap_used_mib": 440, "io_full_avg10": 29.1,
+             "docker_free_gib": 3.2},
+        ])
+        self.assertIn("780.00 MiB minimum", summary)
+        self.assertIn("29.10 % peak", summary)
+        self.assertIn("3.20 GiB minimum", summary)
+        steps = agent.buildkit_summary({"23": "runtime exporting", "5": "npm ci"},
+                                       {"23": 106.5, "5": 57.8}, 7)
+        self.assertLess(steps.index("106.5s"), steps.index("57.8s"))
+        self.assertIn("7 cached step(s)", steps)
+
+    def test_unattended_auto_check_disabled_is_not_repeated(self):
+        now = agent.utc_now()
+        self.assertFalse(agent.check_needed({
+            "checkedAt": now, "config": {"autoEnabled": False},
+        }))
+        self.assertFalse(agent.check_needed({
+            "checkedAt": now, "config": {"autoEnabled": False},
+            "checkRequestedAt": "2020-01-01T00:00:00Z",
+        }))
+
     def test_requested_check_and_periodic_check(self):
         now = agent.utc_now()
         self.assertTrue(agent.check_needed({"config": {"intervalMinutes": 10}}))
@@ -595,7 +620,7 @@ class HostUpdaterTests(unittest.TestCase):
         build, kwargs = commands[0]
         self.assertEqual(build[:3], ["docker", "build", "--progress=plain"])
         self.assertEqual(build[-1], ".")
-        self.assertIn("NODE_MAX_OLD_SPACE_SIZE=3072", build)
+        self.assertIn("NODE_MAX_OLD_SPACE_SIZE=2560", build)
         self.assertIn("BUILD_COMMIT=" + SHA2, build)
         self.assertIn("BUILD_VERSION=v1.2.3", build)
         self.assertIn("NPM_CI_TIMEOUT_SECONDS=1800", build)
