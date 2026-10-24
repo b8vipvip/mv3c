@@ -14,63 +14,6 @@ SHA2 = "b" * 40
 
 
 class HostUpdaterTests(unittest.TestCase):
-    def test_bootstrap_ledger_requires_live_release_verification(self):
-        repo = pathlib.Path("/tmp")
-        verified = "Post-deploy validation PASSED: git SHA=" + SHA2[:12]
-        with (
-            patch.object(agent, "version_for_sha", return_value="v0.1.12"),
-            patch.object(agent, "verify_deployment", return_value=verified) as check,
-            patch.object(agent, "bridge", return_value={"recorded": True}) as bridge,
-        ):
-            result = agent.reconcile_verified_bootstrap(repo, SHA2, {"history": []})
-        self.assertEqual(result, {"recorded": True})
-        check.assert_called_once_with(repo, SHA2)
-        bridge.assert_called_once_with(repo, "bootstrap-complete", {
-            "sha": SHA2, "version": "v0.1.12", "verification": verified,
-        })
-        with (
-            patch.object(agent, "version_for_sha") as version,
-            patch.object(agent, "verify_deployment") as verify,
-            patch.object(agent, "bridge") as bridge,
-        ):
-            result = agent.reconcile_verified_bootstrap(
-                repo, SHA2, {"pendingJob": {"id": "queued"}}
-            )
-            self.assertIn("skip", result)
-            version.assert_not_called()
-            verify.assert_not_called()
-            bridge.assert_not_called()
-
-    def test_bootstrap_ledger_does_not_duplicate_or_forge_success(self):
-        repo = pathlib.Path("/tmp")
-        state = {"history": [{"sha": SHA2, "outcome": "success"}]}
-        with patch.object(agent, "bridge") as bridge:
-            self.assertIn("already recorded",
-                          agent.reconcile_verified_bootstrap(repo, SHA2, state))
-            bridge.assert_not_called()
-        with (
-            patch.object(agent, "version_for_sha", return_value="v0.1.12"),
-            patch.object(agent, "verify_deployment",
-                         side_effect=agent.UpdateError("running image mismatch")),
-            patch.object(agent, "bridge") as bridge,
-        ):
-            with self.assertRaisesRegex(agent.UpdateError, "running image mismatch"):
-                agent.reconcile_verified_bootstrap(repo, SHA2, {"history": []})
-            bridge.assert_not_called()
-
-    def test_one_time_migration_has_transport_fallback_and_never_prunes(self):
-        script = PATH.parent / "migrate-git-only.sh"
-        contents = script.read_text(encoding="utf-8")
-        self.assertIn("HostKeyAlgorithms=ssh-ed25519", contents)
-        self.assertIn("HostName=ssh.github.com", contents)
-        self.assertIn("Bootstrap fetch succeeded via SSH 443", contents)
-        self.assertIn("Bootstrap fetch succeeded via SSH 22", contents)
-        self.assertIn("Bootstrap fetch succeeded via HTTPS", contents)
-        self.assertIn('fetch_main\n', contents)
-        self.assertNotIn("docker system prune", contents)
-        self.assertNotIn("docker builder prune", contents)
-        self.assertLess(contents.index("fetch_main\n"), contents.index("BOOT=/root"))
-
     def test_docker_build_error_report_keeps_original_npm_error(self):
         class Failed:
             returncode = 1
@@ -180,25 +123,20 @@ class HostUpdaterTests(unittest.TestCase):
             "checkRequestedAt": now, "config": {"intervalMinutes": 60},
         }))
 
-    def test_lock_contention_blocks_bootstrap_but_allows_timer_skip(self):
+    def test_single_host_update_owner_and_no_bootstrap_mode(self):
         with tempfile.TemporaryDirectory() as directory:
-            for bootstrap, should_fail in ((True, True), (False, False)):
-                argv = ["agent.py", "--repo", directory]
-                if bootstrap:
-                    argv.append("--bootstrap-local")
-                with (
-                    patch.object(agent.sys, "argv", argv),
-                    patch.object(agent.os, "geteuid", return_value=0),
-                    patch.object(agent.Path, "open") as open_lock,
-                    patch.object(agent.fcntl, "flock", side_effect=BlockingIOError),
-                ):
-                    open_lock.return_value.__enter__.return_value.fileno.return_value = 9
-                    if should_fail:
-                        with self.assertRaisesRegex(agent.UpdateError,
-                                                    "Bootstrap was NOT run"):
-                            agent.main()
-                    else:
-                        self.assertEqual(agent.main(), 0)
+            with (
+                patch.object(agent.sys, "argv", ["agent.py", "--repo", directory]),
+                patch.object(agent.os, "geteuid", return_value=0),
+                patch.object(agent.Path, "open") as open_lock,
+                patch.object(agent.fcntl, "flock", side_effect=BlockingIOError),
+            ):
+                open_lock.return_value.__enter__.return_value.fileno.return_value = 9
+                self.assertEqual(agent.main(), 0)
+            with patch.object(agent.sys, "argv",
+                              ["agent.py", "--repo", directory, "--bootstrap-local"]):
+                with self.assertRaises(SystemExit):
+                    agent.main()
 
     def test_legacy_unversioned_rollback_accepts_only_original_healthy_image(self):
         repo = pathlib.Path("/tmp")
@@ -268,18 +206,6 @@ class HostUpdaterTests(unittest.TestCase):
                           side_effect=agent.UpdateError("Running container image does not match")):
             with self.assertRaisesRegex(agent.UpdateError, "does not match"):
                 agent.verify_restored_service(repo, SHA1)
-
-    def test_same_sha_bootstrap_only_skips_verified_release_image(self):
-        repo = pathlib.Path("/tmp")
-        with patch.object(agent, "verify_deployment", return_value="PASSED") as verify:
-            self.assertFalse(agent.bootstrap_needs_deploy(repo, SHA2, SHA2))
-            verify.assert_called_once_with(repo, SHA2)
-        with patch.object(agent, "verify_deployment",
-                          side_effect=agent.UpdateError("Release image version mismatch")):
-            self.assertTrue(agent.bootstrap_needs_deploy(repo, SHA2, SHA2))
-        with patch.object(agent, "verify_deployment") as verify:
-            self.assertTrue(agent.bootstrap_needs_deploy(repo, SHA1, SHA2))
-            verify.assert_not_called()
 
     def test_host_git_commands_enforce_noninteractive_ssh(self):
         with patch.object(agent, "run", return_value="ok") as run:
