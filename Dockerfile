@@ -108,12 +108,16 @@ COPY --chown=node:node packages/chat/package.json ./packages/chat/package.json
 RUN --mount=type=cache,id=mv3c-npm-cache,target=/home/node/.npm,uid=1000,gid=1000,sharing=locked \
     npm ci --omit=dev --no-audit --prefer-offline --no-fund
 
-# Runtime gets the cached production-only node_modules and the source/build
-# outputs with every nested node_modules excluded. BusyBox tar is available
+# Runtime gets the cached production-only workspace install and the source/build
+# outputs with every nested build-stage node_modules excluded. BusyBox tar is available
 # in the pinned Alpine base. Avoid copying the ~2.4GiB dev module tree and
 # exporting it into a second image layer on every source change.
 FROM base AS runtime
-COPY --from=prod-deps --chown=node:node /app/node_modules/ /app/node_modules/
+# npm workspaces may place production dependencies under api/node_modules or
+# another workspace. Preserve the entire production install tree (not just
+# root node_modules), otherwise valid packages such as cookie-parser disappear.
+# This source-invariant layer remains reusable across app-only updates.
+COPY --from=prod-deps --chown=node:node /app/ /app/
 RUN --mount=from=build,source=/app,target=/mv3c-built,ro \
     set -eu; \
     set -o pipefail; \
