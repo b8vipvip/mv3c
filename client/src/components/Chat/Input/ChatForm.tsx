@@ -781,13 +781,13 @@ const ChatForm = memo(function ChatForm({
               ) : null}
             </div>
           )}
+          <BadgeRowProvider
+            conversationId={conversationId}
+            specName={conversation?.spec}
+            isSubmitting={isSubmitting}
+            observeToolAuthorization={showTools}
+          >
           <div className={cn('flex w-full items-center', isRTL && 'flex-row-reverse')}>
-              <BadgeRowProvider
-                conversationId={conversationId}
-                specName={conversation?.spec}
-                isSubmitting={isSubmitting}
-                observeToolAuthorization={showTools}
-              >
             <Mention
               index={index}
               popoverAtom={plusPopoverAtom}
@@ -1011,10 +1011,10 @@ const ChatForm = memo(function ChatForm({
                   hasAddedConversation={addedConvo != null}
                 />
                 <ToolDialogs />
-              </BadgeRowProvider>
               {TextToSpeech && automaticPlayback && <AutoPlayAudio index={index} />}
             </div>
           </div>
+          </BadgeRowProvider>
           {/* Sibling of the composer row, not a child: inside that flex-row it
               would lay out as a narrow column beside the box. */}
           <Hints
