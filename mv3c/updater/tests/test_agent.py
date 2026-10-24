@@ -492,7 +492,7 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertIn("FROM base AS prod-deps", build_stage)
         self.assertIn("npm ci --omit=dev --no-audit", build_stage)
         self.assertNotIn("npm ci ", runtime_stage)
-        self.assertIn('CMD ["npm", "run", "backend"]', runtime_stage)
+        self.assertIn('CMD ["node", "api/server/index.js"]', runtime_stage)
         self.assertIn("org.opencontainers.image.revision", runtime_stage)
 
     def test_dockerfile_avoids_unbounded_alpine_upgrade_and_has_signed_mirrors(self):
