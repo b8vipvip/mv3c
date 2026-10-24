@@ -6,4 +6,4 @@ node /app/mv3c/bootstrap.cjs
 set -a
 . /app/data/mv3c-bootstrap.env
 set +a
-exec npm run backend
+exec node /app/api/server/index.js

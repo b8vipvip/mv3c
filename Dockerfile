@@ -92,15 +92,40 @@ COPY --chown=node:node . .
 ARG VITE_MCP_SANDBOX_URL=
 RUN --mount=type=cache,id=mv3c-npm-cache,target=/home/node/.npm,uid=1000,gid=1000,sharing=locked \
     # React client build with configurable memory
-    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend && \
-    npm prune --omit=dev --prefer-offline --no-audit --no-fund
+    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend
 
-# Production output stage. Copy only the FINAL builder filesystem state,
-# after npm prune --omit=dev. This flattens away earlier layers containing
-# full development node_modules, keeping BuildKit caches in the builder.
-# Do not change /app volume paths or npm's root workspace layout.
+# Install production dependencies in an INDEPENDENT, source-invariant layer.
+# Source edits must not retrigger npm prune (historically ~96 seconds) or the
+# multi-GB dev-dependency copy. This npm-ci layer is keyed only by manifests.
+FROM base AS prod-deps
+COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node api/package.json ./api/package.json
+COPY --chown=node:node client/package.json ./client/package.json
+COPY --chown=node:node packages/data-provider/package.json ./packages/data-provider/package.json
+COPY --chown=node:node packages/data-schemas/package.json ./packages/data-schemas/package.json
+COPY --chown=node:node packages/api/package.json ./packages/api/package.json
+COPY --chown=node:node packages/chat/package.json ./packages/chat/package.json
+RUN --mount=type=cache,id=mv3c-npm-cache,target=/home/node/.npm,uid=1000,gid=1000,sharing=locked \
+    npm ci --omit=dev --no-audit --prefer-offline --no-fund
+
+# Runtime gets the cached production-only workspace install and the source/build
+# outputs with every nested build-stage node_modules excluded. BusyBox tar is available
+# in the pinned Alpine base. Avoid copying the ~2.4GiB dev module tree and
+# exporting it into a second image layer on every source change.
 FROM base AS runtime
-COPY --from=build --chown=node:node /app/ /app/
+ENV NODE_ENV=production
+# npm workspaces may place production dependencies under api/node_modules or
+# another workspace. Preserve the entire production install tree (not just
+# root node_modules), otherwise valid packages such as cookie-parser disappear.
+# This source-invariant layer remains reusable across app-only updates.
+COPY --from=prod-deps --chown=node:node /app/ /app/
+RUN --mount=from=build,source=/app,target=/mv3c-built,ro \
+    set -eu; \
+    set -o pipefail; \
+    tar -C /mv3c-built --exclude=node_modules --exclude='*/node_modules' -cf - . | tar -C /app -xf -; \
+    test -f /app/api/server/index.js; \
+    test -f /app/mv3c/entrypoint.sh; \
+    test -d /app/client/dist
 
 # Optional build metadata surfaced in Settings -> About for support triage.
 # Declared here (after the heavy install/build steps) so that commit/date
@@ -123,5 +148,5 @@ ENV BUILD_DATE=${BUILD_DATE}
 # Node API setup
 EXPOSE 3080
 ENV HOST=0.0.0.0
-CMD ["npm", "run", "backend"]
+CMD ["node", "api/server/index.js"]
 

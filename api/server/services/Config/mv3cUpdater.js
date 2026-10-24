@@ -6,6 +6,9 @@ const mongoose = require('mongoose');
 const ID = 'global';
 const DEFAULT_CONFIG = Object.freeze({
   autoEnabled: true,
+  // Legacy autoEnabled now means periodic checking, never unattended building.
+  // Deployment requires an explicit new opt-in even on upgraded installations.
+  autoDeployEnabled: false,
   channel: 'release',
   intervalMinutes: 10,
 });
@@ -32,7 +35,8 @@ async function initialize() {
 }
 function format(doc) {
   // Previously saved main mode is migrated at read time; deployment is release-only.
-  const config = { ...DEFAULT_CONFIG, ...(doc?.config || {}), channel: 'release' };
+  const config = { ...DEFAULT_CONFIG, ...(doc?.config || {}),
+    autoDeployEnabled: doc?.config?.autoDeployEnabled === true, channel: 'release' };
   const heartbeat = doc?.agentHeartbeat ? new Date(doc.agentHeartbeat) : null;
   const agentOnline = heartbeat && Number.isFinite(heartbeat.getTime()) &&
     Date.now() - heartbeat.getTime() < 180000;
@@ -75,6 +79,7 @@ function validateConfig(body) {
   const result = {};
   for (const [key, value] of Object.entries(body)) {
     if (key === 'autoEnabled' && typeof value === 'boolean') result[key] = value;
+    else if (key === 'autoDeployEnabled' && typeof value === 'boolean') result[key] = value;
     else if (key === 'channel' && value === 'release') result[key] = value;
     else if (key === 'intervalMinutes' && [5, 10, 15, 30, 60].includes(value)) {
       result[key] = value;
@@ -113,6 +118,8 @@ async function queueJob(actor, mode = 'manual') {
     _id: ID,
     pendingJob: { $exists: false },
     activeJob: { $exists: false },
+    // Server-side admission gate; checking a stale UI flag is not sufficient.
+    ...(mode === 'auto' ? { 'config.autoDeployEnabled': true } : {}),
   }, {
     $set: { pendingJob: job, status: 'queued', lastError: '' },
   }, { returnDocument: 'after' });
@@ -230,13 +237,11 @@ function validateReport(payload) {
     latestUrl: (v) => typeof v === 'string' && v.length <= 500 &&
       (!v || v.startsWith('https://github.com/b8vipvip/mv3c/')),
     updateAvailable: (v) => typeof v === 'boolean',
-    status: (v) => ['idle', 'checking', 'queued', 'updating', 'blocked', 'success', 'failed', 'rolled_back'].includes(v),
+    // Only completeJob owns success/failure/rollback terminal states.
+    status: (v) => ['idle', 'checking', 'blocked'].includes(v),
     lastError: (v) => typeof v === 'string' && v.length <= 2000,
     ciMessage: (v) => typeof v === 'string' && v.length <= 300,
-    lastLog: (v) => typeof v === 'string' && v.length <= 12000,
-    lastOutcome: (v) => typeof v === 'string' && v.length <= 100,
     checkedAt: (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v)),
-    lastSuccessAt: (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v)),
   };
   const result = {};
   for (const [key, value] of Object.entries(payload)) {
@@ -317,74 +322,8 @@ async function completeJob(payload) {
 }
 
 
-/**
- * The one-time host bootstrap is not a queued admin job, so completeJob()
- * cannot record its successful deploy. This is the sole DB owner of that
- * terminal event; the privileged host supplies evidence only AFTER it has
- * run verify_deployment (image identity + health + version API).
- *
- * Idempotent by successful SHA; never erase old failure history or interrupt
- * a real queued/active update. A timer run can reconcile an interrupted
- * bookkeeping call after a verified bootstrap.
- */
-async function recordVerifiedBootstrap(payload) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new TypeError('Invalid verified bootstrap evidence');
-  }
-  const { sha, version, verification } = payload;
-  if (Object.keys(payload).some((key) => !['sha', 'version', 'verification'].includes(key)) ||
-      typeof sha !== 'string' || !SHA.test(sha) ||
-      typeof version !== 'string' || !/^v\d+\.\d+\.\d+$/.test(version) ||
-      typeof verification !== 'string' ||
-      !verification.startsWith('Post-deploy validation PASSED: git SHA=' + sha.slice(0, 12)) ||
-      verification.length > 1200) {
-    throw new TypeError('Invalid verified bootstrap evidence');
-  }
-  // Check metadata of the *currently running* process, not user-controlled
-  // admin fields. The bridge is invoked inside that running container.
-  if (process.env.BUILD_COMMIT !== sha || process.env.MV3C_VERSION !== version) {
-    throw new Error('Bootstrap evidence does not match running server image');
-  }
-  await initialize();
-  const now = new Date();
-  const entry = {
-    jobId: crypto.randomUUID(), mode: 'bootstrap',
-    requestedBy: 'verified-host-updater',
-    requestedAt: now, startedAt: now, finishedAt: now, durationMs: 0,
-    outcome: 'success', fromSha: '', attemptedSha: sha, sha, version,
-    error: '', verification,
-    log: 'Official Release deployed through verified one-time host bootstrap.\n' + verification,
-    steps: [{ at: now, stage: 'complete', percent: 100,
-      message: '宿主机迁移完成，版本及健康检查通过' }],
-  };
-  // Atomic success-record uniqueness even if host retry and scheduled
-  // reconciliation race. A previously queued task is not silently closed.
-  const result = await collection().updateOne({
-    _id: ID, pendingJob: { $exists: false }, activeJob: { $exists: false },
-    history: { $not: { $elemMatch: { outcome: 'success', sha } } },
-  }, {
-    $set: {
-      status: 'success', currentSha: sha, currentVersion: version,
-      latestSha: sha, latestVersion: version, latestLabel: version,
-      latestUrl: 'https://github.com/b8vipvip/mv3c/releases/tag/' + version,
-      updateAvailable: false, checkedAt: now, lastAttemptAt: now,
-      lastSuccessAt: now, agentHeartbeat: now, lastOutcome: 'success',
-      lastError: '', ciMessage: '', lastLog: entry.log,
-    },
-    $unset: { blockedSha: '' },
-    $push: { history: { $each: [entry], $slice: -20 } },
-  });
-  if (result.matchedCount) return { recorded: true, jobId: entry.jobId };
-  const state = await collection().findOne({ _id: ID },
-    { projection: { history: 1, pendingJob: 1, activeJob: 1 } });
-  if ((state?.history || []).some((event) => event.outcome === 'success' && event.sha === sha)) {
-    return { recorded: false, reason: 'already-recorded' };
-  }
-  throw new Error('Bootstrap reporting deferred: update job is queued or active');
-}
-
 module.exports = {
   DEFAULT_CONFIG, format, validateConfig, validateReport, validateProgress, renderReport,
   getState, saveConfig, requestCheck, queueJob, claimJob, report, progressJob, completeJob,
-  recordVerifiedBootstrap, getReport,
+  getReport,
 };

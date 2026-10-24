@@ -114,70 +114,12 @@ async function main() {
   assert.equal(recovered.blockedSha, '');
   assert.equal(recovered.currentSha, 'b'.repeat(40));
 
-  // A one-time verified host bootstrap is not a queued admin update.
-  // It must record success without rewriting/removing any earlier failure.
-  const oldCommitEnv = process.env.BUILD_COMMIT;
-  const oldVersionEnv = process.env.MV3C_VERSION;
-  const bootstrapSha = 'c'.repeat(40);
-  const bootstrapVersion = 'v0.1.12';
-  const evidence = 'Post-deploy validation PASSED: git SHA=' +
-    bootstrapSha.slice(0, 12) + '; container healthy; live version attested';
-  try {
-    process.env.BUILD_COMMIT = bootstrapSha;
-    process.env.MV3C_VERSION = bootstrapVersion;
-    await assert.rejects(updates.recordVerifiedBootstrap({
-      sha: 'd'.repeat(40), version: bootstrapVersion, verification: evidence,
-    }), /Invalid verified bootstrap evidence/);
-    await assert.rejects(updates.recordVerifiedBootstrap({
-      sha: bootstrapSha, version: bootstrapVersion,
-      verification: 'Pre-deployment verification FAILED',
-    }), /Invalid verified bootstrap evidence/);
-
-    await updates.report({
-      status: 'blocked', lastError: 'Historical GitHub API HTTP 403',
-      currentSha: 'b'.repeat(40), currentVersion: 'v0.1.5',
-    });
-    const prior = await updates.getState();
-    const originalLength = prior.history.length;
-    const first = await updates.recordVerifiedBootstrap({
-      sha: bootstrapSha, version: bootstrapVersion, verification: evidence,
-    });
-    assert.equal(first.recorded, true);
-    const corrected = await updates.getState();
-    assert.equal(corrected.currentSha, bootstrapSha);
-    assert.equal(corrected.currentVersion, bootstrapVersion);
-    assert.equal(corrected.status, 'success');
-    assert.equal(corrected.lastOutcome, 'success');
-    assert.equal(corrected.lastError, '');
-    assert.equal(corrected.latestVersion, bootstrapVersion);
-    assert.equal(corrected.updateAvailable, false);
-    assert.ok(corrected.lastSuccessAt);
-    assert.equal(corrected.history[0].mode, 'bootstrap');
-    assert.equal(corrected.history[0].sha, bootstrapSha);
-    assert.equal(corrected.history.length, originalLength + 1);
-    assert.equal(corrected.history[1].outcome, 'success');
-    const bootstrapReport = await updates.getReport(first.jobId);
-    assert.match(bootstrapReport, /verified one-time host bootstrap/);
-    assert.match(bootstrapReport, /Post-deploy validation PASSED/);
-    const again = await updates.recordVerifiedBootstrap({
-      sha: bootstrapSha, version: bootstrapVersion, verification: evidence,
-    });
-    assert.equal(again.recorded, false);
-    assert.equal((await updates.getState()).history.length, originalLength + 1);
-
-    const pending = await updates.queueJob('ci-admin');
-    process.env.BUILD_COMMIT = 'd'.repeat(40);
-    await assert.rejects(updates.recordVerifiedBootstrap({
-      sha: 'd'.repeat(40), version: bootstrapVersion,
-      verification: 'Post-deploy validation PASSED: git SHA=dddddddddddd',
-    }), /queued or active/);
-    assert.equal((await updates.getState()).pendingJob.id, pending.job.id);
-  } finally {
-    if (oldCommitEnv === undefined) delete process.env.BUILD_COMMIT;
-    else process.env.BUILD_COMMIT = oldCommitEnv;
-    if (oldVersionEnv === undefined) delete process.env.MV3C_VERSION;
-    else process.env.MV3C_VERSION = oldVersionEnv;
-  }
+  // Historical completions are immutable; there is no out-of-band bootstrap
+  // success writer. Only completeJob() can finalize a claimed update task.
+  const final = await updates.getState();
+  assert.equal(final.activeJob, null);
+  assert.equal(final.pendingJob, null);
+  assert.equal(typeof updates.recordVerifiedBootstrap, 'undefined');
 
   await mongoose.disconnect();
   console.log('mv3c update settings, exclusive queue, claims and history: OK');

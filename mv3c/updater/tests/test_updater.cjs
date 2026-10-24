@@ -12,6 +12,9 @@ test('update configuration accepts only fixed channels and intervals', () => {
   assert.throws(() => updates.validateConfig({ channel: '../../evil' }));
   assert.throws(() => updates.validateConfig({ channel: 'main' }));
   assert.equal(updates.DEFAULT_CONFIG.channel, 'release');
+  assert.equal(updates.DEFAULT_CONFIG.autoDeployEnabled, false);
+  assert.deepEqual(updates.validateConfig({ autoDeployEnabled: true }), { autoDeployEnabled: true });
+  assert.throws(() => updates.validateConfig({ autoDeployEnabled: 'true' }));
 });
 
 test('host report validates SHA, URL and prevents arbitrary field updates', () => {
@@ -25,6 +28,10 @@ test('host report validates SHA, URL and prevents arbitrary field updates', () =
   assert.deepEqual(updates.validateReport({ currentVersion: 'v0.1.0', latestVersion: 'v0.2.0' }),
     { currentVersion: 'v0.1.0', latestVersion: 'v0.2.0' });
   assert.throws(() => updates.validateReport({ latestVersion: 'latest' }));
+  assert.throws(() => updates.validateReport({ status: 'success' }));
+  assert.throws(() => updates.validateReport({ status: 'failed' }));
+  assert.throws(() => updates.validateReport({ lastOutcome: 'success' }));
+  assert.throws(() => updates.validateReport({ lastSuccessAt: new Date().toISOString() }));
 });
 
 test('admin update state never exposes secret keys and detects stale host agents', () => {
@@ -40,6 +47,8 @@ test('admin update state never exposes secret keys and detects stale host agents
   assert.equal(formatted.currentSha, doc.currentSha);
   assert.equal(formatted.pendingJob.id, 'job1');
   assert.equal(formatted.config.autoEnabled, false);
+  assert.equal(formatted.config.autoDeployEnabled, false, 'legacy autoEnabled never opts in to building');
+  assert.equal(updates.format({ config: { autoDeployEnabled: true } }).config.autoDeployEnabled, true);
   assert.equal(formatted.config.channel, 'release', 'legacy main policy is migrated on read');
   assert.equal(formatted.currentVersion, '');
   assert.equal(formatted.latestVersion, '');

@@ -16,32 +16,21 @@ GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 C
 
 构建失败**不会**停止或重启旧容器。构建中途异常退出时，下一次更新器执行将依据本地事务日志恢复 Git 和旧镜像，并核验运行状态，防止 Git/镜像版本不一致。**镜像完整构建后若因剩余空间不足 2 GiB 而回滚，成功导出的 `mv3c:sha-<commit>` 候选镜像会保留。下次针对相同 Release SHA 重试时先验证并复用此镜像，避免反复支付 BuildKit 导出和额外磁盘峰值；如果发布了新 SHA，旧候选不得冒充新版本，仍需构建新 SHA。**
 
-## 从 REST API 更新器迁移（已有站点仅执行一次）
+## 已有生产站点：无并行更新器的原地升级
 
-**已有旧版本站点不要运行「首次部署」里的 `git clone` 或 `docker compose up -d --build`**；它们可能覆盖原来具备版本号的运行镜像。迁移前请在 [GitHub Releases](https://github.com/b8vipvip/mv3c/releases) 确认新的正式版及 `mv3c-verified/vX.Y.Z` 发布证明标签已产生。
+此前一次性 REST/SCP 迁移脚本和 bootstrap 独立成功写入接口已退役，不再支持运行 `migrate-git-only.sh`、`--bootstrap-local`、`npm run update:deployed` 或旧 LibreChat Docker 更新入口。**只有一个常驻宿主机 systemd 单元对**：`mv3c-updater.timer` 激活 `mv3c-updater.service`，其唯一执行程序为 `mv3c/updater/agent.py`。数据库 `completeJob()` 是唯一更新终态写入者。不能另开脚本同时执行部署。
 
-在宝塔 root 终端执行独立命令，**不要把各步骤散落在多个不检查退出码的粘贴块里**：
+在尚未切换到新版本的服务器上，执行**串行原地交接**，不要先 Git reset/pull 切换代码，也不要删除仍用于首次交接的旧 service 文件。
 
-```bash
-set -e
-sudo systemctl stop mv3c-updater.timer
-# 仅用于取到带完整 SSH443/22/HTTPS 回退的迁移入口；默认先走 TLS HTTPS。
-# 若 HTTPS 无法访问，则尝试已有 SSH22；迁移脚本运行时优先 SSH443。
-sudo -H git -C /opt/mv3c -c http.version=HTTP/1.1 \
-  fetch https://github.com/b8vipvip/mv3c.git \
-    refs/heads/main:refs/remotes/origin/main || \
-sudo -H git -C /opt/mv3c \
-  fetch git@github.com:b8vipvip/mv3c.git \
-    refs/heads/main:refs/remotes/origin/main
-sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/migrate-git-only.sh > /root/mv3c-migrate-git-only.sh'
-sudo bash /root/mv3c-migrate-git-only.sh
-```
+1. 创建快照、检查至少 3 GiB 磁盘空间；如涉及新的 Dockerfile 首次缓存迁移，建议额外预留空间并在维护时段操作。
+2. `sudo systemctl disable --now mv3c-updater.timer`；确认 `sudo systemctl is-active mv3c-updater.service` 输出 `inactive`。
+3. 在当前 MV3C 后台「版本更新」检查正式版，**手动点击部署**形成唯一待执行任务。
+4. 只运行一次当前 canonical service：`sudo systemctl start mv3c-updater.service`。它仍使用现有 `agent.py`，但会按照**同一个事务与任务终态模块**部署受信任 Release。不得同时运行第二个迁移器或 Docker build。
+5. `sudo journalctl -u mv3c-updater.service -n 160 --no-pager`，并检查 `curl -fsS http://127.0.0.1:3080/api/config/version`；若失败或发生回滚，定时器继续保持关闭。
+6. 仅在新版本已通过健康和 SHA 校验之后，`cd /opt/mv3c && sudo bash mv3c/updater/install.sh`。安装脚本会拒绝同时运行的更新任务、未知的 MV3C 更新/部署 systemd 单元与外部 service drop-in，直接覆盖**同名**旧 canonical service/timer，最后移除确认为旧版的一次性迁移脚本。不会新建第二个更新器。
+7. `sudo systemctl list-unit-files 'mv3c*' --no-pager` 检查全机 MV3C systemd 单元。若存在其他更新/部署单元，先分析其 `ExecStart` 和调度来源；不要凭文件名通配符盲删，尤其不能删除 Docker 数据卷和其他应用的服务。
 
-专用脚本以固定 GitHub Ed25519 主机密钥优先 SSH 443，再试 SSH 22，最后回退 HTTPS；自动等待已启动的 oneshot 更新任务释放锁、提取最新版 Git-only 更新器、严格校验发布证明、执行 Docker 缓存构建、验证上线镜像后才重新安装 systemd 更新器。**完成健康、运行镜像及 Release 版本验证后，宿主机经现有受限更新桥将一次性迁移作为 `bootstrap` 成功事件写入原有 MongoDB 更新状态/历史，并提供下载报告；历史失败记录保留，不把旧 403 误当当前故障。相同 SHA 的成功记录不重复写入，写入暂时失败时下次定时检查可在再次严格验证后补记，不需要重建镜像。****失败时不会安装旧更新器、不清空 Docker 缓存或卷、也不自动开始下一次更新。** 若遇到构建失败，先确认服务器至少有 3 GiB 空间，且 **不得再运行首次部署 `docker compose up -d --build` 覆盖回滚镜像**。从下面日志查明是 npm 网络、依赖、OOM 还是磁盘错误后再重试迁移。请获取宿主机日志：
-`sudo grep -Ei 'npm (error|ERR)|EAI_AGAIN|ECONN|ETIMEDOUT|ERROR:|failed|No space' /var/log/mv3c-updater-build.log | tail -n 60`，再查看 `sudo tail -n 100 /var/log/mv3c-updater-build.log`。Git 获取失败的诊断保留在 `/var/log/mv3c-migration-fetch.log`（仅 root 可读）。
-
-回滚验证会严格检查已备份的旧镜像 ID 与当前健康容器是否一致。若旧镜像由人工 `docker compose build` 构建，缺少 Release 元数据，可以在回滚时恢复为**健康的旧服务**并报告 `legacy unversioned` 警告；这种恢复不会被当作新版本部署成功。新候选镜像仍必须通过全部正式版 SHA、镜像和 API 验证。
-
+从此 `autoEnabled` 仅控制周期检查；无人值守自动部署需要明确启用全新 `autoDeployEnabled`（默认 false）。历史数据库记录、MongoDB 卷、上传文件、回滚镜像、请求日志全部保留。
 
 ## 首次部署
 
@@ -117,3 +106,59 @@ sudo docker system df
 sudo systemctl status mv3c-updater.timer --no-pager
 sudo journalctl -u mv3c-updater.service -n 120 --no-pager
 ```
+
+
+## 2026-10-24: build safety and P0-P2 optimizations
+
+**P0 — explicit unattended deployment approval.** Existing \`autoEnabled\`
+means periodic **check only** from this Release onward. The independent
+\`autoDeployEnabled\` is **false by default**, including for users who previously
+enabled automatic deployments. An administrator must explicitly enable it
+before the database layer admits the \`queue-auto\` path; manual updates
+continue to use the same Git/SHA/Release-proof verification and rollback.
+
+**Upgrade warning:** The OLD running host updater uses the original
+\`autoEnabled\` behavior until the new Release has been deployed. Following
+a host freeze, first disable automatic deployment on the currently running
+version (or temporarily stop its timer) before publishing/rolling out the
+Release that changes this policy. A PR merge by itself cannot disable a
+legacy running timer on a separate host.
+
+**P1 — eliminate source-change npm pruning.** Runtime dependencies are now
+installed once in a dedicated cacheable \`prod-deps\` stage, keyed only by
+package manifests. The full build stage retains development dependencies
+for workspace builds. The runtime stage copies production-only modules and
+mounts the completed source build read-only to extract other runtime files,
+explicitly excluding node_modules. The install and dev compilation caches
+remain local to Docker/BuildKit and must not be globally purged.
+
+After this Dockerfile restructure, the **first build** necessarily needs new
+cache records; it can temporarily consume MORE disk and may take longer. A
+3 GiB preflight threshold is a minimum safety gate, not sufficient proof
+that a fresh build will fit. For an undersized 40 GiB root disk with multiple
+running services, take a snapshot and inspect \`df -h /var/lib/docker\`,
+\`docker system df -v\`, and the image sizes before manual deployment.
+Keep the rollback image and all MongoDB volumes.
+
+**P0/P1 diagnostics.** Each host build appends a \`MV3C BUILD DIAGNOSTICS\`
+summary to \`/var/log/mv3c-updater-build.log\` with actual wall time, largest
+BuildKit steps, cache hit count, and sampled host MemAvailable, swap, free
+Docker disk and full I/O PSI. The summary is also included in the admin
+deployment report. These samples are signals, **not evidence of the exact
+process performing I/O**, and do not auto-delete data or kill containers.
+
+**P2 — optional external-build comparison, safe by default.** The
+\`mv3c source Docker build\` GitHub Actions workflow now measures actual CI
+build time, \`docker save\` + gzip packaging size/time and theoretical download
+times at 5/20/50/100 Mbps, reporting them in the workflow summary. This is
+a **benchmark** only: the CI candidate has \`BUILD_VERSION=unreleased\`, so
+loading it directly on production would defeat exact Release-version
+attestation. Production therefore keeps verified local SHA builds until a
+fully attested Release-specific OCI artifact path and import/rollback tests
+exist. Transfer timing excludes network overhead, Docker load/import time,
+Actions queue delay and attestation cost.
+
+Before enabling unattended deployments again, check at least two subsequent
+releases for correct health, readiness, version attestation and actual peak
+disk/I/O pressure under the new Dockerfile. Never run an unbounded prune or
+force-remove Docker volumes in response to a build-space warning.

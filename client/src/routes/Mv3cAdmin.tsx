@@ -51,7 +51,7 @@ type RuntimeLogStats = {
   usedBytes: number; maxBytes: number; fileCount: number; ranges: LogRange[];
   capture: string;
 };
-type UpdateConfig = { autoEnabled: boolean; channel: 'release'; intervalMinutes: number };
+type UpdateConfig = { autoEnabled: boolean; autoDeployEnabled: boolean; channel: 'release'; intervalMinutes: number };
 type UpdateProgress = {
   stage: string; percent: number; message: string; updatedAt: string;
   steps: { stage: string; percent: number; message: string; at: string }[];
@@ -163,7 +163,7 @@ export default function Mv3cAdmin() {
   const [updates, setUpdates] = useState<UpdateState | null>(null);
   const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
-    autoEnabled: true, channel: 'release', intervalMinutes: 10,
+    autoEnabled: true, autoDeployEnabled: false, channel: 'release', intervalMinutes: 10,
   });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -914,7 +914,14 @@ export default function Mv3cAdmin() {
                           onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, autoEnabled: e.target.checked,
                           })); }} />
-                        GitHub 发布新的正式版且 CI 通过时自动构建并部署
+                        自动检查 GitHub 正式版（只通知，不构建）
+                      </label>
+                      <label className="flex items-start gap-2">
+                        <input type="checkbox" checked={updateConfig.autoDeployEnabled}
+                          onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
+                            ...c, autoDeployEnabled: e.target.checked,
+                          })); }} />
+                        <span>允许无人值守自动部署（高磁盘和内存负载，默认关闭；建议仅在维护窗口开启）</span>
                       </label>
                       <label className="block space-y-2">
                         <span className="block text-sm font-medium">更新通道</span>

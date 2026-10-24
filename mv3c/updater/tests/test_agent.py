@@ -14,62 +14,21 @@ SHA2 = "b" * 40
 
 
 class HostUpdaterTests(unittest.TestCase):
-    def test_bootstrap_ledger_requires_live_release_verification(self):
-        repo = pathlib.Path("/tmp")
-        verified = "Post-deploy validation PASSED: git SHA=" + SHA2[:12]
-        with (
-            patch.object(agent, "version_for_sha", return_value="v0.1.12"),
-            patch.object(agent, "verify_deployment", return_value=verified) as check,
-            patch.object(agent, "bridge", return_value={"recorded": True}) as bridge,
-        ):
-            result = agent.reconcile_verified_bootstrap(repo, SHA2, {"history": []})
-        self.assertEqual(result, {"recorded": True})
-        check.assert_called_once_with(repo, SHA2)
-        bridge.assert_called_once_with(repo, "bootstrap-complete", {
-            "sha": SHA2, "version": "v0.1.12", "verification": verified,
-        })
-        with (
-            patch.object(agent, "version_for_sha") as version,
-            patch.object(agent, "verify_deployment") as verify,
-            patch.object(agent, "bridge") as bridge,
-        ):
-            result = agent.reconcile_verified_bootstrap(
-                repo, SHA2, {"pendingJob": {"id": "queued"}}
-            )
-            self.assertIn("skip", result)
-            version.assert_not_called()
-            verify.assert_not_called()
-            bridge.assert_not_called()
-
-    def test_bootstrap_ledger_does_not_duplicate_or_forge_success(self):
-        repo = pathlib.Path("/tmp")
-        state = {"history": [{"sha": SHA2, "outcome": "success"}]}
-        with patch.object(agent, "bridge") as bridge:
-            self.assertIn("already recorded",
-                          agent.reconcile_verified_bootstrap(repo, SHA2, state))
-            bridge.assert_not_called()
-        with (
-            patch.object(agent, "version_for_sha", return_value="v0.1.12"),
-            patch.object(agent, "verify_deployment",
-                         side_effect=agent.UpdateError("running image mismatch")),
-            patch.object(agent, "bridge") as bridge,
-        ):
-            with self.assertRaisesRegex(agent.UpdateError, "running image mismatch"):
-                agent.reconcile_verified_bootstrap(repo, SHA2, {"history": []})
-            bridge.assert_not_called()
-
-    def test_one_time_migration_has_transport_fallback_and_never_prunes(self):
-        script = PATH.parent / "migrate-git-only.sh"
-        contents = script.read_text(encoding="utf-8")
-        self.assertIn("HostKeyAlgorithms=ssh-ed25519", contents)
-        self.assertIn("HostName=ssh.github.com", contents)
-        self.assertIn("Bootstrap fetch succeeded via SSH 443", contents)
-        self.assertIn("Bootstrap fetch succeeded via SSH 22", contents)
-        self.assertIn("Bootstrap fetch succeeded via HTTPS", contents)
-        self.assertIn('fetch_main\n', contents)
-        self.assertNotIn("docker system prune", contents)
-        self.assertNotIn("docker builder prune", contents)
-        self.assertLess(contents.index("fetch_main\n"), contents.index("BOOT=/root"))
+    def test_only_canonical_updater_entrypoints_remain(self):
+        root = pathlib.Path(__file__).resolve().parents[3]
+        self.assertFalse((root / "mv3c/updater/migrate-git-only.sh").exists())
+        self.assertFalse((root / "config/deployed-update.js").exists())
+        self.assertFalse((root / "config/update.js").exists())
+        installer = (root / "mv3c/updater/install.sh").read_text()
+        self.assertIn("CONFLICTING_UNITS", installer)
+        self.assertIn("mv3c-updater.service", installer)
+        self.assertIn("mv3c-updater.timer", installer)
+        self.assertIn("systemctl is-active --quiet mv3c-updater.service", installer)
+        self.assertIn("Unexpected MV3C updater service drop-ins", installer)
+        self.assertIn("systemctl disable --now mv3c-updater.timer", installer)
+        script = (root / "mv3c/updater/agent.py").read_text()
+        self.assertNotIn("--bootstrap-local", script)
+        self.assertNotIn("reconcile_verified_bootstrap", script)
 
     def test_docker_build_error_report_keeps_original_npm_error(self):
         class Failed:
@@ -140,6 +99,31 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertIn("validation_run_id=", workflow)
         self.assertIn("docker_run_id=", workflow)
 
+    def test_resource_sampling_and_buildkit_timing_diagnostics(self):
+        summary = agent.build_pressure_summary([
+            {"mem_available_mib": 2000, "swap_used_mib": 100, "io_full_avg10": 5.3,
+             "docker_free_gib": 5.5},
+            {"mem_available_mib": 780, "swap_used_mib": 440, "io_full_avg10": 29.1,
+             "docker_free_gib": 3.2},
+        ])
+        self.assertIn("780.00 MiB minimum", summary)
+        self.assertIn("29.10 % peak", summary)
+        self.assertIn("3.20 GiB minimum", summary)
+        steps = agent.buildkit_summary({"23": "runtime exporting", "5": "npm ci"},
+                                       {"23": 106.5, "5": 57.8}, 7)
+        self.assertLess(steps.index("106.5s"), steps.index("57.8s"))
+        self.assertIn("7 cached step(s)", steps)
+
+    def test_unattended_auto_check_disabled_is_not_repeated(self):
+        now = agent.utc_now()
+        self.assertFalse(agent.check_needed({
+            "checkedAt": now, "config": {"autoEnabled": False},
+        }))
+        self.assertFalse(agent.check_needed({
+            "checkedAt": now, "config": {"autoEnabled": False},
+            "checkRequestedAt": "2020-01-01T00:00:00Z",
+        }))
+
     def test_requested_check_and_periodic_check(self):
         now = agent.utc_now()
         self.assertTrue(agent.check_needed({"config": {"intervalMinutes": 10}}))
@@ -155,25 +139,20 @@ class HostUpdaterTests(unittest.TestCase):
             "checkRequestedAt": now, "config": {"intervalMinutes": 60},
         }))
 
-    def test_lock_contention_blocks_bootstrap_but_allows_timer_skip(self):
+    def test_single_host_update_owner_and_no_bootstrap_mode(self):
         with tempfile.TemporaryDirectory() as directory:
-            for bootstrap, should_fail in ((True, True), (False, False)):
-                argv = ["agent.py", "--repo", directory]
-                if bootstrap:
-                    argv.append("--bootstrap-local")
-                with (
-                    patch.object(agent.sys, "argv", argv),
-                    patch.object(agent.os, "geteuid", return_value=0),
-                    patch.object(agent.Path, "open") as open_lock,
-                    patch.object(agent.fcntl, "flock", side_effect=BlockingIOError),
-                ):
-                    open_lock.return_value.__enter__.return_value.fileno.return_value = 9
-                    if should_fail:
-                        with self.assertRaisesRegex(agent.UpdateError,
-                                                    "Bootstrap was NOT run"):
-                            agent.main()
-                    else:
-                        self.assertEqual(agent.main(), 0)
+            with (
+                patch.object(agent.sys, "argv", ["agent.py", "--repo", directory]),
+                patch.object(agent.os, "geteuid", return_value=0),
+                patch.object(agent.Path, "open") as open_lock,
+                patch.object(agent.fcntl, "flock", side_effect=BlockingIOError),
+            ):
+                open_lock.return_value.__enter__.return_value.fileno.return_value = 9
+                self.assertEqual(agent.main(), 0)
+            with patch.object(agent.sys, "argv",
+                              ["agent.py", "--repo", directory, "--bootstrap-local"]):
+                with self.assertRaises(SystemExit):
+                    agent.main()
 
     def test_legacy_unversioned_rollback_accepts_only_original_healthy_image(self):
         repo = pathlib.Path("/tmp")
@@ -243,18 +222,6 @@ class HostUpdaterTests(unittest.TestCase):
                           side_effect=agent.UpdateError("Running container image does not match")):
             with self.assertRaisesRegex(agent.UpdateError, "does not match"):
                 agent.verify_restored_service(repo, SHA1)
-
-    def test_same_sha_bootstrap_only_skips_verified_release_image(self):
-        repo = pathlib.Path("/tmp")
-        with patch.object(agent, "verify_deployment", return_value="PASSED") as verify:
-            self.assertFalse(agent.bootstrap_needs_deploy(repo, SHA2, SHA2))
-            verify.assert_called_once_with(repo, SHA2)
-        with patch.object(agent, "verify_deployment",
-                          side_effect=agent.UpdateError("Release image version mismatch")):
-            self.assertTrue(agent.bootstrap_needs_deploy(repo, SHA2, SHA2))
-        with patch.object(agent, "verify_deployment") as verify:
-            self.assertTrue(agent.bootstrap_needs_deploy(repo, SHA1, SHA2))
-            verify.assert_not_called()
 
     def test_host_git_commands_enforce_noninteractive_ssh(self):
         with patch.object(agent, "run", return_value="ok") as run:
@@ -456,15 +423,18 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertIn("FROM node:24.16.0-alpine AS base", dockerfile)
         self.assertIn("FROM base AS build", dockerfile)
         self.assertIn("FROM base AS runtime", dockerfile)
-        self.assertIn("COPY --from=build --chown=node:node /app/ /app/", dockerfile)
+        self.assertIn("COPY --from=prod-deps --chown=node:node", dockerfile)
+        self.assertIn("tar -C /mv3c-built --exclude=node_modules", dockerfile)
         build_stage = dockerfile.split("FROM base AS build", 1)[1].split(
             "FROM base AS runtime", 1)[0]
         runtime_stage = dockerfile.split("FROM base AS runtime", 1)[1]
         self.assertIn("npm ci --no-audit --prefer-offline", build_stage)
         self.assertIn("npm run frontend", build_stage)
-        self.assertIn("npm prune --omit=dev", build_stage)
+        self.assertNotIn("npm prune --omit=dev --prefer-offline", build_stage)
+        self.assertIn("FROM base AS prod-deps", build_stage)
+        self.assertIn("npm ci --omit=dev --no-audit", build_stage)
         self.assertNotIn("npm ci ", runtime_stage)
-        self.assertIn('CMD ["npm", "run", "backend"]', runtime_stage)
+        self.assertIn('CMD ["node", "api/server/index.js"]', runtime_stage)
         self.assertIn("org.opencontainers.image.revision", runtime_stage)
 
     def test_dockerfile_avoids_unbounded_alpine_upgrade_and_has_signed_mirrors(self):
@@ -592,7 +562,7 @@ class HostUpdaterTests(unittest.TestCase):
         build, kwargs = commands[0]
         self.assertEqual(build[:3], ["docker", "build", "--progress=plain"])
         self.assertEqual(build[-1], ".")
-        self.assertIn("NODE_MAX_OLD_SPACE_SIZE=3072", build)
+        self.assertIn("NODE_MAX_OLD_SPACE_SIZE=2560", build)
         self.assertIn("BUILD_COMMIT=" + SHA2, build)
         self.assertIn("BUILD_VERSION=v1.2.3", build)
         self.assertIn("NPM_CI_TIMEOUT_SECONDS=1800", build)

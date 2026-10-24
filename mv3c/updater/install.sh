@@ -20,6 +20,32 @@ if [[ "$(stat -c %u "$REPO")" != "0" ]]; then
   echo "出于安全考虑，mv3c 代码目录必须由 root 拥有；请先把仓库移至 /opt/mv3c 并设置 root 所有权" >&2
   exit 1
 fi
+# The only authorized host updater is mv3c-updater.{service,timer}.
+# Refuse to overwrite an executing updater or install alongside a second unit.
+if systemctl is-active --quiet mv3c-updater.service; then
+  echo "MV3C updater is still running; wait before replacement" >&2
+  exit 1
+fi
+mapfile -t CONFLICTING_UNITS < <(
+  systemctl list-unit-files --all --no-legend --no-pager |
+  awk '$1 ~ /^mv3c[-_].*(updat|deploy).*\.(service|timer)$/ &&
+       $1 != "mv3c-updater.service" && $1 != "mv3c-updater.timer" {print $1}'
+)
+if (( ${#CONFLICTING_UNITS[@]} )); then
+  printf "Found competing MV3C updater/deployer units; refusing installation:\n" >&2
+  printf "  %s\n" "${CONFLICTING_UNITS[@]}" >&2
+  echo "Inspect and retire these exact units before enabling the canonical updater." >&2
+  exit 1
+fi
+# Refuse inherited service drop-ins which could add alternate ExecStart.
+for OVERRIDE_DIR in /etc/systemd/system/mv3c-updater.service.d /run/systemd/system/mv3c-updater.service.d /etc/systemd/system/mv3c-updater.timer.d /run/systemd/system/mv3c-updater.timer.d; do
+  if [ -d "$OVERRIDE_DIR" ] && compgen -G "$OVERRIDE_DIR/*.conf" >/dev/null; then
+    echo "Unexpected MV3C updater service drop-ins: $OVERRIDE_DIR" >&2
+    exit 1
+  fi
+done
+# Stop the previous canonical timer before replacing its exact systemd unit.
+systemctl disable --now mv3c-updater.timer >/dev/null 2>&1 || true
 SSH_ORIGIN="git@github.com:b8vipvip/mv3c.git"
 HTTPS_ORIGIN="https://github.com/b8vipvip/mv3c.git"
 ORIGIN="$(git -C "$REPO" config --local --get remote.origin.url)"
@@ -103,6 +129,19 @@ systemctl daemon-reload
 # The timer schedules the first run. Do not synchronously start the oneshot
 # here: it can take up to 90 minutes and race with a one-time bootstrap.
 systemctl enable --now mv3c-updater.timer
+# Remove only positively identified obsolete one-shot migration entrypoints.
+# They are not used by the canonical service and must not survive as
+# independently callable deployment scripts on the host.
+for OLD_SCRIPT in /root/mv3c-verified-git-bootstrap.py /root/mv3c-migrate-git-only.sh; do
+  if [ -f "$OLD_SCRIPT" ] && [ ! -L "$OLD_SCRIPT" ]; then
+    if grep -Eq "mv3c/updater/agent.py|migrate-git-only|Host-only mv3c updater|Bootstrap fetch:" "$OLD_SCRIPT"; then
+      rm -- "$OLD_SCRIPT"
+      echo "已清理旧一次性部署入口：$OLD_SCRIPT"
+    else
+      echo "历史文件内容不符合预期，未删除：$OLD_SCRIPT" >&2
+    fi
+  fi
+done
 echo
 echo "mv3c 宿主机更新服务已启用："
 systemctl --no-pager status mv3c-updater.timer || true
