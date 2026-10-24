@@ -169,6 +169,9 @@ export default function Mv3cAdmin() {
   const [adminAuthExpired, setAdminAuthExpired] = useState(false);
   useEffect(() => setAdminAuthExpired(false), [token]);
   const [testModels, setTestModels] = useState<string[] | null>(null);
+  const [toolCompatibility, setToolCompatibility] = useState<{
+    supported: boolean; reason: string; model: string; elapsedMs: number;
+  } | null>(null);
   const [downloadingReport, setDownloadingReport] = useState<string | null>(null);
 
   const applySettings = useCallback((data: AdminSettings) => {
@@ -422,6 +425,17 @@ export default function Mv3cAdmin() {
     setMessage('连接成功：从 chat2api 读取到 ' + result.count + ' 个模型。');
   });
 
+  const checkToolCompatibility = () => run(async () => {
+    if (!token) return;
+    const result = await adminRequest<{
+      supported: boolean; reason: string; model: string; elapsedMs: number;
+    }>(token, '/plugins/compatibility', { method: 'POST' });
+    setToolCompatibility(result);
+    setMessage(result.supported
+      ? 'chat2api 已返回结构化函数调用；仍需在聊天中验证 MCP 工具执行。'
+      : 'chat2api 尚未通过结构化函数调用检测：' + result.reason);
+  });
+
   const syncModels = () => run(async () => {
     if (!token) return;
     const data = await adminRequest<AdminSettings & { syncedModels: string[] }>(
@@ -638,6 +652,18 @@ export default function Mv3cAdmin() {
                     onClick={() => void syncModels()}>
                     同步并保存模型
                   </button>
+                </div>
+                <div className="space-y-2 rounded-lg border border-border-medium p-3">
+                  <h3 className="text-sm font-semibold">插件工具协议诊断</h3>
+                  <p className="text-text-secondary text-xs">使用已保存的 chat2api 配置执行一次无副作用函数调用，不会执行任何第三方插件操作。结果只证明模型能否生成标准 tool_calls。</p>
+                  <button type="button" className={subtleButton}
+                    disabled={busy || !settings.chat2api.configured}
+                    onClick={() => void checkToolCompatibility()}>检测工具调用协议</button>
+                  {toolCompatibility && (
+                    <p role="status" className="text-sm">
+                      {toolCompatibility.supported ? '通过' : '未通过'} · {toolCompatibility.model} · {toolCompatibility.reason} · {toolCompatibility.elapsedMs}ms
+                    </p>
+                  )}
                 </div>
                 {testModels && (
                   <div className="rounded-lg bg-surface-secondary p-4 text-sm">
