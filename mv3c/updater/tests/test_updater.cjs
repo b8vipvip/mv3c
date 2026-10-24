@@ -28,6 +28,10 @@ test('host report validates SHA, URL and prevents arbitrary field updates', () =
   assert.deepEqual(updates.validateReport({ currentVersion: 'v0.1.0', latestVersion: 'v0.2.0' }),
     { currentVersion: 'v0.1.0', latestVersion: 'v0.2.0' });
   assert.throws(() => updates.validateReport({ latestVersion: 'latest' }));
+  assert.throws(() => updates.validateReport({ status: 'success' }));
+  assert.throws(() => updates.validateReport({ status: 'failed' }));
+  assert.throws(() => updates.validateReport({ lastOutcome: 'success' }));
+  assert.throws(() => updates.validateReport({ lastSuccessAt: new Date().toISOString() }));
 });
 
 test('admin update state never exposes secret keys and detects stale host agents', () => {
