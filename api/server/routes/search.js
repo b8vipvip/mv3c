@@ -8,6 +8,8 @@ const router = express.Router();
 router.use(requireJwtAuth);
 
 router.get('/enable', async function (req, res) {
+  // mv3c's MongoDB-backed search needs no extra service.
+  if (process.env.MV3C_NATIVE_SEARCH === 'true') return res.send(true);
   if (!isEnabled(process.env.SEARCH)) {
     return res.send(false);
   }
