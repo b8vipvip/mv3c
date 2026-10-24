@@ -21,42 +21,47 @@ if [[ "$(stat -c %u "$REPO")" != "0" ]]; then
   exit 1
 fi
 SSH_ORIGIN="git@github.com:b8vipvip/mv3c.git"
-SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
+HTTPS_ORIGIN="https://github.com/b8vipvip/mv3c.git"
 ORIGIN="$(git -C "$REPO" config --local --get remote.origin.url)"
 case "$ORIGIN" in
-  "$SSH_ORIGIN"|"https://github.com/b8vipvip/mv3c.git"|"https://github.com/b8vipvip/mv3c")
-    ;;
-  *)
-    echo "Git origin 不是受信任的 b8vipvip/mv3c 仓库" >&2
-    exit 1
-    ;;
+  "$SSH_ORIGIN"|"https://github.com/b8vipvip/mv3c.git"|"https://github.com/b8vipvip/mv3c") ;;
+  *) echo "Git origin 不是受信任的 b8vipvip/mv3c 仓库" >&2; exit 1 ;;
 esac
-if [[ "$(git -C "$REPO" branch --show-current)" != "main" ]]; then
-  echo "请先切换到 mv3c main 分支" >&2
-  exit 1
-fi
-if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=no)" ]]; then
-  echo "工作区存在已跟踪文件修改；请先处理，避免自动更新覆盖更改" >&2
-  exit 1
-fi
-# systemd runs as root. Prefer root's SSH identity; if unavailable,
-# allow the same trusted public repository over HTTPS without credentials.
-# Never disable SSH host-key verification or allow interactive prompts.
-HTTPS_ORIGIN="https://github.com/b8vipvip/mv3c.git"
+command -v timeout >/dev/null || { echo "缺少 timeout 命令" >&2; exit 1; }
+# Official pinned GitHub Ed25519 host key, not an unauthenticated ssh-keyscan.
+KNOWN_HOSTS="/run/mv3c-github-known-hosts"
+[[ ! -L "$KNOWN_HOSTS" ]] || { echo "拒绝链接形式的 GitHub known_hosts" >&2; exit 1; }
+umask 077
+printf '%s\n' \
+  'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+  'ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+  > "$KNOWN_HOSTS"
+chmod 600 "$KNOWN_HOSTS"
+SSH_COMMON="-o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519"
+SSH_443="ssh $SSH_COMMON -o HostName=ssh.github.com -o Port=443 -o HostKeyAlias=ssh.github.com"
+SSH_22="ssh $SSH_COMMON -o HostKeyAlias=github.com"
+# Installer probes only fixed trusted origins, just like runtime. Every probe has a cap.
 if [[ "$(git -C "$REPO" ls-remote --get-url "$SSH_ORIGIN")" == "$SSH_ORIGIN" ]] &&
-   HOME=/root GIT_SSH_COMMAND="$SSH_COMMAND" GIT_TERMINAL_PROMPT=0 \
-     git -C "$REPO" ls-remote "$SSH_ORIGIN" HEAD >/dev/null 2>&1; then
+    HOME=/root GIT_SSH_COMMAND="$SSH_443" GIT_TERMINAL_PROMPT=0 \
+      timeout 35s git -C "$REPO" ls-remote "$SSH_ORIGIN" HEAD >/dev/null 2>&1; then
   SELECTED_ORIGIN="$SSH_ORIGIN"
-  echo "GitHub SSH 连接成功，优先使用 SSH"
+  echo "GitHub SSH-443 连接成功"
+elif [[ "$(git -C "$REPO" ls-remote --get-url "$SSH_ORIGIN")" == "$SSH_ORIGIN" ]] &&
+    HOME=/root GIT_SSH_COMMAND="$SSH_22" GIT_TERMINAL_PROMPT=0 \
+      timeout 35s git -C "$REPO" ls-remote "$SSH_ORIGIN" HEAD >/dev/null 2>&1; then
+  SELECTED_ORIGIN="$SSH_ORIGIN"
+  echo "GitHub SSH-22 连接成功"
 elif [[ "$(git -C "$REPO" ls-remote --get-url "$HTTPS_ORIGIN")" == "$HTTPS_ORIGIN" ]] &&
-     HOME=/root GIT_TERMINAL_PROMPT=0 \
-       git -C "$REPO" ls-remote "$HTTPS_ORIGIN" HEAD >/dev/null 2>&1; then
+    HOME=/root GIT_TERMINAL_PROMPT=0 \
+      timeout 35s git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 \
+        -c http.lowSpeedTime=12 -C "$REPO" ls-remote "$HTTPS_ORIGIN" HEAD >/dev/null 2>&1; then
   SELECTED_ORIGIN="$HTTPS_ORIGIN"
-  echo "GitHub SSH 不可用，已验证 HTTPS 可拉取；运行时仍会先重试 SSH"
+  echo "GitHub SSH 均不可用，HTTPS HTTP/1.1 回退成功"
 else
-  echo "GitHub SSH 和 HTTPS 均不可用，或 Git URL rewrite 指向非预期地址；无法安装更新服务" >&2
+  echo "GitHub SSH-443 / SSH-22 / HTTPS 均不可达，拒绝安装更新服务" >&2
   exit 1
 fi
+
 if [[ "$ORIGIN" != "$SELECTED_ORIGIN" ]]; then
   git -C "$REPO" remote set-url origin "$SELECTED_ORIGIN"
   echo "已更新 Git origin: $SELECTED_ORIGIN"

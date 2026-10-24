@@ -709,7 +709,7 @@ export default function Mv3cAdmin() {
                 <div>
                   <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    代码拉取：优先 GitHub SSH（git@github.com:b8vipvip/mv3c.git）；SSH 不可用时自动回退至固定的 GitHub HTTPS 地址。自动与手动更新策略一致，只部署已在 GitHub 发布且两项 CI 均验证通过的正式版；部署使用服务器缓存。
+                    代码拉取：与 chat2api 一致，依次尝试 GitHub SSH 443 → SSH 22 → HTTPS（均限时），宿主机不再查询 GitHub REST API。仅部署附有发布证明、包含两项 CI 成功记录并绑定正式版 SHA 的 GitHub Release；部署使用服务器 Docker 缓存。
                   </p>
                 </div>
                 {!updates ? (

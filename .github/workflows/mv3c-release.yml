@@ -24,6 +24,9 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Verify same SHA passed both complete main branch workflows
         id: gate
         env:
@@ -52,6 +55,20 @@ jobs:
               if not run or run.get('status') != 'completed' or run.get('conclusion') != 'success':
                   sys.exit('Release blocked: ' + name + ' is not successful')
           PY
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open('/tmp/mv3c-runs.json'))
+          latest = {}
+          for item in sorted(data.get('workflow_runs', []),
+                             key=lambda r: (r.get('created_at',''), r.get('id',0)), reverse=True):
+              if item.get('name') in ('mv3c validation', 'mv3c source Docker build') and (
+                  item.get('head_sha') == os.environ['EXPECTED_SHA'] and item.get('event') == 'push'
+              ):
+                  latest.setdefault(item['name'], item['id'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print('validation_run_id=' + str(latest['mv3c validation']), file=out)
+              print('docker_run_id=' + str(latest['mv3c source Docker build']), file=out)
+          PY
           echo "verified_sha=$EXPECTED_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Publish immutable GitHub Release (automatic patch increment)
@@ -78,6 +95,21 @@ jobs:
           # gh creates an immutable source tag at the exact verified commit.
           gh release create "$tag" --repo "$REPOSITORY" --target "$VERIFIED_SHA" \
             --title "mv3c $tag" --generate-notes --latest
+          # Publish an annotated CI-proof Git tag AFTER the official Release.
+          # This is repository-controlled evidence; a mutable tag alone is not a proof.
+          proof="mv3c-verified/$tag"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$proof" "$VERIFIED_SHA" -m "MV3C_OFFICIAL_RELEASE_PROOF_V1
+          release=$tag
+          sha=$VERIFIED_SHA
+          validation_id=${{ steps.gate.outputs.validation_run_id }}
+          docker_id=${{ steps.gate.outputs.docker_run_id }}
+          validation=success
+          docker=success
+          published=success"
+          git push origin "refs/tags/$proof"
+          echo "Git-only deployment proof: $proof"
           echo "### Published mv3c $tag" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit: \`$VERIFIED_SHA\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Production updater will independently validate and deploy this Release." >> "$GITHUB_STEP_SUMMARY"
