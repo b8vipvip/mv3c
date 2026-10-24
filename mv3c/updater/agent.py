@@ -1019,16 +1019,6 @@ def execute(repo: Path) -> None:
         report(repo, status="blocked", lastError=str(error)[:1800])
         raise
     report(repo, currentSha=old, currentVersion=version_for_sha(repo, old))
-    if not state.get("activeJob") and not state.get("pendingJob"):
-        try:
-            reconciled = reconcile_verified_bootstrap(repo, old, state)
-            if reconciled != "success for this SHA already recorded":
-                print("Bootstrap ledger reconciliation:", reconciled, flush=True)
-        except Exception as error:
-            # Never block a healthy site's normal update checks just because
-            # bookkeeping is temporarily unavailable.
-            print("Bootstrap ledger reconciliation warning:", str(error)[:250],
-                  flush=True)
     if state.get("activeJob"):
         recover_interrupted_job(repo, state["activeJob"], old)
         return
@@ -1144,47 +1134,9 @@ def execute(repo: Path) -> None:
 
 
 
-def reconcile_verified_bootstrap(repo: Path, sha: str, state: dict | None = None) -> object:
-    """Publish host-verified bootstrap success through the existing DB owner.
-
-    Only the host updater can verify Git checkout, actual running image, HTTP
-    readiness and Release version together. An ordinary timer run also
-    reconciles the rare case where deployment succeeded but reporting failed.
-    """
-    if state and (state.get("pendingJob") or state.get("activeJob")):
-        return "update job in progress; skip bootstrap ledger reconciliation"
-    if state and any(item.get("outcome") == "success" and item.get("sha") == sha
-                     for item in state.get("history", []) if isinstance(item, dict)):
-        return "success for this SHA already recorded"
-    version = version_for_sha(repo, sha)
-    if not version or not TAG.fullmatch(version):
-        return "running commit has no official Release tag; skip"
-    validation = verify_deployment(repo, sha)
-    return bridge(repo, "bootstrap-complete", {
-        "sha": sha, "version": version, "verification": validation,
-    })
-
-
-def bootstrap_needs_deploy(repo: Path, current: str, target: str) -> bool:
-    """Git SHA equality alone does not prove a versioned Release is running."""
-    if current != target:
-        return True
-    try:
-        verify_deployment(repo, target)
-    except Exception as error:
-        print("Bootstrap detected matching Git SHA but no verified Release image: "
-              + str(error)[:300], flush=True)
-        print("Rebuilding the same Release with existing Docker caches.", flush=True)
-        return True
-    print("Running Release image and server version already verified.", flush=True)
-    return False
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="mv3c host update worker")
     parser.add_argument("--repo", required=True, type=Path, help="Host Git checkout path")
-    parser.add_argument("--bootstrap-local", action="store_true",
-                        help="One-time transition from old updater using cached local Docker build")
     args = parser.parse_args()
     repo = args.repo.resolve(strict=True)
     if os.geteuid() != 0:
@@ -1194,40 +1146,7 @@ def main() -> int:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if args.bootstrap_local:
-                raise UpdateError(
-                    "Bootstrap was NOT run: another mv3c updater holds the lock. "
-                    "Stop the timer, wait for the existing service to finish, "
-                    "then retry migration before installing a new updater."
-                )
             print("Another mv3c update check is already running")
-            return 0
-        if args.bootstrap_local:
-            # Execute the newer fetched script once even when the checked-out
-            # on-disk updater still points to the legacy SCP implementation.
-            restored = restore_interrupted_local_deploy(repo)
-            if restored:
-                print(restored, flush=True)
-            current = verify_repo(repo)
-            target, _label = target_for_channel(repo, "release")
-            if not is_descendant(repo, current, target):
-                raise UpdateError("Bootstrap target is not a fast-forward descendant")
-            # target_for_channel already verified the Git-based post-Release CI proof.
-            if not bootstrap_needs_deploy(repo, current, target):
-                return 0
-            outcome, log, error = deploy(repo, current, target)
-            print(log, flush=True)
-            if outcome != "success":
-                raise UpdateError("Bootstrap deployment did not succeed: " + error[:1000])
-            try:
-                reconciled = reconcile_verified_bootstrap(repo, target)
-                print("Bootstrap admin success ledger:", reconciled, flush=True)
-            except Exception as report_error:
-                # Deployment is already verified. Do not mislabel a healthy
-                # running release as a failed deployment because of DB lag.
-                print("Bootstrap admin ledger warning (deployment remains healthy): " +
-                      str(report_error)[:250], flush=True)
-            print("Local Docker bootstrap succeeded; reinstall/restart systemd updater to use new code")
             return 0
         execute(repo)
     return 0
