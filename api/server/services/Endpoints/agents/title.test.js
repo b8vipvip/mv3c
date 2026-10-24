@@ -113,6 +113,23 @@ describe('agents addTitle', () => {
     );
   });
 
+  it('persists a first-message fallback if the title model fails', async () => {
+    const client = makeClient();
+    client.titleConvo.mockRejectedValueOnce(new Error('title model unavailable'));
+    await addTitle(makeReq(), {
+      text: '  介绍杭州西湖的秋季旅游路线  ',
+      client,
+      conversationId: 'cid-model-failure',
+      immediate: true,
+      convoReady: Promise.resolve(),
+    });
+    expect(mockSaveConvo).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ conversationId: 'cid-model-failure', title: '介绍杭州西湖的秋季旅游路线' }),
+      expect.objectContaining({ noUpsert: true }),
+    );
+  });
+
   it('passes immediate:true through to client.titleConvo', async () => {
     const client = makeClient();
 
