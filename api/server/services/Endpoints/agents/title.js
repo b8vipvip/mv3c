@@ -77,6 +77,9 @@ const addTitle = async (
       logger.error('Title error:', error);
     });
 
+    // If the title model errors, retain a useful first-message summary instead of New Chat.
+    const fallbackTitle =
+      (typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '').slice(0, 60) || '新对话';
     let titlePromise;
     let abortController = new AbortController();
     /** Propagate a request abort (Stop) to the title generation so a cancelled
@@ -91,8 +94,7 @@ const addTitle = async (
     if (req?.user?.provider === 'mv3c-guest') {
       // Guests should not spend a second model request just to name their chat.
       // Use the first user message, then persist/emit via the SAME title owner below.
-      const summary = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '';
-      titlePromise = Promise.resolve(summary.slice(0, 60) || '新对话');
+      titlePromise = Promise.resolve(fallbackTitle);
     } else if (client && typeof client.titleConvo === 'function') {
       titlePromise = Promise.race([
         client
@@ -103,15 +105,15 @@ const addTitle = async (
           })
           .catch((error) => {
             logger.error('Client title error:', error);
+            return fallbackTitle;
           }),
         timeoutPromise,
       ]);
     } else {
-      clearTimeout(timeoutId);
-      return;
+      titlePromise = Promise.resolve(fallbackTitle);
     }
 
-    const generatedTitle = await titlePromise;
+    const generatedTitle = (await titlePromise) || fallbackTitle;
     if (!abortController.signal.aborted) {
       abortController.abort();
     }
