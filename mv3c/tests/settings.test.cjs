@@ -72,6 +72,34 @@ test('unconfigured provider is not exposed as a chat endpoint', () => {
   assert.equal(core.publicSettings(null, 1).site.registrationEnabled, false);
 });
 
+test('interactive MCP Apps require an explicit isolated HTTPS sandbox', () => {
+  const safe = 'https://mcp-sandbox.example.net/api/mcp/sandbox';
+  assert.deepEqual(core.publicSettings(null).plugins,
+    { appsEnabled: false, sandboxURL: '' });
+  for (const url of [
+    'http://sandbox.example.net/api/mcp/sandbox',
+    'https://sandbox.example.net/other',
+    'https://evil:secret@sandbox.example.net/api/mcp/sandbox',
+    'https://sandbox.example.net/api/mcp/sandbox?token=x',
+  ]) {
+    assert.throws(() => core.validatePatch({ plugins: { appsEnabled: true, sandboxURL: url } }));
+  }
+  assert.throws(() => core.validatePatch({ plugins: { appsEnabled: true } }));
+  const enabled = core.validatePatch({ plugins: { appsEnabled: true, sandboxURL: safe } });
+  assert.equal(enabled.plugins.sandboxURL, safe);
+  const cfg = core.runtimeConfig({
+    site: { publicUrl: 'https://chat.example.org' },
+    plugins: enabled.plugins,
+  }, KEY);
+  assert.equal(cfg.mcpSettings.apps, true);
+  assert.equal(cfg.mcpAppSandbox.url, safe);
+  const sameOrigin = core.runtimeConfig({
+    site: { publicUrl: 'https://sandbox.example.net' },
+    plugins: enabled.plugins,
+  }, KEY);
+  assert.equal(sameOrigin.mcpSettings, undefined);
+});
+
 test('bootstrap keys persist across restarts and are owner-only', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv3c-'));
   try {
