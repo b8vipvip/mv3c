@@ -113,6 +113,7 @@ RUN --mount=type=cache,id=mv3c-npm-cache,target=/home/node/.npm,uid=1000,gid=100
 # in the pinned Alpine base. Avoid copying the ~2.4GiB dev module tree and
 # exporting it into a second image layer on every source change.
 FROM base AS runtime
+ENV NODE_ENV=production
 # npm workspaces may place production dependencies under api/node_modules or
 # another workspace. Preserve the entire production install tree (not just
 # root node_modules), otherwise valid packages such as cookie-parser disappear.
