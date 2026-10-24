@@ -58,11 +58,13 @@ export interface MCPServerFormData {
 
 interface UseMCPServerFormProps {
   server?: MCPServerDefinition | null;
+  /** Curated catalog metadata; never includes an access token or secret. */
+  initial?: Pick<MCPServerFormData, 'title' | 'description' | 'url' | 'type'> | null;
   onSuccess?: (serverName: string, isOAuth: boolean) => void;
   onClose?: () => void;
 }
 
-export function useMCPServerForm({ server, onSuccess, onClose }: UseMCPServerFormProps) {
+export function useMCPServerForm({ server, initial, onSuccess, onClose }: UseMCPServerFormProps) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
 
@@ -120,10 +122,10 @@ export function useMCPServerForm({ server, onSuccess, onClose }: UseMCPServerFor
     }
 
     return {
-      title: '',
-      description: '',
-      url: '',
-      type: 'streamable-http',
+      title: initial?.title ?? '',
+      description: initial?.description ?? '',
+      url: initial?.url ?? '',
+      type: initial?.type ?? 'streamable-http',
       icon: '',
       auth: {
         auth_type: AuthTypeEnum.None,
@@ -141,7 +143,7 @@ export function useMCPServerForm({ server, onSuccess, onClose }: UseMCPServerFor
       },
       trust: false,
     };
-  }, [server]);
+  }, [server, initial]);
 
   // Form instance
   const methods = useForm<MCPServerFormData>({
