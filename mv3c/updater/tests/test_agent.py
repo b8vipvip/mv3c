@@ -460,7 +460,7 @@ class HostUpdaterTests(unittest.TestCase):
         with (
             patch.object(agent, "disk_free_bytes", return_value=3 * 1024 ** 3),
             patch.object(agent, "build_cache_usage", return_value=5 * 1024 ** 3),
-            patch.object(agent, "print") as logger,
+            patch("builtins.print") as logger,
         ):
             agent.check_build_capacity(pathlib.Path("/tmp"))
             self.assertIn("minimum before build: 3GiB", logger.call_args.args[0])
