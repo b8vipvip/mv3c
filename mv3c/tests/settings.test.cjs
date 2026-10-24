@@ -94,7 +94,7 @@ test('interactive MCP Apps require an explicit isolated HTTPS sandbox', () => {
   assert.equal(cfg.mcpSettings.apps, true);
   assert.equal(cfg.mcpAppSandbox.url, safe);
   const sameOrigin = core.runtimeConfig({
-    site: { publicUrl: 'https://sandbox.example.net' },
+    site: { publicUrl: 'https://mcp-sandbox.example.net' },
     plugins: enabled.plugins,
   }, KEY);
   assert.equal(sameOrigin.mcpSettings, undefined);
