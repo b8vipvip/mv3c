@@ -88,6 +88,7 @@ router.post('/plugins/compatibility', async (req, res) => {
       at: new Date(),
       model: record.model,
       supported: record.supported,
+      roundTripSupported: record.roundTripSupported === true,
       reason: record.reason,
       elapsedMs: record.elapsedMs,
     });
