@@ -1,3 +1,4 @@
+import { createLiteralSearchRegex } from '../utils/nativeSearch';
 import { Buffer } from 'node:buffer';
 import {
   RetentionMode,
@@ -3736,7 +3737,13 @@ export function createConversationMethods(
           attributesToRetrieve: ['conversationId', 'originalConversationId'],
         };
         const [convoResults, messageHits] = await Promise.all([
-          Conversation.meiliSearch(search, searchParams),
+          process.env.MV3C_NATIVE_SEARCH === 'true'
+            ? Conversation.find({ user, title: { $regex: createLiteralSearchRegex(search) } })
+                .select('conversationId originalConversationId')
+                .limit(MEILI_SEARCH_LIMIT)
+                .lean()
+                .then((hits) => ({ hits }))
+            : Conversation.meiliSearch(search, searchParams),
           deps?.searchMessages
             ? deps.searchMessages(search, searchParams).then(
                 (results) => (Array.isArray(results.hits) ? results.hits : []),
