@@ -6,7 +6,7 @@ const { classifyToolResponse, probeToolBridge } = require('../toolBridge.cjs');
 const provider = { baseURL: 'https://example.org/v1', apiKey: 'test-secret', models: ['gpt-6-sol'] };
 const toolCall = {
   choices: [{ message: { tool_calls: [{
-    type: 'function', function: { name: 'mv3c_tool_capability_probe', arguments: '{"echo":"mv3c-ready"}' },
+    id: 'call-1', type: 'function', function: { name: 'mv3c_tool_capability_probe', arguments: '{"echo":"mv3c-ready"}' },
   }] } }],
 };
 
@@ -26,12 +26,14 @@ test('the bridge only probes model output; never executes a tool or leaks creden
   const result = await probeToolBridge(provider, {
     fetcher: async (url, init) => {
       count += 1;
-      request = { url, init };
-      return { ok: true, json: async () => toolCall };
+      request = request || { url, init };
+      return { ok: true, json: async () => count === 1
+        ? toolCall : { choices: [{ message: { content: 'mv3c-ready' } }] } };
     },
   });
   assert.equal(result.supported, true);
-  assert.equal(count, 1);
+  assert.equal(result.roundTripSupported, true);
+  assert.equal(count, 2);
   assert.equal(request.url, 'https://example.org/v1/chat/completions');
   const body = JSON.parse(request.init.body);
   assert.equal(body.stream, false);
@@ -45,4 +47,5 @@ test('HTTP failures return a false capability result without endpoint secret', a
   });
   assert.equal(result.supported, false);
   assert.equal(result.reason, 'upstream_http_400');
+  assert.notEqual(result.supported, true);
 });
