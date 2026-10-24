@@ -324,74 +324,8 @@ async function completeJob(payload) {
 }
 
 
-/**
- * The one-time host bootstrap is not a queued admin job, so completeJob()
- * cannot record its successful deploy. This is the sole DB owner of that
- * terminal event; the privileged host supplies evidence only AFTER it has
- * run verify_deployment (image identity + health + version API).
- *
- * Idempotent by successful SHA; never erase old failure history or interrupt
- * a real queued/active update. A timer run can reconcile an interrupted
- * bookkeeping call after a verified bootstrap.
- */
-async function recordVerifiedBootstrap(payload) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new TypeError('Invalid verified bootstrap evidence');
-  }
-  const { sha, version, verification } = payload;
-  if (Object.keys(payload).some((key) => !['sha', 'version', 'verification'].includes(key)) ||
-      typeof sha !== 'string' || !SHA.test(sha) ||
-      typeof version !== 'string' || !/^v\d+\.\d+\.\d+$/.test(version) ||
-      typeof verification !== 'string' ||
-      !verification.startsWith('Post-deploy validation PASSED: git SHA=' + sha.slice(0, 12)) ||
-      verification.length > 1200) {
-    throw new TypeError('Invalid verified bootstrap evidence');
-  }
-  // Check metadata of the *currently running* process, not user-controlled
-  // admin fields. The bridge is invoked inside that running container.
-  if (process.env.BUILD_COMMIT !== sha || process.env.MV3C_VERSION !== version) {
-    throw new Error('Bootstrap evidence does not match running server image');
-  }
-  await initialize();
-  const now = new Date();
-  const entry = {
-    jobId: crypto.randomUUID(), mode: 'bootstrap',
-    requestedBy: 'verified-host-updater',
-    requestedAt: now, startedAt: now, finishedAt: now, durationMs: 0,
-    outcome: 'success', fromSha: '', attemptedSha: sha, sha, version,
-    error: '', verification,
-    log: 'Official Release deployed through verified one-time host bootstrap.\n' + verification,
-    steps: [{ at: now, stage: 'complete', percent: 100,
-      message: '宿主机迁移完成，版本及健康检查通过' }],
-  };
-  // Atomic success-record uniqueness even if host retry and scheduled
-  // reconciliation race. A previously queued task is not silently closed.
-  const result = await collection().updateOne({
-    _id: ID, pendingJob: { $exists: false }, activeJob: { $exists: false },
-    history: { $not: { $elemMatch: { outcome: 'success', sha } } },
-  }, {
-    $set: {
-      status: 'success', currentSha: sha, currentVersion: version,
-      latestSha: sha, latestVersion: version, latestLabel: version,
-      latestUrl: 'https://github.com/b8vipvip/mv3c/releases/tag/' + version,
-      updateAvailable: false, checkedAt: now, lastAttemptAt: now,
-      lastSuccessAt: now, agentHeartbeat: now, lastOutcome: 'success',
-      lastError: '', ciMessage: '', lastLog: entry.log,
-    },
-    $unset: { blockedSha: '' },
-    $push: { history: { $each: [entry], $slice: -20 } },
-  });
-  if (result.matchedCount) return { recorded: true, jobId: entry.jobId };
-  const state = await collection().findOne({ _id: ID },
-    { projection: { history: 1, pendingJob: 1, activeJob: 1 } });
-  if ((state?.history || []).some((event) => event.outcome === 'success' && event.sha === sha)) {
-    return { recorded: false, reason: 'already-recorded' };
-  }
-  throw new Error('Bootstrap reporting deferred: update job is queued or active');
-}
-
 module.exports = {
   DEFAULT_CONFIG, format, validateConfig, validateReport, validateProgress, renderReport,
   getState, saveConfig, requestCheck, queueJob, claimJob, report, progressJob, completeJob,
-  recordVerifiedBootstrap, getReport,
+  getReport,
 };
