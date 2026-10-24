@@ -8,13 +8,13 @@ GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 C
 
 1. 通过 SSH 443 → SSH 22 → HTTPS 有界容灾拉取 GitHub main、正式版本标签和发布证明标签；在本机按精确 Git SHA、双 CI 成功字段、两条成功运行 ID 校验发布证明，不调用 `api.github.com`。
 2. 检查 Docker 数据目录空余容量（至少 **3 GiB**），不足时拒绝构建，当前容器不受影响；同时记录共享 BuildKit 缓存用量，并保留当前的 `mv3c:rollback` 镜像。
-3. Git 快进到经过 CI 验证的提交，在宿主机执行 `docker build`，生成 `mv3c:sha-<commit>` 候选镜像。旧服务始终继续运行。
+3. Git 快进到经过 CI 验证的提交，**先严格检查本机是否已有同一正式 Release SHA 的完整候选镜像**（精确的 OCI revision/version/source、运行环境版本、镜像层及 Image ID）；通过校验则直接复用并跳过构建，候选镜像不存在才执行 `docker build` 生成 `mv3c:sha-<commit>`；现有标签若校验不通过则拒绝部署，不能静默覆盖。旧服务始终继续运行。
 4. BuildKit 自动复用本机已存在的镜像层；Dockerfile 在拷贝源码前安装 workspace 依赖，`package-lock.json` 未变时重用 `npm ci` 整层。依赖变更时则复用持久化的 `mv3c-npm-cache` npm 下载缓存（`--prefer-offline`）。
 5. 通过镜像 `org.opencontainers.image.revision` 标签核验精确 Git SHA；**仅成功后**将 `mv3c:local` 指向新镜像，并执行 `docker compose up -d --no-build --pull never --no-deps --force-recreate mv3c`。
 6. 构建完成后至少保留 **2 GiB** 可用空间才允许切换；验证新容器 `healthy`、`/readyz`、`/api/config`；失败则恢复 Git、旧镜像及服务。
 7. **只有在新版本健康验证通过并移除更新事务日志之后**，尝试移除旧的 `mv3c:sha-<40位提交>` 标签。已运行容器、停用容器、`mv3c:local`、`mv3c:rollback` 所引用的镜像始终受保护，每次最多处理 5 个标签。清理失败仅记录警告，不把已经成功运行的部署误判为失败或触发回滚。保留 MongoDB、上传文件、密钥和日志数据卷，不执行 `down -v`、`docker system prune`、`docker builder prune`。
 
-构建失败**不会**停止或重启旧容器。构建中途异常退出时，下一次更新器执行将依据本地事务日志恢复 Git 和旧镜像，并核验运行状态，防止 Git/镜像版本不一致。
+构建失败**不会**停止或重启旧容器。构建中途异常退出时，下一次更新器执行将依据本地事务日志恢复 Git 和旧镜像，并核验运行状态，防止 Git/镜像版本不一致。**镜像完整构建后若因剩余空间不足 2 GiB 而回滚，成功导出的 `mv3c:sha-<commit>` 候选镜像会保留。下次针对相同 Release SHA 重试时先验证并复用此镜像，避免反复支付 BuildKit 导出和额外磁盘峰值；如果发布了新 SHA，旧候选不得冒充新版本，仍需构建新 SHA。**
 
 ## 从 REST API 更新器迁移（已有站点仅执行一次）
 

@@ -477,6 +477,7 @@ class HostUpdaterTests(unittest.TestCase):
                 patch.object(agent, "check_build_capacity"),
                 patch.object(agent, "disk_free_bytes", return_value=1024**3),
                 patch.object(agent, "build_local_image"),
+                patch.object(agent, "verified_existing_candidate", return_value="sha256:" + "a" * 64),
                 patch.object(agent, "run", side_effect=command),
                 patch.object(agent, "git"),
                 patch.object(agent, "wait_healthy"),
@@ -564,6 +565,85 @@ class HostUpdaterTests(unittest.TestCase):
             with self.assertRaisesRegex(agent.UpdateError, "revision mismatch"):
                 agent.verify_built_image(pathlib.Path("/tmp"), SHA2)
 
+    def test_exact_release_image_is_reusable_only_with_matching_metadata(self):
+        repo = pathlib.Path("/tmp")
+        valid = {
+            "Id": "sha256:" + "a" * 64,
+            "Config": {
+                "Labels": {
+                    "org.opencontainers.image.revision": SHA2,
+                    "org.opencontainers.image.version": "v0.1.11",
+                    "org.opencontainers.image.source": "https://github.com/b8vipvip/mv3c",
+                },
+                "Env": ["BUILD_COMMIT=" + SHA2, "MV3C_VERSION=v0.1.11"],
+            },
+            "RootFS": {"Layers": ["sha256:" + "b" * 64]},
+        }
+        with (
+            patch.object(agent, "run", return_value=agent.json.dumps(valid)) as command,
+            patch.object(agent, "version_for_sha", return_value="v0.1.11"),
+        ):
+            self.assertEqual(agent.verified_existing_candidate(repo, SHA2),
+                             "sha256:" + "a" * 64)
+            self.assertEqual(command.call_args.args[0][-1], agent.image_for_sha(SHA2))
+        for change in (
+            ("org.opencontainers.image.revision", SHA1),
+            ("org.opencontainers.image.version", "unreleased"),
+            ("org.opencontainers.image.source", "https://evil.example"),
+        ):
+            altered = agent.json.loads(agent.json.dumps(valid))
+            altered["Config"]["Labels"][change[0]] = change[1]
+            with (
+                patch.object(agent, "run", return_value=agent.json.dumps(altered)),
+                patch.object(agent, "version_for_sha", return_value="v0.1.11"),
+            ):
+                with self.assertRaisesRegex(agent.UpdateError, "refusing reuse"):
+                    agent.verified_existing_candidate(repo, SHA2)
+        altered = agent.json.loads(agent.json.dumps(valid))
+        altered["Config"]["Env"] = ["BUILD_COMMIT=" + SHA1]
+        with (
+            patch.object(agent, "run", return_value=agent.json.dumps(altered)),
+            patch.object(agent, "version_for_sha", return_value="v0.1.11"),
+        ):
+            with self.assertRaisesRegex(agent.UpdateError, "refusing reuse"):
+                agent.verified_existing_candidate(repo, SHA2)
+
+    def test_missing_candidate_rebuilds_but_daemon_failure_is_not_hidden(self):
+        repo = pathlib.Path("/tmp")
+        with patch.object(agent, "run",
+                          side_effect=agent.UpdateError("No such image: mv3c:sha-" + SHA2)):
+            self.assertIsNone(agent.verified_existing_candidate(repo, SHA2))
+        with patch.object(agent, "run",
+                          side_effect=agent.UpdateError("Cannot connect to Docker daemon")):
+            with self.assertRaisesRegex(agent.UpdateError, "Cannot connect"):
+                agent.verified_existing_candidate(repo, SHA2)
+
+    def test_verified_candidate_skips_second_docker_build_and_switches(self):
+        commands = []
+        def fake_run(args, _repo, **_kwargs):
+            commands.append(args)
+            return "OK"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = pathlib.Path(tmp)
+            with (
+                patch.object(agent, "check_build_capacity"),
+                patch.object(agent, "disk_free_bytes", return_value=3 * 1024**3),
+                patch.object(agent, "verified_existing_candidate",
+                             return_value="sha256:" + "a" * 64),
+                patch.object(agent, "build_local_image") as build,
+                patch.object(agent, "run", side_effect=fake_run),
+                patch.object(agent, "git"),
+                patch.object(agent, "wait_healthy"),
+                patch.object(agent, "verify_deployment",
+                             return_value="Post-deploy validation PASSED"),
+            ):
+                result = agent.deploy(repo, SHA1, SHA2)
+            self.assertFalse(agent.transaction_path(repo).exists())
+        self.assertEqual(result[0], "success")
+        self.assertIn("skipped redundant Docker build", result[1])
+        build.assert_not_called()
+        self.assertTrue(any(x[:3] == ["docker", "compose", "up"] for x in commands))
+
     def test_capacity_gate_preserves_host_when_disk_is_low(self):
         from collections import namedtuple
         Usage = namedtuple("Usage", "total used free")
@@ -582,19 +662,23 @@ class HostUpdaterTests(unittest.TestCase):
             with patch.object(agent, "check_build_capacity"), patch.object(
                 agent, "disk_free_bytes", return_value=40 * 1024 ** 3
             ):
-                with patch.object(agent, "build_local_image") as build:
-                    with patch.object(agent, "run", side_effect=fake_run):
-                        with patch.object(agent, "git"):
-                            with patch.object(agent, "wait_healthy"):
-                                with patch.object(agent, "verify_deployment",
-                                                  return_value="Post-deploy validation PASSED"):
-                                    result = agent.deploy(repo, SHA1, SHA2,
-                                        on_progress=lambda stage, pct, msg:
-                                            phases.append((stage, pct, msg)))
+                with (
+                    patch.object(agent, "build_local_image") as build,
+                    patch.object(agent, "verified_existing_candidate",
+                                 side_effect=[None, "sha256:" + "a" * 64]),
+                    patch.object(agent, "run", side_effect=fake_run),
+                    patch.object(agent, "git"),
+                    patch.object(agent, "wait_healthy"),
+                    patch.object(agent, "verify_deployment",
+                                 return_value="Post-deploy validation PASSED"),
+                ):
+                    result = agent.deploy(repo, SHA1, SHA2,
+                        on_progress=lambda stage, pct, msg:
+                            phases.append((stage, pct, msg)))
             self.assertFalse(agent.transaction_path(repo).exists())
         self.assertEqual((result[0], result[2]), ("success", ""))
         build.assert_called_once_with(repo, SHA2)
-        self.assertIn("Cached host Docker build", result[1])
+        self.assertIn("New Docker build image verified", result[1])
         self.assertIn("building", [step[0] for step in phases])
         self.assertEqual(len([cmd for cmd in commands if cmd[:3] ==
                               ["docker", "compose", "up"]]), 1)
@@ -610,14 +694,18 @@ class HostUpdaterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo = pathlib.Path(tmp)
             with patch.object(agent, "check_build_capacity"):
-                with patch.object(agent, "build_local_image",
-                                  side_effect=agent.UpdateError("npm ci failed")):
-                    with patch.object(agent, "run", side_effect=fake_run):
-                        with patch.object(agent, "git") as git:
-                            with patch.object(agent, "wait_healthy"):
-                                with patch.object(agent, "verify_deployment",
-                                                  return_value="Post-deploy validation PASSED"):
-                                    result = agent.deploy(repo, SHA1, SHA2)
+                with (
+                    patch.object(agent, "verified_existing_candidate",
+                                 return_value=None),
+                    patch.object(agent, "build_local_image",
+                                 side_effect=agent.UpdateError("npm ci failed")),
+                    patch.object(agent, "run", side_effect=fake_run),
+                    patch.object(agent, "git") as git,
+                    patch.object(agent, "wait_healthy"),
+                    patch.object(agent, "verify_deployment",
+                                 return_value="Post-deploy validation PASSED"),
+                ):
+                    result = agent.deploy(repo, SHA1, SHA2)
             self.assertFalse(agent.transaction_path(repo).exists())
         self.assertEqual(result[0], "rolled_back")
         self.assertIn("npm ci failed", result[2])
