@@ -385,5 +385,6 @@ async function recordVerifiedBootstrap(payload) {
 
 module.exports = {
   DEFAULT_CONFIG, format, validateConfig, validateReport, validateProgress, renderReport,
-  getState, saveConfig, requestCheck, queueJob, claimJob, report, progressJob, completeJob,\n  recordVerifiedBootstrap, getReport,
+  getState, saveConfig, requestCheck, queueJob, claimJob, report, progressJob, completeJob,
+  recordVerifiedBootstrap, getReport,
 };
