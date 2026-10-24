@@ -18,6 +18,7 @@ services:
       PIP_INDEX_URL: ${MV3C_PYPI_INDEX_URL:-https://pypi.org/simple}
       MONGO_URI: mongodb://mongodb:27017/mv3c
       SEARCH: "false"
+      MV3C_NATIVE_SEARCH: "true"
       # This stack runs exactly one mv3c application replica; schedules use its local job store.
       # Remove this assertion if scaling mv3c beyond one process and enable shared Redis streams.
       SCHEDULES_SINGLE_PROCESS: "true"

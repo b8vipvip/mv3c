@@ -199,7 +199,9 @@ function runtimeConfig(doc, keyHex) {
       baseURL: provider.baseURL,
       iconURL: '/assets/logo.svg',
       models: { default: provider.models, fetch: provider.fetchModels },
-      titleConvo: false,
+      // Generate conversation names with a model this chat2api instance advertises.
+      titleConvo: true,
+      titleModel: provider.models[0],
       summarize: false,
       modelDisplayLabel: 'mv3c',
       // chat2api permits 600s Worker tasks; LangChain's shorter default
