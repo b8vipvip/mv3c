@@ -25,6 +25,7 @@ import {
 import { useAuthContext, useHasAccess, useResourcePermissions, MCPServerDefinition } from '~/hooks';
 import { GenericGrantAccessDialog } from '~/components/Sharing';
 import { useMCPServerForm } from './hooks/useMCPServerForm';
+import type { MCPServerFormData } from './hooks/useMCPServerForm';
 import { useLocalize, useCopyToClipboard } from '~/hooks';
 import MCPServerForm from './MCPServerForm';
 
@@ -34,6 +35,7 @@ interface MCPServerDialogProps {
   children?: React.ReactNode;
   triggerRef?: React.MutableRefObject<HTMLDivElement | HTMLButtonElement | null>;
   server?: MCPServerDefinition | null;
+  initial?: Pick<MCPServerFormData, 'title' | 'description' | 'url' | 'type'> | null;
 }
 
 export default function MCPServerDialog({
@@ -42,6 +44,7 @@ export default function MCPServerDialog({
   children,
   triggerRef,
   server,
+  initial,
 }: MCPServerDialogProps) {
   const localize = useLocalize();
   const { user } = useAuthContext();
@@ -56,6 +59,7 @@ export default function MCPServerDialog({
   // Form hook
   const formHook = useMCPServerForm({
     server,
+    initial,
     onSuccess: (serverName, isOAuth) => {
       if (isOAuth) {
         setCreatedServerId(serverName);

@@ -1,14 +1,14 @@
-import { memo, useState, useRef, useEffect } from 'react';
+import { memo, useState, useRef, useEffect, useMemo } from 'react';
 import { AutoSizer, List } from 'react-virtualized';
-import { EModelEndpoint } from 'librechat-data-provider';
+import { EModelEndpoint, Permissions, PermissionTypes } from 'librechat-data-provider';
 import { useRecoilValue, useSetRecoilState } from 'recoil';
 import { Input, Spinner, useCombobox, useRemScale } from '@librechat/client';
 import type { RecoilState } from 'recoil';
 import type { MentionOption, ConvoGenerator } from '~/common';
-import { useGetConversation, useLocalize, TranslationKeys } from '~/hooks';
+import { useGetConversation, useLocalize, useHasAccess, TranslationKeys } from '~/hooks';
 import useInitPopoverInput from '~/hooks/Input/useInitPopoverInput';
 import useSelectMention from '~/hooks/Input/useSelectMention';
-import { useAssistantsMapContext } from '~/Providers';
+import { useAssistantsMapContext, useBadgeRowContext } from '~/Providers';
 import useMentions from '~/hooks/Input/useMentions';
 import { removeCharIfLast } from '~/utils';
 import MentionItem from './MentionItem';
@@ -37,6 +37,9 @@ function MentionContent({
   const remScale = useRemScale();
   const getConversation = useGetConversation(0);
   const assistantsMap = useAssistantsMapContext();
+  const badgeContext = useBadgeRowContext();
+  const mcpManager = badgeContext?.mcpServerManager;
+  const canUseMcp = useHasAccess({ permissionType: PermissionTypes.MCP_SERVERS, permission: Permissions.USE });
   const setShowPopover = useSetRecoilState(popoverAtom);
   const {
     options,
@@ -60,7 +63,19 @@ function MentionContent({
   const [activeIndex, setActiveIndex] = useState(0);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [inputOptions, setInputOptions] = useState<MentionOption[]>(options);
+  // The server identity remains the opaque value; only names/descriptions are displayed.
+  // Use the existing conversation-owned MCP manager rather than adding a second selection store.
+  const initialOptions = useMemo<MentionOption[]>(() => {
+    if (commandChar !== '@' || !canUseMcp || !mcpManager) return options;
+    const plugins: MentionOption[] = mcpManager.selectableServers.map((server) => ({
+      type: 'model',
+      value: `mcp:${server.serverName}`,
+      label: `插件：${server.config?.title || server.serverName}`,
+      description: server.config?.description || '连接并选用此插件',
+    }));
+    return [...plugins, ...options];
+  }, [options, commandChar, canUseMcp, mcpManager?.selectableServers]);
+  const [inputOptions, setInputOptions] = useState<MentionOption[]>(initialOptions);
 
   const { open, setOpen, searchValue, setSearchValue, matches } = useCombobox({
     value: '',
@@ -91,7 +106,25 @@ function MentionContent({
       }
     };
 
-    if (mention.type === 'endpoint' && mention.value === EModelEndpoint.agents) {
+    if (typeof mention.value === 'string' && mention.value.startsWith('mcp:')) {
+      const serverName = mention.value.slice(4);
+      if (!mcpManager?.selectableServers.some((server) => server.serverName === serverName)) return;
+      setSearchValue('');
+      setOpen(false);
+      setShowPopover(false);
+      if (textAreaRef.current) removeCharIfLast(textAreaRef.current, commandChar);
+      if (mcpManager.mcpValues?.includes(serverName)) {
+        // @Plugin means use it, never silently turn it off.
+        textAreaRef.current?.focus();
+        return;
+      }
+      if (mcpManager.connectionStatus?.[serverName]?.connectionState === 'connected') {
+        mcpManager.toggleServerSelection(serverName);
+      } else {
+        void mcpManager.initializeServer(serverName);
+      }
+      textAreaRef.current?.focus();
+    } else if (mention.type === 'endpoint' && mention.value === EModelEndpoint.agents) {
       setSearchValue('');
       setInputOptions(agentsList ?? []);
       setActiveIndex(0);
@@ -124,10 +157,10 @@ function MentionContent({
 
   useEffect(() => {
     if (!open) {
-      setInputOptions(options);
+      setInputOptions(initialOptions);
       setActiveIndex(0);
     }
-  }, [open, options]);
+  }, [open, initialOptions]);
 
   useEffect(() => {
     setActiveIndex((prev) => Math.min(prev, Math.max(matches.length - 1, 0)));

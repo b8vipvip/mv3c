@@ -14,6 +14,8 @@ const DEFAULT_PROVIDER = Object.freeze({
   fetchModels: true,
 });
 const DEFAULT_GUEST = Object.freeze({ enabled: true, tokenLimit: 100000 });
+// Interactive MCP Apps are opt-in until a dedicated sandbox origin is deployed.
+const DEFAULT_PLUGINS = Object.freeze({ appsEnabled: false, sandboxURL: '' });
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,127}$/;
 
 function assertPlainObject(value, name) {
@@ -47,7 +49,7 @@ function validateBaseURL(value) {
 
 function validatePatch(body) {
   assertPlainObject(body, 'settings');
-  const allowed = new Set(['site', 'chat2api', 'guest']);
+  const allowed = new Set(['site', 'chat2api', 'guest', 'plugins']);
   for (const name of Object.keys(body)) {
     if (!allowed.has(name)) throw new TypeError('Unknown settings section: ' + name);
   }
@@ -132,6 +134,37 @@ function validatePatch(body) {
     }
     result.guest = guest;
   }
+  if (body.plugins !== undefined) {
+    assertPlainObject(body.plugins, 'plugins');
+    const plugins = {};
+    for (const [name, value] of Object.entries(body.plugins)) {
+      if (name === 'appsEnabled') {
+        if (typeof value !== 'boolean') throw new TypeError('plugins.appsEnabled must be boolean');
+        plugins.appsEnabled = value;
+      } else if (name === 'sandboxURL') {
+        if (typeof value !== 'string' || value.length > 2048) {
+          throw new TypeError('plugins.sandboxURL must be a URL');
+        }
+        if (value === '') {
+          plugins.sandboxURL = '';
+          continue;
+        }
+        const u = new URL(value);
+        if (u.protocol !== 'https:' || !u.hostname || u.username || u.password ||
+            u.search || u.hash || u.pathname !== '/api/mcp/sandbox' ||
+            u.port || !/^[a-z0-9.-]+$/i.test(u.hostname)) {
+          throw new TypeError('MCP sandbox must use a dedicated HTTPS origin and /api/mcp/sandbox');
+        }
+        plugins.sandboxURL = u.href;
+      } else {
+        throw new TypeError('Unknown plugins setting: ' + name);
+      }
+    }
+    if (plugins.appsEnabled && !plugins.sandboxURL) {
+      throw new TypeError('Enable interactive apps together with a dedicated sandbox URL');
+    }
+    result.plugins = plugins;
+  }
   return result;
 }
 
@@ -165,6 +198,7 @@ function publicSettings(doc, userCount = 1) {
     site: { ...site, registrationEnabled:
       doc?.site?.registrationEnabled ?? userCount === 0 },
     guest: { ...DEFAULT_GUEST, ...(doc?.guest ?? {}) },
+    plugins: { ...DEFAULT_PLUGINS, ...(doc?.plugins ?? {}) },
     chat2api: {
       enabled: provider.enabled,
       baseURL: provider.baseURL,
@@ -180,6 +214,7 @@ function runtimeConfig(doc, keyHex) {
   const publicValue = publicSettings(doc);
   const site = publicValue.site;
   const provider = publicValue.chat2api;
+  const plugins = publicValue.plugins;
   const config = {
     version: '1.3.17',
     cache: true,
@@ -192,6 +227,15 @@ function runtimeConfig(doc, keyHex) {
       fileSearch: false,
     },
   };
+  // The sandbox must be deliberately provisioned and isolated from the main app.
+  if (plugins.appsEnabled && plugins.sandboxURL) {
+    const sandbox = new URL(plugins.sandboxURL);
+    const siteHost = site.publicUrl ? new URL(site.publicUrl).hostname : '';
+    if (sandbox.hostname !== siteHost) {
+      config.mcpSettings = { apps: true };
+      config.mcpAppSandbox = { url: plugins.sandboxURL, maxActiveViews: 3 };
+    }
+  }
   if (provider.enabled && provider.configured) {
     config.endpoints = { custom: [{
       name: 'chat2api',
@@ -216,6 +260,6 @@ function runtimeConfig(doc, keyHex) {
 }
 
 module.exports = {
-  DEFAULT_SITE, DEFAULT_PROVIDER, DEFAULT_GUEST, validateBaseURL, validatePatch,
+  DEFAULT_SITE, DEFAULT_PROVIDER, DEFAULT_GUEST, DEFAULT_PLUGINS, validateBaseURL, validatePatch,
   encryptSecret, decryptSecret, publicSettings, runtimeConfig,
 };

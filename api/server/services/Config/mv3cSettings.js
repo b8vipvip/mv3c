@@ -47,6 +47,9 @@ async function saveSettings(body, actor) {
   for (const [name, value] of Object.entries(patch.guest ?? {})) {
     fields['guest.' + name] = value;
   }
+  for (const [name, value] of Object.entries(patch.plugins ?? {})) {
+    fields['plugins.' + name] = value;
+  }
   if (!Object.keys(fields).length) throw new TypeError('No settings to update');
   fields.updatedAt = new Date();
   fields.updatedBy = String(actor || 'unknown');

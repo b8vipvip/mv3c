@@ -781,6 +781,12 @@ const ChatForm = memo(function ChatForm({
               ) : null}
             </div>
           )}
+          <BadgeRowProvider
+            conversationId={conversationId}
+            specName={conversation?.spec}
+            isSubmitting={isSubmitting}
+            observeToolAuthorization={showTools}
+          >
           <div className={cn('flex w-full items-center', isRTL && 'flex-row-reverse')}>
             <Mention
               index={index}
@@ -960,16 +966,7 @@ const ChatForm = memo(function ChatForm({
                   {localize('com_error_code_workspace_required')}
                 </p>
               )}
-              {/* The composer is what keeps MCP connection and authorization state
-                  current wherever its ephemeral tools apply; the Agent Builder's
-                  tool library reads the same cache, so without this a server it
-                  lists reads as unknown and offers to connect instead of toggling. */}
-              <BadgeRowProvider
-                conversationId={conversationId}
-                specName={conversation?.spec}
-                isSubmitting={isSubmitting}
-                observeToolAuthorization={showTools}
-              >
+              {/* The same MCP provider also owns @plugin mentions above. */}
                 <Bar
                   index={index}
                   isRTL={isRTL}
@@ -1014,10 +1011,10 @@ const ChatForm = memo(function ChatForm({
                   hasAddedConversation={addedConvo != null}
                 />
                 <ToolDialogs />
-              </BadgeRowProvider>
               {TextToSpeech && automaticPlayback && <AutoPlayAudio index={index} />}
             </div>
           </div>
+          </BadgeRowProvider>
           {/* Sibling of the composer row, not a child: inside that flex-row it
               would lay out as a narrow column beside the box. */}
           <Hints
