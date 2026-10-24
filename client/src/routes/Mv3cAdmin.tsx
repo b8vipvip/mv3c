@@ -17,10 +17,12 @@ type ProviderSettings = {
   configured: boolean;
 };
 type GuestSettings = { enabled: boolean; tokenLimit: number };
+type PluginSettings = { appsEnabled: boolean; sandboxURL: string };
 type AdminSettings = {
   guest: GuestSettings;
   site: SiteSettings;
   chat2api: ProviderSettings;
+  plugins: PluginSettings;
   updatedAt: string | null;
 };
 type ManagedUser = {
@@ -137,6 +139,7 @@ export default function Mv3cAdmin() {
     title: 'mv3c', welcome: '欢迎使用 mv3c', publicUrl: '', registrationEnabled: false,
   });
   const [guest, setGuest] = useState<GuestSettings>({ enabled: true, tokenLimit: 100000 });
+  const [plugins, setPlugins] = useState<PluginSettings>({ appsEnabled: false, sandboxURL: '' });
   const [provider, setProvider] = useState<ProviderSettings>({
     enabled: true, baseURL: '', models: [], fetchModels: true,
     apiKeyConfigured: false, configured: false,
@@ -178,6 +181,7 @@ export default function Mv3cAdmin() {
     setSettings(data);
     setSite(data.site);
     setGuest(data.guest);
+    setPlugins(data.plugins ?? { appsEnabled: false, sandboxURL: '' });
     setProvider(data.chat2api);
     setModelsText(data.chat2api.models.join('\n'));
     setApiKey('');
@@ -396,6 +400,15 @@ export default function Mv3cAdmin() {
     applySettings(data);
     setTestModels(null);
     setMessage('chat2api 配置已保存，新的聊天请求将使用更新后的配置。');
+  });
+
+  const savePlugins = () => run(async () => {
+    if (!token) return;
+    const data = await adminRequest<AdminSettings>(token, '', {
+      method: 'PUT', body: JSON.stringify({ plugins }),
+    });
+    applySettings(data);
+    setMessage('交互式插件策略已保存。MCP Apps 只有在独立 HTTPS 沙箱域名可用时才会启用。');
   });
 
   const saveGuest = () => run(async () => {
@@ -670,6 +683,23 @@ export default function Mv3cAdmin() {
                     <strong>已发现模型：</strong> {testModels.join('、')}
                   </div>
                 )}
+                <div className="space-y-3 rounded-lg border border-border-medium p-3">
+                  <h3 className="text-sm font-semibold">MCP Apps 交互式插件</h3>
+                  <p className="text-text-secondary text-xs">默认关闭。必须先将 /api/mcp/sandbox 部署到不同于 mv3c 主站的独立 HTTPS 域名，并正确配置反向代理和 CSP。</p>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={plugins.appsEnabled}
+                      onChange={(e) => setPlugins((previous) => ({ ...previous, appsEnabled: e.target.checked }))} />
+                    启用交互式 MCP Apps
+                  </label>
+                  <label className="block space-y-1 text-xs">
+                    <span>沙箱地址（须以 /api/mcp/sandbox 结尾）</span>
+                    <input className={fieldClass} type="url" value={plugins.sandboxURL}
+                      placeholder="https://mcp-sandbox.example.net/api/mcp/sandbox"
+                      onChange={(e) => setPlugins((previous) => ({ ...previous, sandboxURL: e.target.value }))} />
+                  </label>
+                  <button className={subtleButton} type="button" disabled={busy}
+                    onClick={() => void savePlugins()}>保存交互式插件配置</button>
+                </div>
                 <p className="text-xs text-text-secondary">
                   所有 mv3c 用户共享此 chat2api API Key；Worker 和模型执行仍由 chat2api 管理。
                 </p>
