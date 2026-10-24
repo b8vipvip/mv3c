@@ -20,6 +20,32 @@ if [[ "$(stat -c %u "$REPO")" != "0" ]]; then
   echo "出于安全考虑，mv3c 代码目录必须由 root 拥有；请先把仓库移至 /opt/mv3c 并设置 root 所有权" >&2
   exit 1
 fi
+# The only authorized host updater is mv3c-updater.{service,timer}.
+# Refuse to overwrite an executing updater or install alongside a second unit.
+if systemctl is-active --quiet mv3c-updater.service; then
+  echo "MV3C updater is still running; wait before replacement" >&2
+  exit 1
+fi
+mapfile -t CONFLICTING_UNITS < <(
+  systemctl list-unit-files --all --no-legend --no-pager |
+  awk '$1 ~ /^mv3c[-_].*(updat|deploy).*\.(service|timer)$/ &&
+       $1 != "mv3c-updater.service" && $1 != "mv3c-updater.timer" {print $1}'
+)
+if (( ${#CONFLICTING_UNITS[@]} )); then
+  printf "Found competing MV3C updater/deployer units; refusing installation:\n" >&2
+  printf "  %s\n" "${CONFLICTING_UNITS[@]}" >&2
+  echo "Inspect and retire these exact units before enabling the canonical updater." >&2
+  exit 1
+fi
+# Refuse inherited service drop-ins which could add alternate ExecStart.
+for OVERRIDE_DIR in /etc/systemd/system/mv3c-updater.service.d /run/systemd/system/mv3c-updater.service.d; do
+  if [ -d "$OVERRIDE_DIR" ] && compgen -G "$OVERRIDE_DIR/*.conf" >/dev/null; then
+    echo "Unexpected MV3C updater service drop-ins: $OVERRIDE_DIR" >&2
+    exit 1
+  fi
+done
+# Stop the previous canonical timer before replacing its exact systemd unit.
+systemctl disable --now mv3c-updater.timer >/dev/null 2>&1 || true
 SSH_ORIGIN="git@github.com:b8vipvip/mv3c.git"
 HTTPS_ORIGIN="https://github.com/b8vipvip/mv3c.git"
 ORIGIN="$(git -C "$REPO" config --local --get remote.origin.url)"
