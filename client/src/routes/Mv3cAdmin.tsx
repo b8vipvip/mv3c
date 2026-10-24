@@ -173,7 +173,7 @@ export default function Mv3cAdmin() {
   useEffect(() => setAdminAuthExpired(false), [token]);
   const [testModels, setTestModels] = useState<string[] | null>(null);
   const [toolCompatibility, setToolCompatibility] = useState<{
-    supported: boolean; reason: string; model: string; elapsedMs: number;
+    supported: boolean; roundTripSupported?: boolean; reason: string; model: string; elapsedMs: number;
   } | null>(null);
   const [downloadingReport, setDownloadingReport] = useState<string | null>(null);
 
@@ -441,11 +441,11 @@ export default function Mv3cAdmin() {
   const checkToolCompatibility = () => run(async () => {
     if (!token) return;
     const result = await adminRequest<{
-      supported: boolean; reason: string; model: string; elapsedMs: number;
+      supported: boolean; roundTripSupported?: boolean; reason: string; model: string; elapsedMs: number;
     }>(token, '/plugins/compatibility', { method: 'POST' });
     setToolCompatibility(result);
-    setMessage(result.supported
-      ? 'chat2api 已返回结构化函数调用；仍需在聊天中验证 MCP 工具执行。'
+    setMessage(result.supported && result.roundTripSupported
+      ? 'chat2api 已通过结构化工具调用与结果续传检测；仍需验证真实 MCP 工具执行。'
       : 'chat2api 尚未通过结构化函数调用检测：' + result.reason);
   });
 
@@ -674,7 +674,7 @@ export default function Mv3cAdmin() {
                     onClick={() => void checkToolCompatibility()}>检测工具调用协议</button>
                   {toolCompatibility && (
                     <p role="status" className="text-sm">
-                      {toolCompatibility.supported ? '通过' : '未通过'} · {toolCompatibility.model} · {toolCompatibility.reason} · {toolCompatibility.elapsedMs}ms
+                      {toolCompatibility.supported ? '函数调用通过' : '函数调用未通过'} · {toolCompatibility.roundTripSupported ? '结果续传通过' : '结果续传待验证'} · {toolCompatibility.model} · {toolCompatibility.reason} · {toolCompatibility.elapsedMs}ms
                     </p>
                   )}
                 </div>
