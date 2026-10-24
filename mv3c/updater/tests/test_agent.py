@@ -14,82 +14,50 @@ SHA2 = "b" * 40
 
 
 class HostUpdaterTests(unittest.TestCase):
-    def test_ci_requires_both_successful_workflows(self):
-        def ok(_):
-            return {"workflow_runs": [
-                {"name": "mv3c validation", "status": "completed", "conclusion": "success"},
-                {"name": "mv3c source Docker build", "status": "completed", "conclusion": "success"},
-            ]}
-        self.assertEqual(agent.ci_is_green(SHA1, api_fetch=ok), (True, ""))
+    def test_proof_tag_requires_exact_version_sha_and_ci_results(self):
+        repo = pathlib.Path("/tmp")
+        body = (
+            "object " + SHA2 + "\n"
+            "type commit\n"
+            "tag mv3c-verified/v0.1.8\n"
+            "tagger github-actions <bot@example.invalid> 1700000000 +0000\n\n"
+            "MV3C_OFFICIAL_RELEASE_PROOF_V1\n"
+            "release=v0.1.8\n"
+            "sha=" + SHA2 + "\n"
+            "validation_id=1234\n"
+            "docker_id=5678\n"
+            "validation=success\n"
+            "docker=success\n"
+            "published=success\n"
+        )
+        with patch.object(agent, "git", side_effect=["tag", SHA2, body]):
+            agent.verify_release_proof(repo, "v0.1.8", SHA2)
+        for wrong in (
+            body.replace("docker=success", "docker=failure"),
+            body.replace("release=v0.1.8", "release=v0.1.9"),
+            body.replace("validation_id=1234", "validation_id=bad"),
+            body.replace("published=success", "published=false"),
+        ):
+            with patch.object(agent, "git", side_effect=["tag", SHA2, wrong]):
+                with self.assertRaises(agent.UpdateError):
+                    agent.verify_release_proof(repo, "v0.1.8", SHA2)
+        with patch.object(agent, "git", side_effect=["commit", SHA2, body]):
+            with self.assertRaisesRegex(agent.UpdateError, "not an annotated"):
+                agent.verify_release_proof(repo, "v0.1.8", SHA2)
+        with patch.object(agent, "git", side_effect=agent.UpdateError("missing")):
+            with self.assertRaisesRegex(agent.UpdateError, "Missing release CI proof"):
+                agent.verify_release_proof(repo, "v0.1.8", SHA2)
 
-        def missing(_):
-            return {"workflow_runs": [
-                {"name": "mv3c validation", "status": "completed", "conclusion": "success"}
-            ]}
-        good, reason = agent.ci_is_green(SHA1, api_fetch=missing)
-        self.assertFalse(good)
-        self.assertIn("source Docker build", reason)
-
-        def failed(_):
-            return {"workflow_runs": [
-                {"name": "mv3c validation", "status": "completed", "conclusion": "failure"},
-                {"name": "mv3c source Docker build", "status": "completed", "conclusion": "success"},
-            ]}
-        self.assertFalse(agent.ci_is_green(SHA1, api_fetch=failed)[0])
-        self.assertIn("未通过", agent.ci_is_green(SHA1, api_fetch=failed)[1])
-
-        def pending(_):
-            return {"workflow_runs": [
-                {"name": "mv3c validation", "status": "completed", "conclusion": "success"},
-                {"name": "mv3c source Docker build", "status": "in_progress", "conclusion": None},
-            ]}
-        good, reason = agent.ci_is_green(SHA1, api_fetch=pending)
-        self.assertFalse(good)
-        self.assertIn("正在运行", reason)
-        self.assertNotIn("未通过", reason)
-
-        with self.assertRaises(agent.UpdateError):
-            agent.ci_is_green("invalid", api_fetch=ok)
-
-    def test_github_api_uses_host_credential_without_logging_it(self):
-        class Response:
-            def __init__(self, url):
-                self.url = url
-            def geturl(self):
-                return self.url
-            def read(self, _limit):
-                return b'{"workflow_runs":[]}'
-            def __enter__(self):
-                return self
-            def __exit__(self, *args):
-                return False
-
-        captured = []
-        def fake_open(request, timeout):
-            captured.append(request)
-            return Response(request.full_url)
-
-        with patch.dict(agent.os.environ, {"MV3C_GITHUB_API_TOKEN": "secret-test-value"}):
-            with patch.object(agent.urllib.request, "urlopen", side_effect=fake_open):
-                result = agent.json_from_github(agent.API + "/actions/runs")
-        self.assertEqual(result["workflow_runs"], [])
-        self.assertEqual(captured[0].get_header("Authorization"), "Bearer secret-test-value")
-
-    def test_github_api_403_fails_closed_with_safe_diagnosis(self):
-        from io import BytesIO
-        import urllib.error
-        def rate_limit(*_args, **_kwargs):
-            raise urllib.error.HTTPError(
-                agent.API + "/actions/runs", 403, "Forbidden",
-                {"X-RateLimit-Remaining": "0", "Retry-After": "30"},
-                BytesIO(b'{"message":"API rate limit exceeded"}'))
-        with patch.dict(agent.os.environ, {"MV3C_GITHUB_API_TOKEN": "secret-test-value"}):
-            with patch.object(agent.urllib.request, "urlopen", side_effect=rate_limit):
-                with self.assertRaisesRegex(agent.UpdateError, "rate limit reached") as captured:
-                    agent.json_from_github(agent.API + "/actions/runs")
-        self.assertIn("retry after 30 seconds", str(captured.exception))
-        self.assertNotIn("secret-test-value", str(captured.exception))
-        self.assertIn("NOT bypassed", str(captured.exception))
+    def test_release_workflow_creates_proof_after_actual_release_and_both_ci(self):
+        workflow = (pathlib.Path(__file__).resolve().parents[3] /
+                    ".github/workflows/mv3c-release.yml").read_text()
+        self.assertIn("gh release create", workflow)
+        self.assertIn('git tag -a "$proof"', workflow)
+        self.assertIn('git push origin "refs/tags/$proof"', workflow)
+        self.assertLess(workflow.index("gh release create"),
+                        workflow.index('git tag -a "$proof"'))
+        self.assertIn("validation_run_id=", workflow)
+        self.assertIn("docker_run_id=", workflow)
 
     def test_requested_check_and_periodic_check(self):
         now = agent.utc_now()
@@ -176,77 +144,114 @@ class HostUpdaterTests(unittest.TestCase):
         with self.assertRaises(agent.UpdateError):
             agent.target_for_channel(pathlib.Path("/tmp"), "evil")
 
-    def test_release_tag_is_validated_before_any_git_fetch(self):
-        with patch.object(agent, "json_from_github", return_value={"tag_name": "../../evil"}):
-            with patch.object(agent, "fetch_prefer_ssh") as fetch:
-                with self.assertRaisesRegex(agent.UpdateError, "valid stable"):
-                    agent.target_for_channel(pathlib.Path("/tmp"), "release")
-                fetch.assert_not_called()
+    def test_release_lookup_accepts_only_git_proven_tags_on_main(self):
+        repo = pathlib.Path("/tmp")
+        with (
+            patch.object(agent, "fetch_prefer_ssh", return_value="ssh-443") as fetch,
+            patch.object(agent, "list_release_tags", return_value=["v0.1.6", "v0.1.8"]),
+            patch.object(agent, "git", side_effect=[SHA2, SHA2]),
+            patch.object(agent, "verify_release_proof") as proof,
+            patch.object(agent, "is_descendant", return_value=True),
+        ):
+            self.assertEqual(agent.target_for_channel(repo, "release"), (SHA2, "v0.1.8"))
+            fetch.assert_called_once_with(repo, *agent.GIT_REFSPECS)
+            proof.assert_called_once_with(repo, "v0.1.8", SHA2)
+        with patch.object(agent, "fetch_prefer_ssh"):
+            with patch.object(agent, "list_release_tags", return_value=["v0.1.8"]):
+                with patch.object(agent, "git", side_effect=[SHA2, SHA2]):
+                    with patch.object(agent, "verify_release_proof",
+                                      side_effect=agent.UpdateError("missing proof")):
+                        with self.assertRaisesRegex(agent.UpdateError, "missing proof"):
+                            agent.target_for_channel(repo, "release")
+        with patch.object(agent, "fetch_prefer_ssh"):
+            with patch.object(agent, "list_release_tags", return_value=["v0.1.8"]):
+                with patch.object(agent, "git", side_effect=[SHA2, SHA2]):
+                    with patch.object(agent, "verify_release_proof"):
+                        with patch.object(agent, "is_descendant", return_value=False):
+                            with self.assertRaisesRegex(agent.UpdateError, "trusted main"):
+                                agent.target_for_channel(repo, "release")
 
-    def test_release_tag_fetch_prefers_ssh_and_checks_main_ancestry(self):
-        with patch.object(agent, "json_from_github", return_value={
-            "tag_name": "v1.2.3", "draft": False, "prerelease": False
-        }):
-            with patch.object(agent, "fetch_prefer_ssh", return_value="SSH") as fetch:
-                with patch.object(agent, "git", return_value=SHA2):
-                    with patch.object(agent, "is_descendant", return_value=True):
-                        sha, label = agent.target_for_channel(pathlib.Path("/tmp"), "release")
-        self.assertEqual(sha, SHA2)
-        self.assertEqual(label, "v1.2.3")
-        self.assertEqual(fetch.call_count, 2)
-        self.assertEqual(fetch.call_args_list[1].args[1:], ("tag", "v1.2.3"))
-
-    def test_release_rejects_untrusted_tag_ancestry_or_prerelease(self):
-        with patch.object(agent, "json_from_github", return_value={"tag_name": "v1.2.3",
-                                                                   "prerelease": True}):
-            with self.assertRaises(agent.UpdateError):
+    def test_latest_release_without_proof_never_falls_back_to_older_version(self):
+        with (
+            patch.object(agent, "fetch_prefer_ssh"),
+            patch.object(agent, "list_release_tags", return_value=["v0.1.6", "v0.1.8"]),
+            patch.object(agent, "git", side_effect=[SHA2]),
+            patch.object(agent, "verify_release_proof",
+                         side_effect=agent.UpdateError("CI proof missing")),
+        ):
+            with self.assertRaisesRegex(agent.UpdateError, "CI proof missing"):
                 agent.target_for_channel(pathlib.Path("/tmp"), "release")
-        with patch.object(agent, "json_from_github", return_value={"tag_name": "v1.2.3"}):
-            with patch.object(agent, "fetch_prefer_ssh"):
-                with patch.object(agent, "git", return_value=SHA2):
-                    with patch.object(agent, "is_descendant", return_value=False):
-                        with self.assertRaisesRegex(agent.UpdateError, "trusted main"):
-                            agent.target_for_channel(pathlib.Path("/tmp"), "release")
 
-    def test_version_for_sha_resolves_exact_semver(self):
-        with patch.object(agent, "git", return_value="v0.1.0\nv0.2.3\nother\n"):
-            self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "v0.2.3")
-        with patch.object(agent, "git", return_value=""):
-            self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "")
+    def test_release_tag_is_strict_and_unpublished_main_rejected(self):
+        with self.assertRaisesRegex(agent.UpdateError, "Only published"):
+            agent.target_for_channel(pathlib.Path("/tmp"), "main")
+        with patch.object(agent, "fetch_prefer_ssh"):
+            with patch.object(agent, "list_release_tags", return_value=[]):
+                with self.assertRaisesRegex(agent.UpdateError, "No Git-published"):
+                    agent.target_for_channel(pathlib.Path("/tmp"), "release")
+        self.assertEqual(agent.version_key("v0.1.8"), (0, 1, 8))
+        for value in ("v0.1.8-rc1", "v0.1", "../../evil", "latest"):
+            with self.assertRaises(agent.UpdateError):
+                agent.version_key(value)
 
-    def test_fetch_prefers_ssh_and_falls_back_to_https(self):
+    def test_version_for_sha_uses_fetched_release_refs_and_legacy_fallback(self):
+        with patch.object(agent, "list_release_tags", return_value=["v0.1.8"]):
+            with patch.object(agent, "git", return_value=SHA2):
+                self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "v0.1.8")
+        with patch.object(agent, "list_release_tags", return_value=[]):
+            with patch.object(agent, "git", return_value="v0.1.5\nother\n"):
+                self.assertEqual(agent.version_for_sha(pathlib.Path("/tmp"), SHA2), "v0.1.5")
+
+    def test_fetch_prefers_ssh_443_then_22_then_https_with_hard_timeouts(self):
         repo = pathlib.Path("/tmp")
-        with patch.object(agent, "fetch_from_origin", return_value=None) as fetch:
-            self.assertEqual(agent.fetch_prefer_ssh(repo, "main"), "SSH")
-            fetch.assert_called_once_with(repo, agent.SSH_ORIGIN, "main")
-        with patch.object(agent, "fetch_from_origin", side_effect=[
-            agent.UpdateError("SSH unavailable"), None,
-        ]) as fetch:
-            self.assertEqual(agent.fetch_prefer_ssh(repo, "main"), "HTTPS 回退")
-            self.assertEqual(fetch.call_args_list[0].args[1], agent.SSH_ORIGIN)
-            self.assertEqual(fetch.call_args_list[1].args[1], agent.HTTPS_ORIGIN)
-        with patch.object(agent, "fetch_from_origin", side_effect=[
-            agent.UpdateError("SSH unavailable"), agent.UpdateError("HTTPS unavailable"),
-        ]):
-            with self.assertRaisesRegex(agent.UpdateError, "SSH 与 HTTPS"):
-                agent.fetch_prefer_ssh(repo, "main")
+        with patch.object(agent, "prepare_github_known_hosts"):
+            with patch.object(agent, "fetch_from_origin", return_value=None) as fetch:
+                self.assertEqual(agent.fetch_prefer_ssh(repo, "main"), "ssh-443")
+                fetch.assert_called_once_with(
+                    repo, agent.SSH_ORIGIN, "main", transport="ssh-443")
+            with patch.object(agent, "fetch_from_origin", side_effect=[
+                agent.UpdateError("443 unreachable"), None,
+            ]) as fetch:
+                self.assertEqual(agent.fetch_prefer_ssh(repo, "main"), "ssh-22")
+                self.assertEqual(fetch.call_args_list[1].kwargs["transport"], "ssh-22")
+            with patch.object(agent, "fetch_from_origin", side_effect=[
+                agent.UpdateError("443 unreachable"), agent.UpdateError("22 unreachable"),
+                None,
+            ]) as fetch:
+                self.assertEqual(agent.fetch_prefer_ssh(repo, "main"), "https")
+                self.assertEqual(fetch.call_args_list[2].kwargs["transport"], "https")
+            with patch.object(agent, "fetch_from_origin",
+                              side_effect=agent.UpdateError("unreachable")):
+                with patch.object(agent.time, "sleep"):
+                    with self.assertRaisesRegex(agent.UpdateError, "all failed"):
+                        agent.fetch_prefer_ssh(repo, "main")
 
-    def test_explicit_fetch_blocks_url_rewrite(self):
+    def test_fetch_rejects_git_url_rewrites_and_stays_bounded(self):
         repo = pathlib.Path("/tmp")
-        with patch.object(agent, "git", side_effect=[
-            agent.SSH_ORIGIN, "",
-        ]) as git:
-            agent.fetch_from_origin(
-                repo, agent.SSH_ORIGIN, "refs/heads/main:refs/remotes/origin/main")
+        for transport, origin in (("ssh-443", agent.SSH_ORIGIN),
+                                  ("ssh-22", agent.SSH_ORIGIN),
+                                  ("https", agent.HTTPS_ORIGIN)):
+            with patch.object(agent, "git", side_effect=[origin, ""]) as git:
+                agent.fetch_from_origin(repo, origin, "refs/heads/main:refs/remotes/origin/main",
+                                        transport=transport)
             self.assertEqual(git.call_args_list[0].args[1:],
-                             ("ls-remote", "--get-url", agent.SSH_ORIGIN))
-            self.assertEqual(git.call_args_list[1].args[1:4],
-                             ("fetch", "--quiet", "--prune"))
-            self.assertEqual(git.call_args_list[1].args[4], agent.SSH_ORIGIN)
-        with patch.object(agent, "git", return_value="https://evil.example/repo.git") as git:
+                             ("ls-remote", "--get-url", origin))
+            fetch_call = git.call_args_list[1]
+            self.assertEqual(fetch_call.kwargs["timeout"], 35)
+            self.assertIn("--no-tags", fetch_call.args)
+            self.assertIn("--prune", fetch_call.args)
+            if transport == "ssh-443":
+                self.assertIn("Port=443", fetch_call.kwargs["ssh_command"])
+            elif transport == "ssh-22":
+                self.assertIn("HostKeyAlias=github.com", fetch_call.kwargs["ssh_command"])
+            else:
+                self.assertIn("http.version=HTTP/1.1", fetch_call.args)
+        with patch.object(agent, "git", return_value="https://evil.example/repo.git"):
             with self.assertRaisesRegex(agent.UpdateError, "rewrite"):
                 agent.fetch_from_origin(repo, agent.SSH_ORIGIN, "main")
-            self.assertEqual(git.call_count, 1)
+        with self.assertRaisesRegex(agent.UpdateError, "Invalid transport"):
+            with patch.object(agent, "git", return_value=agent.SSH_ORIGIN):
+                agent.fetch_from_origin(repo, agent.SSH_ORIGIN, "main", transport="https")
 
     def test_git_timeout_becomes_fallback_eligible_error(self):
         with patch.object(agent.subprocess, "run",
