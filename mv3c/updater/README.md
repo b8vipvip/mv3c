@@ -16,32 +16,26 @@ GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 C
 
 构建失败**不会**停止或重启旧容器。构建中途异常退出时，下一次更新器执行将依据本地事务日志恢复 Git 和旧镜像，并核验运行状态，防止 Git/镜像版本不一致。
 
-## 从 REST API 更新器迁移到 Git-only 更新器（执行一次）
+## 从 REST API 更新器迁移（已有站点仅执行一次）
 
-已经运行旧版（如 v0.1.5～v0.1.7）的服务器需要先启用新的宿主机脚本，否则旧脚本依然访问 `api.github.com`。正式版 GitHub Release 和它的发布证明标签都已出现后，在宝塔 root 终端执行（不清理旧镜像、BuildKit 缓存或业务卷）：
+**已有旧版本站点不要运行「首次部署」里的 `git clone` 或 `docker compose up -d --build`**；它们可能覆盖原来具备版本号的运行镜像。迁移前请在 [GitHub Releases](https://github.com/b8vipvip/mv3c/releases) 确认新的正式版及 `mv3c-verified/vX.Y.Z` 发布证明标签已产生。
+
+在宝塔 root 终端执行独立命令，**不要把各步骤散落在多个不检查退出码的粘贴块里**：
 
 ```bash
-sudo bash <<'SH'
-set -Eeuo pipefail
-cd /opt/mv3c
-systemctl stop mv3c-updater.timer
-if systemctl is-active --quiet mv3c-updater.service; then
-  echo '已有更新正在运行，请先确认结束'; exit 1
-fi
-GIT_TERMINAL_PROMPT=0 git fetch \
-  git@github.com:b8vipvip/mv3c.git \
+set -e
+sudo systemctl stop mv3c-updater.timer
+sudo git -C /opt/mv3c fetch git@github.com:b8vipvip/mv3c.git \
   refs/heads/main:refs/remotes/origin/main
-git show refs/remotes/origin/main:mv3c/updater/agent.py \
-  > /root/mv3c-git-only-bootstrap.py
-python3 -m py_compile /root/mv3c-git-only-bootstrap.py
-grep -q 'def verify_release_proof(' /root/mv3c-git-only-bootstrap.py
-python3 /root/mv3c-git-only-bootstrap.py --repo /opt/mv3c --bootstrap-local
-bash /opt/mv3c/mv3c/updater/install.sh
-echo 'Git-only updater migration successful'
-SH
+sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/migrate-git-only.sh > /root/mv3c-migrate-git-only.sh'
+sudo bash /root/mv3c-migrate-git-only.sh
 ```
 
-若在网络访问、磁盘安全预检、Release 证明或 Docker 构建中出错，脚本会在安装步骤之前停止，原有服务与数据卷保持不变；根据报错排查，不要跳过发布证明或使用 `git reset --hard` 强行上线。更新器使用仓库签发的发布证据而非 GitHub REST 实时状态，在仓库管理员权限被滥用时，人工创建匹配标签不能构成独立安全担保，应配合 GitHub 标签 ruleset。
+专用脚本自动等待已启动的 oneshot 更新任务释放锁、提取最新版 Git-only 更新器、严格校验发布证明、执行 Docker 缓存构建、验证上线镜像后才重新安装 systemd 更新器。**失败时不会安装旧更新器、不清空 Docker 缓存或卷、也不自动开始下一次更新。** 若遇到构建失败，请获取宿主机日志：
+`sudo grep -Ei 'npm (error|ERR)|EAI_AGAIN|ECONN|ETIMEDOUT|ERROR:|failed|No space' /var/log/mv3c-updater-build.log | tail -n 60`，再查看 `sudo tail -n 100 /var/log/mv3c-updater-build.log`。
+
+回滚验证会严格检查已备份的旧镜像 ID 与当前健康容器是否一致。若旧镜像由人工 `docker compose build` 构建，缺少 Release 元数据，可以在回滚时恢复为**健康的旧服务**并报告 `legacy unversioned` 警告；这种恢复不会被当作新版本部署成功。新候选镜像仍必须通过全部正式版 SHA、镜像和 API 验证。
+
 
 ## 首次部署
 
@@ -63,35 +57,6 @@ sudo systemctl status mv3c-updater.timer --no-pager
 
 后台登录后前往「版本更新」，仍统一以正式版 Release 为唯一更新通道；宿主机通过 Git 拉取 Release/CI 发布证据，不使用匿名 API 请求配额。可启用／关闭自动检查，或者手动检查、部署并下载诊断日志。版本号写入 Docker 镜像环境变量 `MV3C_VERSION` 和 OCI `org.opencontainers.image.version` 标签，后台显示当前和最新版本；部署后会校验运行中的 `/api/config/version` 与 Git SHA、版本号一致。
 
-## 从旧的 SCP / 预构建镜像更新器迁移（仅执行一次）
-
-**以下命令在实际 MV3C 服务器运行，不能直接在 GitHub Actions 内运行。** 先在 GitHub 确认新提交的 `mv3c validation` 和 `mv3c source Docker build` 均通过。确认实际安装路径；若不是 `/opt/mv3c`，请替换所有对应路径。
-
-```bash
-# 防止旧版定时任务并发触发
-sudo systemctl stop mv3c-updater.timer
-
-# 从可信仓库取得新提交，不修改当前运行容器
-sudo git -C /opt/mv3c fetch https://github.com/b8vipvip/mv3c.git \
-  main:refs/remotes/origin/main
-
-# 从已拉取的 main 提交提取新更新器（不需先把旧 Git checkout 重置）；必须先有正式 GitHub Release
-sudo sh -c 'git -C /opt/mv3c show refs/remotes/origin/main:mv3c/updater/agent.py > /root/mv3c-local-bootstrap.py'
-
-# 使用新代码一次性升级；目标必须是已通过 GitHub CI 的正式 Release，利用本机缓存构建并验收
-sudo python3 /root/mv3c-local-bootstrap.py --repo /opt/mv3c --bootstrap-local
-
-# 只有确认 bootstrap 成功、站点健康后，重新安装/启用正式更新器
-sudo bash /opt/mv3c/mv3c/updater/install.sh
-sudo systemctl start mv3c-updater.timer
-sudo journalctl -u mv3c-updater.service -n 100 --no-pager
-```
-
-若 bootstrap 失败：**保留旧容器、Docker 镜像与数据卷**，不要手动删除镜像或强行 Git reset。查看错误日志，必要时按实际结果恢复更新器 timer。更新器自身在构建失败时负责 Git 回滚；若宿主机异常重启则会在下次执行恢复事务日志。
-
-**迁移锁与回滚排查：** 若看到 `Another mv3c update check is already running`，说明其他更新任务持有锁，首次 bootstrap 尚未启动，不得将其视为迁移成功。先停止 timer，确认已有 `mv3c-updater.service` 执行结束，再重新运行 bootstrap；无需删除锁文件。新的 bootstrap 遇到锁冲突会返回非零退出码，阻止部署脚本错误地继续安装。安装脚本只启用 timer，不再同步等待可能耗时很长的 oneshot 更新器。若看到 `mv3c update: rolled_back`，表示部署失败后已恢复旧版本，**不是**新版本部署成功。到管理后台「版本更新」→「最近更新记录」下载该次部署诊断报告，其 `error` / `Deployment log` 才是定位构建、网络或镜像失败的关键证据；宿主机 `journalctl -u mv3c-updater.service` 也会输出简短失败原因。
-
-之前添加的 `MV3C_SCP_*` Actions Secrets 不再参与部署；可以在验证迁移后手动撤销上传密钥并删除对应 Secrets。专用的 `mv3c-transfer` 用户如果已存在，不建议在未检查其它用途前直接删除。
 
 ## Python / MCP 工具下载源（项目独立配置）
 

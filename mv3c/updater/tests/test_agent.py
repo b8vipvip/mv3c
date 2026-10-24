@@ -94,6 +94,74 @@ class HostUpdaterTests(unittest.TestCase):
                     else:
                         self.assertEqual(agent.main(), 0)
 
+    def test_legacy_unversioned_rollback_accepts_only_original_healthy_image(self):
+        repo = pathlib.Path("/tmp")
+        old_image = "sha256:original-backup"
+        def fake_run(args, _repo, **_kwargs):
+            joined = " ".join(args)
+            if args[:4] == ["docker", "compose", "ps", "-q"]:
+                return "mv3c-container"
+            if args[:3] == ["docker", "image", "inspect"]:
+                if "{{.Id}}" in joined:
+                    return old_image
+                if "org.opencontainers.image.version" in joined:
+                    return "unreleased"
+                if "org.opencontainers.image.revision" in joined:
+                    return ""
+            if args[:2] == ["docker", "inspect"]:
+                if "{{.Image}}" in joined:
+                    return old_image
+                return "healthy"
+            raise AssertionError(args)
+        class Response:
+            status = 200
+            def __init__(self, url):
+                self.url = url
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+            def read(self, _size):
+                if self.url.endswith("/version"):
+                    return b'{"version":"unreleased","sha":""}'
+                return b'{}'
+        with (
+            patch.object(agent, "verify_deployment",
+                         side_effect=agent.UpdateError("Docker image Release version mismatch")),
+            patch.object(agent, "git", return_value=SHA1),
+            patch.object(agent, "run", side_effect=fake_run),
+            patch.object(agent.urllib.request, "urlopen",
+                         side_effect=lambda url, timeout: Response(url)),
+        ):
+            result = agent.verify_restored_service(repo, SHA1)
+        self.assertIn("Rollback recovery PASSED", result)
+        self.assertIn("NOT a new deployment", result)
+
+    def test_legacy_exception_never_admits_different_image_or_real_wrong_version(self):
+        repo = pathlib.Path("/tmp")
+        def bad_run(args, _repo, **_kwargs):
+            joined = " ".join(args)
+            if args[:4] == ["docker", "compose", "ps", "-q"]:
+                return "container"
+            if args[:3] == ["docker", "image", "inspect"] and "{{.Id}}" in joined:
+                return "sha256:backup"
+            if args[:2] == ["docker", "inspect"]:
+                return "sha256:different" if "{{.Image}}" in joined else "healthy"
+            return "unreleased"
+        with (
+            patch.object(agent, "verify_deployment",
+                         side_effect=agent.UpdateError("Docker image Release version mismatch")),
+            patch.object(agent, "git", return_value=SHA1),
+            patch.object(agent, "run", side_effect=bad_run),
+        ):
+            with self.assertRaisesRegex(agent.UpdateError, "backed-up healthy"):
+                agent.verify_restored_service(repo, SHA1)
+        # A non-version-related verification failure must never be reclassified.
+        with patch.object(agent, "verify_deployment",
+                          side_effect=agent.UpdateError("Running container image does not match")):
+            with self.assertRaisesRegex(agent.UpdateError, "does not match"):
+                agent.verify_restored_service(repo, SHA1)
+
     def test_same_sha_bootstrap_only_skips_verified_release_image(self):
         repo = pathlib.Path("/tmp")
         with patch.object(agent, "verify_deployment", return_value="PASSED") as verify:
