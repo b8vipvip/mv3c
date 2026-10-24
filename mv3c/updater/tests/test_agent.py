@@ -456,13 +456,16 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertIn("FROM node:24.16.0-alpine AS base", dockerfile)
         self.assertIn("FROM base AS build", dockerfile)
         self.assertIn("FROM base AS runtime", dockerfile)
-        self.assertIn("COPY --from=build --chown=node:node /app/ /app/", dockerfile)
+        self.assertIn("COPY --from=prod-deps --chown=node:node", dockerfile)
+        self.assertIn("tar -C /mv3c-built --exclude=node_modules", dockerfile)
         build_stage = dockerfile.split("FROM base AS build", 1)[1].split(
             "FROM base AS runtime", 1)[0]
         runtime_stage = dockerfile.split("FROM base AS runtime", 1)[1]
         self.assertIn("npm ci --no-audit --prefer-offline", build_stage)
         self.assertIn("npm run frontend", build_stage)
-        self.assertIn("npm prune --omit=dev", build_stage)
+        self.assertNotIn("npm prune --omit=dev --prefer-offline", build_stage)
+        self.assertIn("FROM base AS prod-deps", build_stage)
+        self.assertIn("npm ci --omit=dev --no-audit", build_stage)
         self.assertNotIn("npm ci ", runtime_stage)
         self.assertIn('CMD ["npm", "run", "backend"]', runtime_stage)
         self.assertIn("org.opencontainers.image.revision", runtime_stage)
