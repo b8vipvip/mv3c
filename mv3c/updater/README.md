@@ -117,3 +117,59 @@ sudo docker system df
 sudo systemctl status mv3c-updater.timer --no-pager
 sudo journalctl -u mv3c-updater.service -n 120 --no-pager
 ```
+
+
+## 2026-10-24: build safety and P0-P2 optimizations
+
+**P0 — explicit unattended deployment approval.** Existing \`autoEnabled\`
+means periodic **check only** from this Release onward. The independent
+\`autoDeployEnabled\` is **false by default**, including for users who previously
+enabled automatic deployments. An administrator must explicitly enable it
+before the database layer admits the \`queue-auto\` path; manual updates
+continue to use the same Git/SHA/Release-proof verification and rollback.
+
+**Upgrade warning:** The OLD running host updater uses the original
+\`autoEnabled\` behavior until the new Release has been deployed. Following
+a host freeze, first disable automatic deployment on the currently running
+version (or temporarily stop its timer) before publishing/rolling out the
+Release that changes this policy. A PR merge by itself cannot disable a
+legacy running timer on a separate host.
+
+**P1 — eliminate source-change npm pruning.** Runtime dependencies are now
+installed once in a dedicated cacheable \`prod-deps\` stage, keyed only by
+package manifests. The full build stage retains development dependencies
+for workspace builds. The runtime stage copies production-only modules and
+mounts the completed source build read-only to extract other runtime files,
+explicitly excluding node_modules. The install and dev compilation caches
+remain local to Docker/BuildKit and must not be globally purged.
+
+After this Dockerfile restructure, the **first build** necessarily needs new
+cache records; it can temporarily consume MORE disk and may take longer. A
+3 GiB preflight threshold is a minimum safety gate, not sufficient proof
+that a fresh build will fit. For an undersized 40 GiB root disk with multiple
+running services, take a snapshot and inspect \`df -h /var/lib/docker\`,
+\`docker system df -v\`, and the image sizes before manual deployment.
+Keep the rollback image and all MongoDB volumes.
+
+**P0/P1 diagnostics.** Each host build appends a \`MV3C BUILD DIAGNOSTICS\`
+summary to \`/var/log/mv3c-updater-build.log\` with actual wall time, largest
+BuildKit steps, cache hit count, and sampled host MemAvailable, swap, free
+Docker disk and full I/O PSI. The summary is also included in the admin
+deployment report. These samples are signals, **not evidence of the exact
+process performing I/O**, and do not auto-delete data or kill containers.
+
+**P2 — optional external-build comparison, safe by default.** The
+\`mv3c source Docker build\` GitHub Actions workflow now measures actual CI
+build time, \`docker save\` + gzip packaging size/time and theoretical download
+times at 5/20/50/100 Mbps, reporting them in the workflow summary. This is
+a **benchmark** only: the CI candidate has \`BUILD_VERSION=unreleased\`, so
+loading it directly on production would defeat exact Release-version
+attestation. Production therefore keeps verified local SHA builds until a
+fully attested Release-specific OCI artifact path and import/rollback tests
+exist. Transfer timing excludes network overhead, Docker load/import time,
+Actions queue delay and attestation cost.
+
+Before enabling unattended deployments again, check at least two subsequent
+releases for correct health, readiness, version attestation and actual peak
+disk/I/O pressure under the new Dockerfile. Never run an unbounded prune or
+force-remove Docker volumes in response to a build-space warning.
