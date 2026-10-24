@@ -44,7 +44,7 @@ async function main() {
       break;
     case 'queue-auto': {
       const state = await updates.getState();
-      if (!state.config.autoEnabled || !state.updateAvailable ||
+      if (!state.config.autoEnabled || !state.config.autoDeployEnabled || !state.updateAvailable ||
           state.pendingJob || state.activeJob) {
         result = null;
         break;
