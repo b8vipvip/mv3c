@@ -4,9 +4,9 @@
 
 GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 CI 全部成功后，`mv3c official release` 工作流自动创建版本标签（首次 `v0.1.0`、之后逐次递增补丁版本）并发布非预发布的 GitHub Release。**只有已发布正式版才允许进入生产部署**，不会部署未经发布的 main 提交。不向服务器上传 Docker 镜像，也不依赖 GHCR、SCP 或额外的 Actions 上传 Secret。
 
-服务器上的 `mv3c-updater.timer` 每分钟检查后台更新任务（自动检查间隔由后台配置）。任务只允许固定仓库 `b8vipvip/mv3c` 已发布、非预发布的正式 Release 标签（同时必须属于可信 main 历史），且**该标签 SHA 的两项 Actions 必须均成功**：
+服务器上的 `mv3c-updater.timer` 每分钟检查后台更新任务（自动检查间隔由后台配置）。**与 chat2api 一样，宿主机仅使用 Git Smart 协议，无需 GitHub REST API Token**：SSH 443 → SSH 22 → HTTPS（HTTP/1.1、每条链路有界超时）。GitHub Actions 仍在发布正式 Release **且两项 main CI 都成功后**才写入不可缺失的带 CI 运行 ID 的注释标签 `mv3c-verified/vX.Y.Z`。宿主机只部署同时具有普通版本标签和此 CI/Release 发布证明、且落在可信 main 历史中的 SHA；最新标签缺少证明时拒绝更新而不回退到旧版本。请使用 GitHub 仓库 ruleset 限制谁可以创建/改写/删除 `v*` 和 `mv3c-verified/v*` 标签，因为这里是仓库权限控制的**发布证据**，不是外部密码学签名。
 
-1. 通过 SSH 优先、HTTPS 备选的方式从 GitHub 拉取源码，验证目标提交及 CI。
+1. 通过 SSH 443 → SSH 22 → HTTPS 有界容灾拉取 GitHub main、正式版本标签和发布证明标签；在本机按精确 Git SHA、双 CI 成功字段、两条成功运行 ID 校验发布证明，不调用 `api.github.com`。
 2. 检查 Docker 数据目录空余容量（至少 **8 GiB**），不足时拒绝构建，当前容器不受影响；同时记录共享 BuildKit 缓存用量，并保留当前的 `mv3c:rollback` 镜像。
 3. Git 快进到经过 CI 验证的提交，在宿主机执行 `docker build`，生成 `mv3c:sha-<commit>` 候选镜像。旧服务始终继续运行。
 4. BuildKit 自动复用本机已存在的镜像层；Dockerfile 在拷贝源码前安装 workspace 依赖，`package-lock.json` 未变时重用 `npm ci` 整层。依赖变更时则复用持久化的 `mv3c-npm-cache` npm 下载缓存（`--prefer-offline`）。
@@ -15,6 +15,33 @@ GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 C
 7. **只有在新版本健康验证通过并移除更新事务日志之后**，尝试移除旧的 `mv3c:sha-<40位提交>` 标签。已运行容器、停用容器、`mv3c:local`、`mv3c:rollback` 所引用的镜像始终受保护，每次最多处理 5 个标签。清理失败仅记录警告，不把已经成功运行的部署误判为失败或触发回滚。保留 MongoDB、上传文件、密钥和日志数据卷，不执行 `down -v`、`docker system prune`、`docker builder prune`。
 
 构建失败**不会**停止或重启旧容器。构建中途异常退出时，下一次更新器执行将依据本地事务日志恢复 Git 和旧镜像，并核验运行状态，防止 Git/镜像版本不一致。
+
+## 从 REST API 更新器迁移到 Git-only 更新器（执行一次）
+
+已经运行旧版（如 v0.1.5～v0.1.7）的服务器需要先启用新的宿主机脚本，否则旧脚本依然访问 `api.github.com`。正式版 GitHub Release 和它的发布证明标签都已出现后，在宝塔 root 终端执行（不清理旧镜像、BuildKit 缓存或业务卷）：
+
+```bash
+sudo bash <<'SH'
+set -Eeuo pipefail
+cd /opt/mv3c
+systemctl stop mv3c-updater.timer
+if systemctl is-active --quiet mv3c-updater.service; then
+  echo '已有更新正在运行，请先确认结束'; exit 1
+fi
+GIT_TERMINAL_PROMPT=0 git fetch \
+  git@github.com:b8vipvip/mv3c.git \
+  refs/heads/main:refs/remotes/origin/main
+git show refs/remotes/origin/main:mv3c/updater/agent.py \
+  > /root/mv3c-git-only-bootstrap.py
+python3 -m py_compile /root/mv3c-git-only-bootstrap.py
+grep -q 'def verify_release_proof(' /root/mv3c-git-only-bootstrap.py
+python3 /root/mv3c-git-only-bootstrap.py --repo /opt/mv3c --bootstrap-local
+bash /opt/mv3c/mv3c/updater/install.sh
+echo 'Git-only updater migration successful'
+SH
+```
+
+若在网络访问、磁盘安全预检、Release 证明或 Docker 构建中出错，脚本会在安装步骤之前停止，原有服务与数据卷保持不变；根据报错排查，不要跳过发布证明或使用 `git reset --hard` 强行上线。更新器使用仓库签发的发布证据而非 GitHub REST 实时状态，在仓库管理员权限被滥用时，人工创建匹配标签不能构成独立安全担保，应配合 GitHub 标签 ruleset。
 
 ## 首次部署
 
@@ -34,7 +61,7 @@ sudo systemctl status mv3c-updater.timer --no-pager
 
 仓库应由 root 拥有（`/opt/mv3c` 为推荐路径），服务端需安装 Docker Compose v2、启用 BuildKit，并可访问 GitHub 源码和首次依赖下载所需的 npm、Alpine 等软件源。
 
-后台登录后前往「版本更新」，统一以正式版 Release 作为唯一更新通道；可启用／关闭自动检查，或者手动检查、部署并下载诊断日志。版本号写入 Docker 镜像环境变量 `MV3C_VERSION` 和 OCI `org.opencontainers.image.version` 标签，后台显示当前和最新版本；部署后会校验运行中的 `/api/config/version` 与 Git SHA、版本号一致。
+后台登录后前往「版本更新」，仍统一以正式版 Release 为唯一更新通道；宿主机通过 Git 拉取 Release/CI 发布证据，不使用匿名 API 请求配额。可启用／关闭自动检查，或者手动检查、部署并下载诊断日志。版本号写入 Docker 镜像环境变量 `MV3C_VERSION` 和 OCI `org.opencontainers.image.version` 标签，后台显示当前和最新版本；部署后会校验运行中的 `/api/config/version` 与 Git SHA、版本号一致。
 
 ## 从旧的 SCP / 预构建镜像更新器迁移（仅执行一次）
 
