@@ -129,6 +129,19 @@ systemctl daemon-reload
 # The timer schedules the first run. Do not synchronously start the oneshot
 # here: it can take up to 90 minutes and race with a one-time bootstrap.
 systemctl enable --now mv3c-updater.timer
+# Remove only positively identified obsolete one-shot migration entrypoints.
+# They are not used by the canonical service and must not survive as
+# independently callable deployment scripts on the host.
+for OLD_SCRIPT in /root/mv3c-verified-git-bootstrap.py /root/mv3c-migrate-git-only.sh; do
+  if [ -f "$OLD_SCRIPT" ] && [ ! -L "$OLD_SCRIPT" ]; then
+    if grep -Eq "mv3c/updater/agent.py|migrate-git-only|Host-only mv3c updater|Bootstrap fetch:" "$OLD_SCRIPT"; then
+      rm -- "$OLD_SCRIPT"
+      echo "已清理旧一次性部署入口：$OLD_SCRIPT"
+    else
+      echo "历史文件内容不符合预期，未删除：$OLD_SCRIPT" >&2
+    fi
+  fi
+done
 echo
 echo "mv3c 宿主机更新服务已启用："
 systemctl --no-pager status mv3c-updater.timer || true
