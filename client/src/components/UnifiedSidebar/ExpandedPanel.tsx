@@ -78,6 +78,7 @@ const NavIconButton = memo(function NavIconButton({
   onLeaveInsights?: () => void;
 }) {
   const localize = useLocalize();
+  const displayTitle = link.id === 'mcp-builder' ? '插件' : localize(link.title);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -104,13 +105,13 @@ const NavIconButton = memo(function NavIconButton({
 
   return (
     <TooltipAnchor
-      description={localize(link.title)}
+      description={displayTitle}
       side="right"
       render={
         <Button
           size={expanded ? 'row' : 'icon'}
           variant="nav"
-          aria-label={localize(link.title)}
+          aria-label={displayTitle}
           aria-pressed={isActive}
           disabled={link.disabled}
           data-testid={`nav-panel-${link.id}`}
@@ -120,7 +121,7 @@ const NavIconButton = memo(function NavIconButton({
           onClick={handleClick}
         >
           <link.icon className="h-5 w-5 shrink-0" aria-hidden="true" />
-          {expanded && <span className="min-w-0 truncate">{localize(link.title)}</span>}
+          {expanded && <span className="min-w-0 truncate">{displayTitle}</span>}
         </Button>
       }
     />
