@@ -540,6 +540,66 @@ def verify_deployment(repo: Path, expected_sha: str) -> str:
             + " /readyz HTTP 200; /api/config HTTP 200; live version attested")
 
 
+def verify_restored_service(repo: Path, expected_sha: str) -> str:
+    """Prove an old image is restored, even if it predates official version labels.
+
+    This is recovery-only. Never use this for admitting a candidate release:
+    candidates must pass strict verify_deployment with exact SHA and semver.
+    """
+    try:
+        return "Rollback validation PASSED: " + verify_deployment(repo, expected_sha)
+    except UpdateError as original:
+        # Only the pre-existing unversioned image exception is recoverable.
+        if not any(word in str(original) for word in (
+            "Docker image Release version mismatch",
+            "Live server version and commit do not match deployment",
+        )):
+            raise
+    if git(repo, "rev-parse", "HEAD") != expected_sha:
+        raise UpdateError("Rollback Git SHA differs from previous checkout")
+    image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}",
+                    "mv3c:rollback"], repo, timeout=20)
+    local_id = run(["docker", "image", "inspect", "--format", "{{.Id}}",
+                    "mv3c:local"], repo, timeout=20)
+    cid = run(["docker", "compose", "ps", "-q", "mv3c"], repo, timeout=20)
+    if not cid or local_id != image_id:
+        raise UpdateError("Rollback image tag does not match original backup")
+    running = run(["docker", "inspect", "--format", "{{.Image}}",
+                   cid.splitlines()[0]], repo, timeout=20)
+    health = run(["docker", "inspect", "--format",
+                  "{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}",
+                  cid.splitlines()[0]], repo, timeout=20)
+    if running != image_id or health != "healthy":
+        raise UpdateError("Legacy rollback is not running its backed-up healthy image")
+    version = run(["docker", "image", "inspect", "--format",
+                   '{{index .Config.Labels "org.opencontainers.image.version"}}',
+                   "mv3c:rollback"], repo, timeout=20)
+    revision = run(["docker", "image", "inspect", "--format",
+                    '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+                    "mv3c:rollback"], repo, timeout=20)
+    if version not in ("", "<no value>", "unreleased") or (
+        revision not in ("", "<no value>", expected_sha)
+    ):
+        raise UpdateError("Rollback metadata identifies a different release; refusing legacy exception")
+    for path in ("/readyz", "/api/config", "/api/config/version"):
+        url = "http://127.0.0.1:3080" + path
+        with urllib.request.urlopen(url, timeout=15) as response:
+            if response.status != 200:
+                raise UpdateError("Legacy rollback endpoint not healthy: " + path)
+            payload = response.read(200_000)
+            if path == "/api/config" and not isinstance(json.loads(payload), dict):
+                raise UpdateError("Legacy rollback config is invalid")
+            if path == "/api/config/version":
+                live = json.loads(payload)
+                if live.get("sha") not in ("", expected_sha) or live.get("version") not in (
+                    "", "unreleased", version,
+                ):
+                    raise UpdateError("Legacy rollback reports conflicting live version")
+    return ("Rollback recovery PASSED: original running Docker image and Git checkout "
+            "restored, container healthy and HTTP checks passed; WARNING: previous "
+            "manual image has no attested release version. This is NOT a new deployment.")
+
+
 def transaction_path(repo: Path) -> Path:
     return repo / ".mv3c-local-build-transaction.json"
 
@@ -584,8 +644,9 @@ def restore_interrupted_local_deploy(repo: Path) -> str:
         run(["docker", "compose", "up", "-d", "--no-build", "--pull", "never",
              "--no-deps", "--force-recreate", "mv3c"], repo, timeout=240)
     wait_healthy(repo)
-    verify_deployment(repo, previous)
+    verified = verify_restored_service(repo, previous)
     journal.unlink()
+    print(verified, flush=True)
     return "Interrupted local build/deployment restored verified version " + previous[:12]
 
 
@@ -670,8 +731,8 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
                                 "--pull", "never", "--no-deps", "--force-recreate",
                                 "mv3c"], repo, timeout=240)[-2000:])
             wait_healthy(repo)
-            validation = verify_deployment(repo, old)
-            log.append("Rollback validation PASSED: " + validation)
+            validation = verify_restored_service(repo, old)
+            log.append(validation)
             journal.unlink(missing_ok=True)
             return "rolled_back", "\n".join(log)[-24000:], failure
         except Exception as rollback_error:
