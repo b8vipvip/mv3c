@@ -237,13 +237,11 @@ function validateReport(payload) {
     latestUrl: (v) => typeof v === 'string' && v.length <= 500 &&
       (!v || v.startsWith('https://github.com/b8vipvip/mv3c/')),
     updateAvailable: (v) => typeof v === 'boolean',
-    status: (v) => ['idle', 'checking', 'queued', 'updating', 'blocked', 'success', 'failed', 'rolled_back'].includes(v),
+    // Only completeJob owns success/failure/rollback terminal states.
+    status: (v) => ['idle', 'checking', 'blocked'].includes(v),
     lastError: (v) => typeof v === 'string' && v.length <= 2000,
     ciMessage: (v) => typeof v === 'string' && v.length <= 300,
-    lastLog: (v) => typeof v === 'string' && v.length <= 12000,
-    lastOutcome: (v) => typeof v === 'string' && v.length <= 100,
     checkedAt: (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v)),
-    lastSuccessAt: (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v)),
   };
   const result = {};
   for (const [key, value] of Object.entries(payload)) {
