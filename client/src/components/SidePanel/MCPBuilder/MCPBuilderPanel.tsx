@@ -69,7 +69,7 @@ export default function MCPBuilderPanel() {
     >
       {/* Sticky header: title, create, search */}
       <PanelHeader
-        title={localize('com_ui_mcp_servers')}
+        title="插件与连接"
         titleId={headingId}
         action={
           hasCreateAccess && (
