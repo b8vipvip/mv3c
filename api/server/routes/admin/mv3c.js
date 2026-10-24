@@ -10,6 +10,7 @@ const { invalidateConfigCaches } = require('~/server/services/Config/app');
 const settings = require('~/server/services/Config/mv3cSettings');
 const updater = require('~/server/services/Config/mv3cUpdater');
 const runtimeLogs = require('~/server/services/Config/mv3cRuntimeLogs');
+const { probeToolBridge } = require('../../../../mv3c/toolBridge.cjs');
 
 const router = express.Router();
 // Require a JWT bearer header even when another authentication strategy is configured.
@@ -64,6 +65,35 @@ router.post('/test', async (req, res) => {
   try {
     const models = await settings.fetchModelsFromChat2api();
     return res.json({ ok: true, models, count: models.length });
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+/** Admin-only diagnostic. The probe uses the already configured provider;
+ * no arbitrary host URL, token, tool name or shell command comes from the request.
+ * It never executes the function suggested by the model.
+ */
+router.post('/plugins/compatibility', async (req, res) => {
+  try {
+    const config = await settings.buildRuntimeConfig();
+    const provider = config?.endpoints?.custom?.find((entry) => entry.name === 'chat2api');
+    if (!provider) throw new TypeError('chat2api is not configured');
+    const record = await probeToolBridge({
+      baseURL: provider.baseURL,
+      apiKey: provider.apiKey,
+      models: provider.models?.default,
+    });
+    await mongoose.connection.db.collection('mv3c_plugin_bridge_checks').insertOne({
+      actor: actorId(req),
+      at: new Date(),
+      model: record.model,
+      supported: record.supported,
+      reason: record.reason,
+      elapsedMs: record.elapsedMs,
+    });
+    await settings.writeAudit(actorId(req), ['plugins.compatibility']);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ...record, limitation: '模型函数调用结构诊断；不代表 MCP 工具执行已经成功' });
   } catch (error) {
     return failure(res, error);
   }
