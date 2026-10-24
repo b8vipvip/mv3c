@@ -1,3 +1,4 @@
+import { createLiteralSearchRegex, extractNativeSearchUser } from '../utils/nativeSearch';
 import {
   backgroundResultMetadata,
   HITL_MESSAGE_FILTER_FIELDS,
@@ -4166,6 +4167,23 @@ export function createMessageMethods(
     hydrate?: boolean,
   ): Promise<Awaited<ReturnType<SchemaWithMeiliMethods['meiliSearch']>>> {
     const Message = mongoose.models.Message as SchemaWithMeiliMethods;
+    if (process.env.MV3C_NATIVE_SEARCH === 'true') {
+      const user = extractNativeSearchUser(searchOptions.filter);
+      if (!user) {
+        return { hits: [] } as unknown as Awaited<ReturnType<SchemaWithMeiliMethods['meiliSearch']>>;
+      }
+      const literal = createLiteralSearchRegex(query);
+      const limit = Math.min(Math.max(Math.trunc(searchOptions.limit ?? 25), 1), 1000);
+      const hits = await Message.find({
+        user,
+        $or: [{ text: literal }, { 'content.text': literal }],
+        expiredAt: { $not: { $lte: new Date() } },
+      })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+      return { hits } as unknown as Awaited<ReturnType<SchemaWithMeiliMethods['meiliSearch']>>;
+    }
     if (typeof Message.meiliSearch !== 'function') {
       throw new Error('MeiliSearch plugin not registered on Message model');
     }
