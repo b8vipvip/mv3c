@@ -931,8 +931,17 @@ def check_needed(state: dict) -> bool:
     requested = state.get("checkRequestedAt")
     # The bridge exposes checkRequestedAt separately from the admin response.
     interval = state.get("config", {}).get("intervalMinutes", 10)
-    if not state.get("config", {}).get("autoEnabled", True) and not requested:
-        return False
+    if not state.get("config", {}).get("autoEnabled", True):
+        if not requested:
+            return False
+        try:
+            request_time = dt.datetime.fromisoformat(requested.replace("Z", "+00:00"))
+            previous_time = (dt.datetime.fromisoformat(checked.replace("Z", "+00:00"))
+                             if checked else None)
+            if previous_time is not None and request_time <= previous_time:
+                return False
+        except (TypeError, ValueError):
+            return False
     if not checked:
         return True
     try:
