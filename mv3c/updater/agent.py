@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import time
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -173,6 +174,9 @@ def check_build_capacity(repo: Path) -> None:
             "Do not prune shared BuildKit cache or data volumes automatically."
             .format(free / 1024**3))
     print("MV3C pre-build disk gate: " + disk_status(repo), flush=True)
+    available = meminfo_kib().get("MemAvailable", 0) * 1024
+    if available and available < 512 * 1024**2:
+        raise UpdateError("Build blocked: less than 512MiB host memory available")
 
 
 def cleanup_stale_mv3c_image_tags(repo: Path) -> list[str]:
@@ -241,12 +245,12 @@ def version_for_sha(repo: Path, sha: str) -> str:
 
 def build_local_image(repo: Path, sha: str) -> None:
     """Reuse host layers, persistent BuildKit cache mounts and npm tarballs."""
-    heap = os.environ.get("MV3C_BUILD_NODE_HEAP_MB", "3072")
+    heap = os.environ.get("MV3C_BUILD_NODE_HEAP_MB", "2560")
     if not heap.isdecimal() or not 1024 <= int(heap) <= 8192:
         raise UpdateError("MV3C_BUILD_NODE_HEAP_MB must be 1024..8192")
     env = os.environ.copy()
     env["DOCKER_BUILDKIT"] = "1"
-    run([
+    details = run([
         "docker", "build", "--progress=plain",
         "--build-arg", "NODE_MAX_OLD_SPACE_SIZE=" + heap,
         "--build-arg", "NPM_CI_TIMEOUT_SECONDS=1800",
@@ -256,6 +260,7 @@ def build_local_image(repo: Path, sha: str) -> None:
         "-t", image_for_sha(sha), ".",
     ], repo, timeout=4500, env=env)
     verify_built_image(repo, sha)
+    return details
 
 
 class UpdateError(RuntimeError):
@@ -266,6 +271,58 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+def meminfo_kib() -> dict[str, int]:
+    try:
+        data = Path("/proc/meminfo").read_text()
+        return {match.group(1): int(match.group(2))
+                for line in data.splitlines()
+                if (match := re.match(r"^([A-Za-z_()]+):\s+(\d+) kB", line))}
+    except (OSError, ValueError):
+        return {}
+
+
+def build_pressure_sample() -> dict[str, float]:
+    mem = meminfo_kib()
+    point = {
+        "mem_available_mib": mem.get("MemAvailable", 0) / 1024,
+        "swap_used_mib": (mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)) / 1024,
+    }
+    try:
+        point["docker_free_gib"] = shutil.disk_usage("/var/lib/docker").free / 1024**3
+    except OSError:
+        pass
+    try:
+        match = re.search(r"(?m)^full avg10=([0-9.]+)", Path("/proc/pressure/io").read_text())
+        if match:
+            point["io_full_avg10"] = float(match.group(1))
+    except OSError:
+        pass
+    return point
+
+
+def build_pressure_summary(samples: list[dict[str, float]]) -> str:
+    if not samples:
+        return "Host build pressure: no samples"
+    fields = ["Host build pressure: samples=" + str(len(samples))]
+    for key, reduction, label in (
+        ("mem_available_mib", min, "MiB minimum MemAvailable"),
+        ("swap_used_mib", max, "MiB peak swap used"),
+        ("docker_free_gib", min, "GiB minimum Docker free"),
+        ("io_full_avg10", max, "% peak full I/O PSI avg10"),
+    ):
+        series = [point[key] for point in samples if key in point]
+        if series:
+            fields.append("{:.2f} {}".format(reduction(series), label))
+    return "; ".join(fields)
+
+
+def buildkit_summary(labels: dict[str, str], times: dict[str, float], cached: int) -> str:
+    lines = ["BuildKit {} cached step(s)".format(cached)]
+    for step, seconds in sorted(times.items(), key=lambda item: item[1], reverse=True)[:8]:
+        lines.append("step #{} {:.1f}s {}".format(step, seconds, labels.get(step, "")[:100]))
+    return "\n".join(lines)
+
+
 def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
                      env: dict[str, str] | None) -> str:
     """Stream build output to a root-only host log and retain useful errors.
@@ -274,24 +331,55 @@ def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
     actual error. Never keep only stdout[-3000:] or lose the failure reason.
     The fixed log is overwritten per build and contains no app credentials.
     """
-    fd = os.open(BUILD_LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as stream:
-        os.fchmod(stream.fileno(), 0o600)
-        try:
-            completed = subprocess.run(args, cwd=cwd, stdout=stream,
-                                       stderr=subprocess.STDOUT, timeout=timeout,
-                                       env=env, check=False)
-            code = completed.returncode
-        except subprocess.TimeoutExpired:
-            code = 124
+    samples: list[dict[str, float]] = []
+    stop = threading.Event()
+
+    def sampler() -> None:
+        while not stop.is_set():
+            try:
+                samples.append(build_pressure_sample())
+            except Exception:
+                pass  # Diagnostics never own deployment success or failure.
+            stop.wait(5)
+
+    thread = threading.Thread(target=sampler, daemon=True, name="mv3c-build-sampler")
+    start = time.monotonic()
+    thread.start()
+    try:
+        fd = os.open(BUILD_LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            try:
+                completed = subprocess.run(args, cwd=cwd, stdout=stream,
+                                           stderr=subprocess.STDOUT, timeout=timeout,
+                                           env=env, check=False)
+                code = completed.returncode
+            except subprocess.TimeoutExpired:
+                code = 124
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+    elapsed = time.monotonic() - start
     important = deque(maxlen=12)
     causes = deque(maxlen=8)
     earliest = []
     tail = deque(maxlen=22)
+    steps: dict[str, str] = {}
+    seconds: dict[str, float] = {}
+    cached_steps: set[str] = set()
     with BUILD_LOG_PATH.open("r", encoding="utf-8", errors="replace") as stored:
         for line in stored:
             line = line.rstrip()[:1000]
             tail.append(line)
+            header = re.match(r"^#(\d+) \[(.+?)\] (.*)", line)
+            if header:
+                steps[header.group(1)] = header.group(2) + " " + header.group(3)
+            done = re.match(r"^#(\d+) DONE ([0-9.]+)s$", line)
+            if done:
+                seconds[done.group(1)] = float(done.group(2))
+            cached = re.match(r"^#(\d+) CACHED$", line)
+            if cached:
+                cached_steps.add(cached.group(1))
             # Docker's final failed RUN statement often hides npm's actual
             # error. Capture the original error markers before its long tail.
             primary = re.search(
@@ -318,11 +406,16 @@ def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
         "\nOther errors:\n" + "\n".join(important)[-900:] +
         "\nLast output:\n" + "\n".join(tail)[-1500:]
     )
+    diagnostics = ("Docker build {:.1f}s, exit={}\n".format(elapsed, code)
+                   + build_pressure_summary(samples) + "\n"
+                   + buildkit_summary(steps, seconds, len(cached_steps)))
+    with BUILD_LOG_PATH.open("a", encoding="utf-8") as output:
+        output.write("\nMV3C BUILD DIAGNOSTICS\n" + diagnostics + "\n")
     if code:
-        raise UpdateError("docker build failed (exit {}), full log: {}\n{}".format(
-            code, BUILD_LOG_PATH, summary))
-    return "Docker build succeeded; full log: " + str(BUILD_LOG_PATH) + "\n" + "\n".join(tail)[-1000:]
-
+        raise UpdateError("docker build failed (exit {}), full log: {}\n{}\n{}".format(
+            code, BUILD_LOG_PATH, diagnostics, summary))
+    return (diagnostics + "\nDocker build succeeded; full log: "
+            + str(BUILD_LOG_PATH) + "\n" + "\n".join(tail)[-1000:])
 
 def run(args: list[str], cwd: Path, *, input_data: str | None = None,
         timeout: int = 120, env: dict[str, str] | None = None) -> str:
@@ -761,7 +854,9 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
                        candidate[:24] + " for " + target[:12] +
                        " (skipped redundant Docker build)")
         else:
-            build_local_image(repo, target)
+            details = build_local_image(repo, target)
+            if isinstance(details, str):
+                log.append(details[-6000:])
             # A successful build must also pass the complete metadata gate,
             # so both fresh and reused paths have the same admission rules.
             candidate = verified_existing_candidate(repo, target)
@@ -836,6 +931,8 @@ def check_needed(state: dict) -> bool:
     requested = state.get("checkRequestedAt")
     # The bridge exposes checkRequestedAt separately from the admin response.
     interval = state.get("config", {}).get("intervalMinutes", 10)
+    if not state.get("config", {}).get("autoEnabled", True) and not requested:
+        return False
     if not checked:
         return True
     try:
@@ -1006,7 +1103,7 @@ def execute(repo: Path) -> None:
                  attempted=target, verification="CI gate FAILED")
         return
 
-    if not job and state["config"]["autoEnabled"]:
+    if not job and state["config"].get("autoEnabled", True) and state["config"].get("autoDeployEnabled", False):
         if target == state.get("blockedSha"):
             report(repo, status="blocked",
                    lastError="此提交上次部署失败，已暂停自动重试；可手动重试或等待新的 GitHub 提交")
