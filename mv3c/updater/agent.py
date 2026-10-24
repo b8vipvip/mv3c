@@ -31,6 +31,16 @@ SSH_ORIGIN = "git@github.com:b8vipvip/mv3c.git"
 HTTPS_ORIGIN = "https://github.com/b8vipvip/mv3c.git"
 TRUSTED_ORIGINS = {SSH_ORIGIN, HTTPS_ORIGIN, "https://github.com/b8vipvip/mv3c"}
 SSH_COMMAND = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"
+# Pinned GitHub Ed25519 host key: same host identity used by chat2api updater.
+GITHUB_HOST_KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+GITHUB_KNOWN_HOSTS = Path("/run/mv3c-github-known-hosts")
+RELEASE_TAG_REFS = "refs/mv3c-release/tags"
+RELEASE_PROOF_REFS = "refs/mv3c-release/proofs"
+GIT_REFSPECS = (
+    "refs/heads/main:refs/remotes/origin/main",
+    "refs/tags/v*:refs/mv3c-release/tags/v*",
+    "refs/tags/mv3c-verified/v*:refs/mv3c-release/proofs/v*",
+)
 CI_NAMES = {"mv3c validation", "mv3c source Docker build"}
 USER_AGENT = "mv3c-updater/4.0"
 # Local Docker images remain in the host cache across updates. The GitHub
@@ -168,12 +178,18 @@ def cleanup_stale_mv3c_image_tags(repo: Path) -> list[str]:
     return removed
 
 def version_for_sha(repo: Path, sha: str) -> str:
-    """Return the semver tag pointing exactly at this deployed revision."""
+    """Derive the real version from the fetched official release refs, not GitHub API."""
     if not SHA.fullmatch(sha):
         raise UpdateError("Invalid Git SHA for version lookup")
-    versions = [tag.strip() for tag in git(repo, "tag", "--points-at", sha).splitlines()
-                if TAG.fullmatch(tag.strip())]
-    return max(versions, key=lambda tag: tuple(map(int, tag[1:].split(".")))) if versions else ""
+    versions = []
+    for tag in list_release_tags(repo):
+        if git(repo, "rev-parse", RELEASE_TAG_REFS + "/" + tag + "^{commit}") == sha:
+            versions.append(tag)
+    # Legacy local lightweight tags remain visible during upgrade from v0.1.5.
+    if not versions:
+        versions = [tag.strip() for tag in git(repo, "tag", "--points-at", sha).splitlines()
+                    if TAG.fullmatch(tag.strip())]
+    return max(versions, key=version_key) if versions else ""
 
 
 def build_local_image(repo: Path, sha: str) -> None:
@@ -258,41 +274,132 @@ def run(args: list[str], cwd: Path, *, input_data: str | None = None,
     return completed.stdout.strip()
 
 
-def git(repo: Path, *args: str, timeout: int = 120) -> str:
+def git(repo: Path, *args: str, timeout: int = 120, ssh_command: str | None = None) -> str:
     # All remote Git operations (both scheduled and admin-triggered) use SSH.
     # Never prompt for a passphrase, accept unknown host keys, or fall back to HTTPS.
     env = os.environ.copy()
-    env["GIT_SSH_COMMAND"] = SSH_COMMAND
+    env["GIT_SSH_COMMAND"] = ssh_command or SSH_COMMAND
     env["GIT_TERMINAL_PROMPT"] = "0"
     return run(["git", *args], repo, timeout=timeout, env=env)
 
 
-def fetch_from_origin(repo: Path, origin: str, *refspec: str) -> None:
-    """Fetch into origin's tracking refs from a pinned, explicitly selected URL."""
+def prepare_github_known_hosts() -> None:
+    """Pin GitHub's official Ed25519 key; never blindly ssh-keyscan a host."""
+    content = ("github.com ssh-ed25519 " + GITHUB_HOST_KEY + "\\n" +
+               "ssh.github.com ssh-ed25519 " + GITHUB_HOST_KEY + "\\n")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(GITHUB_KNOWN_HOSTS, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as output:
+            output.write(content)
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def fetch_from_origin(repo: Path, origin: str, *refspec: str,
+                      transport: str = "ssh-22") -> None:
+    """Bounded Git-only fetch from exact pinned sources. No REST API calls."""
     if origin not in (SSH_ORIGIN, HTTPS_ORIGIN):
         raise UpdateError("Untrusted GitHub source")
-    # A direct URL avoids relying on the configured origin transport.
-    # Verify insteadOf rewrites before fetching; no arbitrary destinations.
-    effective = git(repo, "ls-remote", "--get-url", origin)
-    if effective != origin:
+    if git(repo, "ls-remote", "--get-url", origin) != origin:
         raise UpdateError("Git URL rewrite prevents the expected transport")
-    git(repo, "fetch", "--quiet", "--prune", origin, *refspec, timeout=120)
+    if transport == "ssh-443" and origin == SSH_ORIGIN:
+        ssh = ("ssh -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 "
+               "-o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o StrictHostKeyChecking=yes "
+               "-o HostName=ssh.github.com -o Port=443 -o HostKeyAlias=ssh.github.com "
+               "-o UserKnownHostsFile=" + str(GITHUB_KNOWN_HOSTS) +
+               " -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519")
+    elif transport == "ssh-22" and origin == SSH_ORIGIN:
+        ssh = ("ssh -o BatchMode=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 "
+               "-o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o StrictHostKeyChecking=yes "
+               "-o HostKeyAlias=github.com -o UserKnownHostsFile=" +
+               str(GITHUB_KNOWN_HOSTS) +
+               " -o GlobalKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-ed25519")
+    elif transport == "https" and origin == HTTPS_ORIGIN:
+        ssh = SSH_COMMAND
+    else:
+        raise UpdateError("Invalid transport/origin combination")
+    args = ["fetch", "--quiet", "--no-tags", "--prune"]
+    if transport == "https":
+        args = ["-c", "http.version=HTTP/1.1", "-c", "http.lowSpeedLimit=1024",
+                "-c", "http.lowSpeedTime=12"] + args
+    git(repo, *args, origin, *refspec, timeout=35, ssh_command=ssh)
 
 
 def fetch_prefer_ssh(repo: Path, *refspec: str) -> str:
-    """Use SSH first for every update, retry HTTPS only when SSH fetch fails."""
+    """Match chat2api SSH 443 -> SSH 22 -> HTTPS, bounded twice."""
+    prepare_github_known_hosts()
+    failures = []
+    for attempt in range(2):
+        for transport, origin in (
+            ("ssh-443", SSH_ORIGIN), ("ssh-22", SSH_ORIGIN),
+            ("https", HTTPS_ORIGIN),
+        ):
+            try:
+                fetch_from_origin(repo, origin, *refspec, transport=transport)
+                print("Git fetch verified transport:", transport, flush=True)
+                return transport
+            except UpdateError as error:
+                failures.append(transport + ": " + str(error)[:150])
+        if attempt == 0:
+            time.sleep(2)
+    raise UpdateError("Git SSH-443 / SSH-22 / HTTPS all failed (bounded): " +
+                      "; ".join(failures)[-850:])
+
+
+def version_key(tag: str) -> tuple[int, int, int]:
+    if not TAG.fullmatch(tag):
+        raise UpdateError("Invalid official version tag")
+    return tuple(map(int, tag[1:].split(".")))
+
+
+def list_release_tags(repo: Path) -> list[str]:
+    raw = git(repo, "for-each-ref", "--format=%(refname:strip=3)",
+              RELEASE_TAG_REFS)
+    return [tag for tag in raw.splitlines() if TAG.fullmatch(tag)]
+
+
+def verify_release_proof(repo: Path, tag: str, sha: str) -> None:
+    """Only a post-Release CI-proof tag produced by the publishing workflow passes.
+
+    This relies on GitHub repository write access controls; it is not a detached
+    cryptographic signature. Protect release/proof tags using repository rulesets.
+    """
+    if not TAG.fullmatch(tag) or not SHA.fullmatch(sha):
+        raise UpdateError("Invalid release verification arguments")
+    proof = RELEASE_PROOF_REFS + "/" + tag
     try:
-        fetch_from_origin(repo, SSH_ORIGIN, *refspec)
-        return "SSH"
-    except UpdateError as ssh_error:
-        try:
-            fetch_from_origin(repo, HTTPS_ORIGIN, *refspec)
-            return "HTTPS 回退"
-        except UpdateError as https_error:
-            raise UpdateError(
-                "SSH 与 HTTPS 拉取均失败。SSH: " + str(ssh_error)[:600]
-                + "; HTTPS: " + str(https_error)[:600]
-            ) from https_error
+        kind = git(repo, "cat-file", "-t", proof)
+        peeled = git(repo, "rev-parse", proof + "^{commit}")
+        contents = git(repo, "cat-file", "-p", proof)
+    except UpdateError as error:
+        raise UpdateError("Missing release CI proof for " + tag +
+                          "; GitHub publish workflow must finish") from error
+    if kind != "tag" or peeled != sha:
+        raise UpdateError("Release proof is not an annotated tag for the selected SHA")
+    payload = contents.split("\\n\\n", 1)
+    if len(payload) != 2:
+        raise UpdateError("Malformed official release proof annotation")
+    lines = payload[1].splitlines()
+    if not lines or lines[0] != "MV3C_OFFICIAL_RELEASE_PROOF_V1":
+        raise UpdateError("Unsupported release CI proof format")
+    fields = {}
+    for line in lines[1:]:
+        if "=" in line:
+            key, value = line.split("=", 1)
+            if key in fields:
+                raise UpdateError("Duplicate release CI proof field")
+            fields[key] = value
+    if fields.get("release") != tag or fields.get("sha") != sha:
+        raise UpdateError("Release CI proof version/SHA mismatch")
+    if any(fields.get(k) != "success" for k in ("validation", "docker", "published")):
+        raise UpdateError("Release proof does not show both successful CI workflows")
+    if any(not re.fullmatch(r"[1-9][0-9]{0,19}", fields.get(k, ""))
+           for k in ("validation_id", "docker_id")):
+        raise UpdateError("Release proof lacks valid CI run references")
+
 
 
 def bridge(repo: Path, command: str, data: dict | None = None) -> object:
@@ -432,22 +539,21 @@ def is_descendant(repo: Path, previous: str, target: str) -> bool:
 
 
 def target_for_channel(repo: Path, channel: str) -> tuple[str, str]:
-    """Resolve strictly the newest published, non-prerelease version tag."""
+    """Discover the newest release and its Git-published CI evidence without REST."""
     if channel != "release":
         raise UpdateError("Only published GitHub Releases may be deployed")
-    release = json_from_github(API + "/releases/latest")
-    tag = release.get("tag_name", "")
-    if (not isinstance(tag, str) or not TAG.fullmatch(tag)
-            or release.get("draft") is True or release.get("prerelease") is True):
-        raise UpdateError("GitHub has no valid stable Release")
-    fetch_prefer_ssh(repo, "refs/heads/main:refs/remotes/origin/main")
-    fetch_prefer_ssh(repo, "tag", tag)
-    sha = git(repo, "rev-list", "-n", "1", "refs/tags/" + tag)
+    fetch_prefer_ssh(repo, *GIT_REFSPECS)
+    tags = list_release_tags(repo)
+    if not tags:
+        raise UpdateError("No Git-published release tags found")
+    tag = max(tags, key=version_key)
+    sha = git(repo, "rev-parse", RELEASE_TAG_REFS + "/" + tag + "^{commit}")
     if not SHA.fullmatch(sha):
-        raise UpdateError("Invalid Git commit from published Release")
+        raise UpdateError("Invalid Git commit for release")
+    verify_release_proof(repo, tag, sha)
     main_sha = git(repo, "rev-parse", "refs/remotes/origin/main")
     if not SHA.fullmatch(main_sha) or not is_descendant(repo, sha, main_sha):
-        raise UpdateError("Published release tag is not on trusted main history")
+        raise UpdateError("Published release proof is not on trusted main history")
     return sha, tag
 
 
@@ -797,8 +903,8 @@ def execute(repo: Path) -> None:
         if not is_descendant(repo, old, target):
             raise UpdateError("Target commit is not a fast-forward descendant of deployed version")
         available = target != old
-        progress("ci", 26, "校验 GitHub Actions 两项 CI", target_sha=target)
-        good, reason = ci_is_green(target) if available else (True, "")
+        progress("ci", 26, "校验 Git 发布记录中绑定 SHA 的两项 CI 证明", target_sha=target)
+        good, reason = True, ""  # CI was verified by the fetched post-Release Git proof.
         ci_pending = not good and reason.startswith(
             ("GitHub CI 尚未完成：", "GitHub CI 正在运行："))
         report(repo, currentSha=old, currentVersion=version_for_sha(repo, old),
@@ -843,7 +949,7 @@ def execute(repo: Path) -> None:
         if job:
             progress("checking", 8, "自动更新已通过 GitHub 版本检查", from_sha=old)
             progress("fetching", 16, "GitHub 代码已拉取")
-            progress("ci", 26, "两项 GitHub Actions 已通过", target_sha=target)
+            progress("ci", 26, "Git 发布证明与 SHA 已验证", target_sha=target)
     if not job:
         return
 
@@ -911,9 +1017,7 @@ def main() -> int:
             target, _label = target_for_channel(repo, "release")
             if not is_descendant(repo, current, target):
                 raise UpdateError("Bootstrap target is not a fast-forward descendant")
-            green, reason = ci_is_green(target)
-            if not green:
-                raise UpdateError("Bootstrap requires both completed GitHub CI runs: " + reason)
+            # target_for_channel already verified the Git-based post-Release CI proof.
             if not bootstrap_needs_deploy(repo, current, target):
                 return 0
             outcome, log, error = deploy(repo, current, target)
