@@ -67,6 +67,56 @@ def verify_built_image(repo: Path, sha: str) -> None:
                           + sha[:12] + ", got " + revision[:80])
 
 
+
+def verified_existing_candidate(repo: Path, sha: str) -> str | None:
+    """Reuse only an immutable-SHA-tagged, fully inspectable official image.
+
+    A build which succeeded but was rejected by the post-build disk reserve
+    leaves its candidate tagged. Rebuilding the same SHA wastes disk and may
+    repeatedly trip the reserve. Missing tags fall back to building; metadata
+    mismatches fail closed rather than silently overwriting existing images.
+    """
+    tag = image_for_sha(sha)
+    try:
+        raw = run(["docker", "image", "inspect", "--format", "{{json .}}", tag],
+                  repo, timeout=30)
+    except UpdateError as error:
+        message = str(error).lower()
+        if "no such image" in message or "no such object" in message:
+            return None
+        raise
+    try:
+        image = json.loads(raw)
+        config = image["Config"]
+        labels = config["Labels"]
+        env = config["Env"]
+        image_id = image["Id"]
+        layers = image["RootFS"]["Layers"]
+    except (KeyError, ValueError, TypeError) as error:
+        raise UpdateError("Existing candidate image inspection is invalid") from error
+    release = version_for_sha(repo, sha)
+    if not release or not TAG.fullmatch(release):
+        raise UpdateError("Existing candidate has no official Release version")
+    if (
+        not isinstance(labels, dict)
+        or labels.get("org.opencontainers.image.revision") != sha
+        or labels.get("org.opencontainers.image.version") != release
+        or labels.get("org.opencontainers.image.source") !=
+            "https://github.com/b8vipvip/mv3c"
+        or not isinstance(env, list)
+        or ("BUILD_COMMIT=" + sha) not in env
+        or ("MV3C_VERSION=" + release) not in env
+        or not isinstance(image_id, str)
+        or not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id)
+        or not isinstance(layers, list)
+        or len(layers) == 0
+    ):
+        raise UpdateError(
+            "Existing candidate image does not match trusted SHA/version, "
+            "runtime metadata or complete layers; refusing reuse")
+    return image_id
+
+
 def parse_docker_size(raw: str) -> int:
     """Read docker system df Size values; reject unknown units instead of guessing."""
     match = re.fullmatch(r"\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGTPE]?i?B)\s*",
@@ -704,13 +754,25 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         advance("merging", 43, "Git 快进至已通过 CI 的源码版本")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
-        advance("building", 54, "本机 BuildKit 增量构建，保留已有 Docker 层及 npm 缓存")
-        build_local_image(repo, target)
+        advance("building", 54, "先验证同 SHA 的已有镜像，缺失时再增量构建")
+        candidate = verified_existing_candidate(repo, target)
+        if candidate:
+            log.append("Reused verified existing Release image " +
+                       candidate[:24] + " for " + target[:12] +
+                       " (skipped redundant Docker build)")
+        else:
+            build_local_image(repo, target)
+            # A successful build must also pass the complete metadata gate,
+            # so both fresh and reused paths have the same admission rules.
+            candidate = verified_existing_candidate(repo, target)
+            if not candidate:
+                raise UpdateError("Docker build returned success but candidate tag is missing")
+            log.append("New Docker build image verified: " + candidate[:24])
         if disk_free_bytes(repo) < MIN_POST_BUILD_FREE_BYTES:
             raise UpdateError(
                 "Candidate built but less than 2GiB disk free; refusing to "
                 "switch the running container. Preserve old healthy service.")
-        log.append("Cached host Docker build and image revision check PASSED: "
+        log.append("Official Release candidate identity and disk reserve PASSED: "
                    + target[:12])
         # Only change the stable image tag after the candidate has built and
         # been verified. The old running container remains untouched up to here.
