@@ -6,6 +6,9 @@ const mongoose = require('mongoose');
 const ID = 'global';
 const DEFAULT_CONFIG = Object.freeze({
   autoEnabled: true,
+  // Legacy autoEnabled now means periodic checking, never unattended building.
+  // Deployment requires an explicit new opt-in even on upgraded installations.
+  autoDeployEnabled: false,
   channel: 'release',
   intervalMinutes: 10,
 });
@@ -32,7 +35,8 @@ async function initialize() {
 }
 function format(doc) {
   // Previously saved main mode is migrated at read time; deployment is release-only.
-  const config = { ...DEFAULT_CONFIG, ...(doc?.config || {}), channel: 'release' };
+  const config = { ...DEFAULT_CONFIG, ...(doc?.config || {}),
+    autoDeployEnabled: doc?.config?.autoDeployEnabled === true, channel: 'release' };
   const heartbeat = doc?.agentHeartbeat ? new Date(doc.agentHeartbeat) : null;
   const agentOnline = heartbeat && Number.isFinite(heartbeat.getTime()) &&
     Date.now() - heartbeat.getTime() < 180000;
@@ -75,6 +79,7 @@ function validateConfig(body) {
   const result = {};
   for (const [key, value] of Object.entries(body)) {
     if (key === 'autoEnabled' && typeof value === 'boolean') result[key] = value;
+    else if (key === 'autoDeployEnabled' && typeof value === 'boolean') result[key] = value;
     else if (key === 'channel' && value === 'release') result[key] = value;
     else if (key === 'intervalMinutes' && [5, 10, 15, 30, 60].includes(value)) {
       result[key] = value;
@@ -113,6 +118,8 @@ async function queueJob(actor, mode = 'manual') {
     _id: ID,
     pendingJob: { $exists: false },
     activeJob: { $exists: false },
+    // Server-side admission gate; checking a stale UI flag is not sufficient.
+    ...(mode === 'auto' ? { 'config.autoDeployEnabled': true } : {}),
   }, {
     $set: { pendingJob: job, status: 'queued', lastError: '' },
   }, { returnDocument: 'after' });
