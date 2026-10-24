@@ -42,7 +42,7 @@ GIT_REFSPECS = (
 )
 # Local Docker images remain in the host cache across updates. The GitHub
 # Actions image is tested for the exact SHA, but does not need to be transferred.
-MIN_DOCKER_FREE_BYTES = 8 * 1024 ** 3
+MIN_DOCKER_FREE_BYTES = 3 * 1024 ** 3
 BUILD_CACHE_SOFT_LIMIT_BYTES = 4 * 1024 ** 3
 MAX_RETAINED_SHA_TAGS = 0
 MIN_POST_BUILD_FREE_BYTES = 2 * 1024 ** 3
@@ -105,7 +105,7 @@ def disk_free_bytes(repo: Path) -> int:
 def disk_status(repo: Path) -> str:
     free = disk_free_bytes(repo)
     cache = build_cache_usage(repo)
-    summary = "Docker free {:.2f}GiB (minimum before build: 8GiB)".format(
+    summary = "Docker free {:.2f}GiB (minimum before build: 3GiB)".format(
         free / 1024**3)
     if cache is not None:
         summary += "; shared BuildKit cache {:.2f}GiB (MV3C alert threshold: 4GiB)".format(
@@ -119,7 +119,7 @@ def check_build_capacity(repo: Path) -> None:
     free = disk_free_bytes(repo)
     if free < MIN_DOCKER_FREE_BYTES:
         raise UpdateError(
-            "Docker build blocked: {:.2f}GiB free, at least 8GiB required. "
+            "Docker build blocked: {:.2f}GiB free, at least 3GiB required. "
             "Do not prune shared BuildKit cache or data volumes automatically."
             .format(free / 1024**3))
     print("MV3C pre-build disk gate: " + disk_status(repo), flush=True)

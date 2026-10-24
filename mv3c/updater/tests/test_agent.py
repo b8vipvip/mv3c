@@ -449,11 +449,22 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertFalse(any("prune" in word for word in runner.call_args.args[0]))
 
     def test_preflight_fails_closed_before_docker_mutation(self):
-        with patch.object(agent, "disk_free_bytes", return_value=7 * 1024 ** 3):
+        # Below the user-selected 3GiB threshold, refuse any Docker changes.
+        with patch.object(agent, "disk_free_bytes", return_value=3 * 1024 ** 3 - 1):
             with patch.object(agent, "run") as runner:
-                with self.assertRaisesRegex(agent.UpdateError, "8GiB required"):
+                with self.assertRaisesRegex(agent.UpdateError, "3GiB required"):
                     agent.check_build_capacity(pathlib.Path("/tmp"))
                 runner.assert_not_called()
+
+    def test_preflight_accepts_exactly_three_gib_and_warns_on_cache(self):
+        with (
+            patch.object(agent, "disk_free_bytes", return_value=3 * 1024 ** 3),
+            patch.object(agent, "build_cache_usage", return_value=5 * 1024 ** 3),
+            patch("builtins.print") as logger,
+        ):
+            agent.check_build_capacity(pathlib.Path("/tmp"))
+            self.assertIn("minimum before build: 3GiB", logger.call_args.args[0])
+            self.assertIn("shared cache over soft limit", logger.call_args.args[0])
 
     def test_post_build_reserve_prevents_container_switch(self):
         calls = []
@@ -557,7 +568,7 @@ class HostUpdaterTests(unittest.TestCase):
         from collections import namedtuple
         Usage = namedtuple("Usage", "total used free")
         with patch.object(agent.shutil, "disk_usage", return_value=Usage(10, 9, 1)):
-            with self.assertRaisesRegex(agent.UpdateError, "at least 8GiB required"):
+            with self.assertRaisesRegex(agent.UpdateError, "at least 3GiB required"):
                 agent.check_build_capacity(pathlib.Path("/tmp"))
 
     def test_successful_local_build_is_verified_before_container_switch(self):
