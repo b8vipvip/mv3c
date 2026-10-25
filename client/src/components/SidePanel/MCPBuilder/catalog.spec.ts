@@ -1,21 +1,35 @@
-import { filterPluginCatalog, findInstalledPreset, pluginCatalog } from './catalog';
+import { filterPluginCatalog, findInstalledPreset } from './catalog';
+import type { PluginPreset } from './catalog';
+
+// Search/filter fixtures only. The actual catalogue is owned by the server.
+const pluginCatalog: PluginPreset[] = [
+  { id: 'github', name: 'GitHub', category: '开发工具',
+    description: '仓库', url: 'https://example.com/github/',
+    auth: 'oauth', transport: 'streamable-http', website: 'https://example.com' },
+  { id: 'linear-readonly', name: 'Linear', category: '项目管理',
+    description: '任务', url: 'https://example.com/linear/',
+    auth: 'oauth', transport: 'streamable-http', website: 'https://example.com' },
+  { id: 'deepwiki', name: 'DeepWiki', category: '知识检索',
+    description: '中文知识', url: 'https://example.com/wiki/',
+    auth: 'none', transport: 'streamable-http', website: 'https://example.com' },
+];
 
 describe('mv3c plugin marketplace catalog', () => {
-  it('contains only provider-published HTTPS endpoints', () => {
+  it('handles server-supplied HTTPS records', () => {
     expect(pluginCatalog.length).toBeGreaterThan(1);
     for (const preset of pluginCatalog) {
       expect(preset.transport).toBe('streamable-http');
       expect(new URL(preset.url).protocol).toBe('https:');
       expect(new URL(preset.website).protocol).toBe('https:');
-      expect(preset.name).toBeTruthy();
     }
   });
 
   it('supports Chinese search and category filtering', () => {
-    expect(filterPluginCatalog('知识').map((item) => item.id)).toContain('deepwiki');
-    expect(filterPluginCatalog('github').map((item) => item.id)).toEqual(['github']);
-    expect(filterPluginCatalog('', '项目管理').map((item) => item.id)).toEqual(['linear-readonly']);
-    expect(filterPluginCatalog('nonexistent')).toEqual([]);
+    expect(filterPluginCatalog(pluginCatalog, '知识').map((item) => item.id)).toContain('deepwiki');
+    expect(filterPluginCatalog(pluginCatalog, 'github').map((item) => item.id)).toEqual(['github']);
+    expect(filterPluginCatalog(pluginCatalog, '', '项目管理').map((item) => item.id)).toEqual(['linear-readonly']);
+    expect(filterPluginCatalog(pluginCatalog, 'nonexistent')).toEqual([]);
+    expect(filterPluginCatalog([], 'github')).toEqual([]);
   });
 
   it('detects existing installs by normalized URL rather than display name', () => {

@@ -1,5 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
+const { validateHiddenCatalogIds } = require('./pluginCatalog.cjs');
 
 const DEFAULT_SITE = Object.freeze({
   title: 'mv3c',
@@ -15,7 +16,7 @@ const DEFAULT_PROVIDER = Object.freeze({
 });
 const DEFAULT_GUEST = Object.freeze({ enabled: true, tokenLimit: 100000 });
 // Interactive MCP Apps are opt-in until a dedicated sandbox origin is deployed.
-const DEFAULT_PLUGINS = Object.freeze({ appsEnabled: false, sandboxURL: '' });
+const DEFAULT_PLUGINS = Object.freeze({ appsEnabled: false, sandboxURL: '', catalogHidden: [] });
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,127}$/;
 
 function assertPlainObject(value, name) {
@@ -141,6 +142,8 @@ function validatePatch(body) {
       if (name === 'appsEnabled') {
         if (typeof value !== 'boolean') throw new TypeError('plugins.appsEnabled must be boolean');
         plugins.appsEnabled = value;
+      } else if (name === 'catalogHidden') {
+        plugins.catalogHidden = validateHiddenCatalogIds(value);
       } else if (name === 'sandboxURL') {
         if (typeof value !== 'string' || value.length > 2048) {
           throw new TypeError('plugins.sandboxURL must be a URL');
