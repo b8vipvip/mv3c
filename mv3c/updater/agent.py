@@ -338,7 +338,7 @@ def write_build_state(state: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             os.fchmod(stream.fileno(), 0o600)
             json.dump(state, stream, separators=(",", ":"), ensure_ascii=False)
-            stream.write("\\n")
+            stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(tmp, path)
@@ -363,8 +363,8 @@ def read_build_state(target: str) -> str:
     data = {key: value[key] for key in safe if key in value}
     return ("Host build evidence (diagnostic only): " +
             json.dumps(data, ensure_ascii=False, sort_keys=True)[:1200] +
-            "\\nHost build output: /var/log/mv3c-updater-build.log" +
-            "\\nCheck OOM/systemd: journalctl -k --since '<build time>'; "
+            "\nHost build output: /var/log/mv3c-updater-build.log" +
+            "\nCheck OOM/systemd: journalctl -k --since '<build time>'; "
             "journalctl -u mv3c-updater.service --since '<build time>'")
 
 
@@ -1098,7 +1098,7 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> Non
     if not is_target:
         diagnostic = read_build_state(attempted) if attempted else (
             "Build evidence unavailable: claimed job has no pinned target SHA")
-        validation += "\\n" + diagnostic
+        validation += "\n" + diagnostic
         print("MV3C interrupted update diagnostic: " + diagnostic[:1200], flush=True)
     try:
         bridge(repo, "progress", {
