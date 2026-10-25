@@ -163,3 +163,24 @@ Before enabling unattended deployments again, check at least two subsequent
 releases for correct health, readiness, version attestation and actual peak
 disk/I/O pressure under the new Dockerfile. Never run an unbounded prune or
 force-remove Docker volumes in response to a build-space warning.
+
+
+## 2026-10-25 更新中断的宿主机取证与内存保护
+
+当管理员下载的部署报告只包含 `Updater interrupted before completing target deployment`、而不包含 `docker build failed (...)` 原始错误时，说明下一轮宿主机更新器发现了遗留事务或 activeJob，**不能据此认定**是普通构建超时、MongoDB 故障或 OOM。
+
+新版在每次宿主机 Docker 构建时持续写入仅 root 可读的 `/var/log/mv3c-updater-build-state.json`（SHA、开始时间、最近采样、可用内存谷值、Swap 峰值、磁盘余量谷值、退出码、预警）；它不含令牌或会话内容。进程被系统杀死时状态可能保留为 `running`，并不是 Docker 仍在运行的证明。恢复阶段仅对完全相同目标 SHA 附加诊断到任务下载报告，保留原来的 `completeJob` 唯一终态控制和严格的 Git/镜像校验。
+
+在开始构建前，根据当时主机的 `MemAvailable` 将 Node.js 构建堆最大值限制为 `min(默认 2560 MiB, MemAvailable - 1024 MiB)`；可用内存少于 2 GiB 则拒绝发起新构建，以优先保护运行中的 MongoDB 和 MV3C。完整且通过官方 SHA/Release 校验的候选镜像仍可直接复用，不需要新的本地构建。这个调整不能保证在所有资源紧张的服务器上完成构建，必要时应增加 RAM 或通过受验证的预构建镜像交付。
+
+如果旧部署的更新器进程被外部终止，新增取证文件不会追溯过去的终止原因。排查本次事件需要读取宿主机的 **systemd journal、内核 OOM 日志、Docker daemon 日志以及原有 BuildKit 输出**，不要清理现存镜像/缓存和 MongoDB 数据卷。可在宿主机只读执行：
+
+```bash
+sudo journalctl -u mv3c-updater.service --since '2026-10-25 18:10:00' --until '2026-10-25 18:30:00' --no-pager
+sudo journalctl -k --since '2026-10-25 18:10:00' --until '2026-10-25 18:30:00' --no-pager | grep -Ei 'oom|out of memory|killed process|memory cgroup' || true
+sudo journalctl -u docker --since '2026-10-25 18:10:00' --until '2026-10-25 18:30:00' --no-pager | tail -n 120
+sudo tail -n 100 /var/log/mv3c-updater-build.log
+sudo docker inspect mv3c-mongodb-1 --format 'Status={{.State.Status}} OOMKilled={{.State.OOMKilled}} RestartCount={{.RestartCount}} ExitCode={{.State.ExitCode}}'
+```
+
+本地时间按宿主机时区解释；此示例基于事发当时服务器记录的北京时间。
