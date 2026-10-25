@@ -161,7 +161,7 @@ export default function Mv3cAdmin() {
   const [requestDownloading, setRequestDownloading] = useState(false);
   const [requestExportCount, setRequestExportCount] = useState(100);
   const [updates, setUpdates] = useState<UpdateState | null>(null);
-  const [cachedReleaseVersion, setCachedReleaseVersion] = useState('v0.1.22');
+  const [cachedReleaseVersion, setCachedReleaseVersion] = useState('');
   const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
     autoEnabled: true, autoDeployEnabled: false, channel: 'release', intervalMinutes: 10,
