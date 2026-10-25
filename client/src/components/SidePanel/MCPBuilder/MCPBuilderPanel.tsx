@@ -20,7 +20,7 @@ import MCPServerDialog from './MCPServerDialog';
 import MCPServerList from './MCPServerList';
 import PluginDiscovery from './PluginDiscovery';
 import type { PluginPreset } from './catalog';
-import { AuthTypeEnum, AuthorizationTypeEnum } from './MCPServerDialog/hooks/useMCPServerForm';
+import { initialMCPConfig } from './presetConfig';
 import store from '~/store';
 
 export default function MCPBuilderPanel() {
@@ -49,17 +49,7 @@ export default function MCPBuilderPanel() {
   const [showDialog, setShowDialog] = useState(false);
   const [activeView, setActiveView] = useState<'discover' | 'installed'>('discover');
   const [installPreset, setInstallPreset] = useState<PluginPreset | null>(null);
-  const installInitial = useMemo(() => installPreset ? ({
-    title: installPreset.name,
-    description: installPreset.description,
-    url: installPreset.url,
-    type: installPreset.transport,
-    auth: installPreset.auth === 'token' ? {
-      auth_type: AuthTypeEnum.ServiceHttp,
-      api_key_source: 'user' as const,
-      api_key_authorization_type: AuthorizationTypeEnum.Bearer,
-    } : undefined,
-  }) : null, [installPreset]);
+  const installInitial = useMemo(() => installPreset ? initialMCPConfig(installPreset) : null, [installPreset]);
   const [searchQuery, setSearchQuery] = useState('');
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const configDialogProps = getConfigDialogProps();
