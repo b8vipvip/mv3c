@@ -288,6 +288,81 @@ class HostUpdaterTests(unittest.TestCase):
                             with self.assertRaisesRegex(agent.UpdateError, "trusted main"):
                                 agent.target_for_channel(repo, "release")
 
+    def test_pinned_release_proof_and_main_ancestry_are_mandatory(self):
+        repo = pathlib.Path("/tmp")
+        with (
+            patch.object(agent, "fetch_prefer_ssh", return_value="ssh-443"),
+            patch.object(agent, "list_release_tags",
+                         return_value=["v0.1.22", "v0.1.23"]),
+            patch.object(agent, "git", side_effect=[SHA1, SHA2]),
+            patch.object(agent, "verify_release_proof") as proof,
+            patch.object(agent, "is_descendant", return_value=True),
+        ):
+            self.assertEqual(agent.target_for_channel(
+                repo, "release", "v0.1.22"), (SHA1, "v0.1.22"))
+            proof.assert_called_once_with(repo, "v0.1.22", SHA1)
+        with patch.object(agent, "fetch_prefer_ssh"), (
+            patch.object(agent, "list_release_tags",
+                         return_value=["v0.1.23"])
+        ):
+            with self.assertRaisesRegex(agent.UpdateError, "no fetched official tag"):
+                agent.target_for_channel(repo, "release", "v0.1.22")
+        for unsafe in ("v0.1.22-rc", "../tag", "main", "", "v0.1.23;rm"):
+            with self.assertRaisesRegex(agent.UpdateError, "Invalid requested"):
+                agent.target_for_channel(repo, "release", unsafe)
+        with (
+            patch.object(agent, "fetch_prefer_ssh"),
+            patch.object(agent, "list_release_tags",
+                         return_value=["v0.1.22"]),
+            patch.object(agent, "git", side_effect=[SHA1, SHA2]),
+            patch.object(agent, "verify_release_proof",
+                         side_effect=agent.UpdateError("CI proof invalid")),
+        ):
+            with self.assertRaisesRegex(agent.UpdateError, "CI proof invalid"):
+                agent.target_for_channel(repo, "release", "v0.1.22")
+
+    def test_cached_only_missing_candidate_never_builds_or_cleans(self):
+        with tempfile.TemporaryDirectory() as folder:
+            repo = pathlib.Path(folder)
+            with (
+                patch.object(agent, "verified_existing_candidate", return_value=None),
+                patch.object(agent, "check_build_capacity") as gate,
+                patch.object(agent, "cleanup_stale_mv3c_image_tags") as clean,
+                patch.object(agent, "build_local_image") as build,
+                patch.object(agent, "run") as docker,
+                patch.object(agent, "git") as git,
+            ):
+                status, report, error = agent.deploy(
+                    repo, SHA1, SHA2, reuse_only=True)
+            self.assertEqual(status, "failed")
+            self.assertIn("reuse-only", error)
+            self.assertIn("live container, Git and image unchanged", report)
+            for mock in (gate, clean, build, docker, git):
+                mock.assert_not_called()
+
+    def test_cached_only_valid_candidate_skips_build_and_preserves_other_tags(self):
+        with tempfile.TemporaryDirectory() as folder:
+            repo = pathlib.Path(folder)
+            with (
+                patch.object(agent, "verified_existing_candidate",
+                             return_value="sha256:" + "a" * 64),
+                patch.object(agent, "disk_free_bytes", return_value=int(2.5 * 1024**3)),
+                patch.object(agent, "cleanup_stale_mv3c_image_tags") as clean,
+                patch.object(agent, "check_build_capacity") as gate,
+                patch.object(agent, "build_local_image") as build,
+                patch.object(agent, "run", return_value="ok"),
+                patch.object(agent, "git"),
+                patch.object(agent, "wait_healthy"),
+                patch.object(agent, "verify_deployment",
+                             return_value="Post-deploy validation PASSED"),
+            ):
+                status, report, error = agent.deploy(repo, SHA1, SHA2, reuse_only=True)
+            self.assertEqual((status, error), ("success", ""))
+            self.assertIn("skipped redundant Docker build", report)
+            clean.assert_not_called()
+            gate.assert_not_called()
+            build.assert_not_called()
+
     def test_latest_release_without_proof_never_falls_back_to_older_version(self):
         with (
             patch.object(agent, "fetch_prefer_ssh"),

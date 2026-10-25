@@ -14,6 +14,7 @@ const DEFAULT_CONFIG = Object.freeze({
 });
 const SHA = /^[0-9a-f]{40}$/i;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OFFICIAL_TAG = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/;
 const STAGE_SET = new Set([
   'queued', 'checking', 'fetching', 'ci', 'backup', 'merging',
   'building', 'restarting', 'verifying', 'rollback', 'complete',
@@ -104,14 +105,32 @@ async function requestCheck(actor) {
   });
   return getState();
 }
-async function queueJob(actor, mode = 'manual') {
+async function queueJob(actor, mode = 'manual', options = {}) {
   if (!['manual', 'auto'].includes(mode)) throw new TypeError('Invalid update mode');
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('Invalid deployment selection');
+  }
+  const keys = Object.keys(options);
+  if (keys.some((key) => !['targetVersion', 'reuseOnly'].includes(key))) {
+    throw new TypeError('Unknown deployment selection field');
+  }
+  const selected = options.targetVersion;
+  if (selected !== undefined && (!OFFICIAL_TAG.test(selected) || mode !== 'manual')) {
+    throw new TypeError('Pinned Release must be a valid official version in a manual job');
+  }
+  if (options.reuseOnly !== undefined && options.reuseOnly !== true) {
+    throw new TypeError('reuseOnly can only be true when provided');
+  }
+  if ((selected !== undefined) !== (options.reuseOnly === true)) {
+    throw new TypeError('Pinned Release requires reuseOnly=true; never build a missing pinned image');
+  }
   await initialize();
   const job = {
     id: crypto.randomUUID(),
     requestedAt: new Date(),
     requestedBy: String(actor),
     mode,
+    ...(selected ? { targetVersion: selected, reuseOnly: true } : {}),
     progress: { stage: 'queued', percent: 0, message: '等待宿主机执行', updatedAt: new Date(), steps: [] },
   };
   const result = await collection().findOneAndUpdate({
@@ -202,6 +221,8 @@ function renderReport(entry) {
     '================================',
     'Job ID: ' + entry.jobId,
     'Mode: ' + (entry.mode || 'unknown'),
+    'Pinned Release: ' + (entry.targetVersion || '-'),
+    'Reuse only: ' + (entry.reuseOnly === true ? 'yes' : 'no'),
     'Requested by: ' + (entry.requestedBy || 'unknown'),
     'Requested at: ' + (entry.requestedAt ? new Date(entry.requestedAt).toISOString() : '-'),
     'Started at: ' + (entry.startedAt ? new Date(entry.startedAt).toISOString() : '-'),
@@ -296,7 +317,7 @@ async function completeJob(payload) {
   const now = new Date();
   const record = await collection().findOne(
     { _id: ID, 'activeJob.id': payload.jobId },
-    { projection: { activeJob: 1 } },
+    { projection: { activeJob: 1, latestSha: 1 } },
   );
   if (!record?.activeJob) throw new Error('No matching active update job');
   const active = record.activeJob;
@@ -313,7 +334,7 @@ async function completeJob(payload) {
       agentHeartbeat: now,
       ...(payload.outcome === 'success' ? { currentSha: sha, currentVersion: version,
         lastSuccessAt: now,
-        updateAvailable: false } : {}),
+        updateAvailable: Boolean(record.latestSha && record.latestSha !== sha) } : {}),
       ...(['failed', 'rolled_back'].includes(payload.outcome) && attemptedSha
         ? { blockedSha: attemptedSha } : {}),
     },
@@ -322,7 +343,9 @@ async function completeJob(payload) {
       history: {
         $each: [{
           jobId: payload.jobId, outcome: payload.outcome,
-          mode: active.mode, requestedBy: active.requestedBy,
+          mode: active.mode, targetVersion: active.targetVersion || '',
+          reuseOnly: active.reuseOnly === true,
+          requestedBy: active.requestedBy,
           requestedAt: active.requestedAt, startedAt, finishedAt: now, durationMs,
           fromSha, attemptedSha, sha, version, error, verification, log,
           steps: active.progress?.steps || [],

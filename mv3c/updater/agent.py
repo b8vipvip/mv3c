@@ -719,15 +719,20 @@ def is_descendant(repo: Path, previous: str, target: str) -> bool:
     ).returncode == 0
 
 
-def target_for_channel(repo: Path, channel: str) -> tuple[str, str]:
-    """Discover the newest release and its Git-published CI evidence without REST."""
+def target_for_channel(repo: Path, channel: str,
+                       requested_version: str | None = None) -> tuple[str, str]:
+    """Resolve latest or a precisely pinned official Release; verify the same CI proof."""
     if channel != "release":
         raise UpdateError("Only published GitHub Releases may be deployed")
+    if requested_version is not None and not TAG.fullmatch(requested_version):
+        raise UpdateError("Invalid requested official Release version")
     fetch_prefer_ssh(repo, *GIT_REFSPECS)
     tags = list_release_tags(repo)
     if not tags:
         raise UpdateError("No Git-published release tags found")
-    tag = max(tags, key=version_key)
+    if requested_version is not None and requested_version not in tags:
+        raise UpdateError("Pinned Release has no fetched official tag: " + requested_version)
+    tag = requested_version or max(tags, key=version_key)
     sha = git(repo, "rev-parse", RELEASE_TAG_REFS + "/" + tag + "^{commit}")
     if not SHA.fullmatch(sha):
         raise UpdateError("Invalid Git commit for release")
@@ -933,7 +938,8 @@ def restore_interrupted_local_deploy(repo: Path) -> str:
     return "Interrupted local build/deployment restored verified version " + previous[:12]
 
 
-def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str, str, str]:
+def deploy(repo: Path, old: str, target: str, *, on_progress=None,
+           reuse_only: bool = False) -> tuple[str, str, str]:
     """Build from the CI-approved commit with the host's Docker/BuildKit cache."""
     log: list[str] = []
     backed_up = False
@@ -954,6 +960,10 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         # Require the 3GiB build threshold only when a new Docker build is
         # actually needed. The post-build 2GiB switch reserve still applies.
         staged_candidate = verified_existing_candidate(repo, target)
+        if staged_candidate is None and reuse_only:
+            raise UpdateError(
+                "Pinned Release is reuse-only but verified local image is missing; "
+                "no Docker build or container change attempted.")
         if staged_candidate is None:
             # Only when a matching candidate is ABSENT: reclaim at most five
             # superseded mv3c:sha-* tags before judging available capacity.
@@ -989,6 +999,10 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
                        candidate[:24] + " for " + target[:12] +
                        " (skipped redundant Docker build)")
         else:
+            if reuse_only:
+                raise UpdateError(
+                    "Pinned Release candidate disappeared before switch; "
+                    "refusing Docker rebuild and preserving healthy service.")
             details = build_local_image(repo, target)
             if isinstance(details, str):
                 log.append(details[-6000:])
@@ -1021,7 +1035,9 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         # Cleanup is not part of the deployment transaction. Failing to prune
         # an old SHA tag must never roll back a healthy production service.
         try:
-            removed = cleanup_stale_mv3c_image_tags(repo)
+            # Recovery of a specifically pinned cached image should not evict
+            # any other candidate that a later manual deployment may need.
+            removed = [] if reuse_only else cleanup_stale_mv3c_image_tags(repo)
             log.append("MV3C SHA image retention: removed {} stale tag(s)".format(
                 len(removed)))
             for tag in removed:
@@ -1153,7 +1169,7 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> Non
     })
 
 
-def execute(repo: Path) -> None:
+def execute(repo: Path, *, recovery_version: str | None = None) -> None:
     # Recover BEFORE the database bridge: a container that crashed during
     # switching may be unavailable, so it cannot be asked for job state.
     recovered = restore_interrupted_local_deploy(repo)
@@ -1177,6 +1193,22 @@ def execute(repo: Path) -> None:
     # Claim manual work before GitHub checks: progress should say what the
     # worker is doing instead of reporting "queued" for a long fetch.
     job = bridge(repo, "claim") if state.get("pendingJob") else None
+    # A CLI bootstrap override is permitted only for an administrator-queued
+    # manual job, using this same canonical host agent and completeJob path.
+    # It is never an independent deployment authority.
+    if recovery_version is not None:
+        if not TAG.fullmatch(recovery_version):
+            raise UpdateError("Invalid cached Recovery Release version")
+        if not job or job.get("mode") != "manual":
+            raise UpdateError("Cached recovery requires a claimed manual admin job")
+        if job.get("targetVersion") not in (None, recovery_version):
+            raise UpdateError("Cached recovery version differs from queued admin request")
+    pinned_version = recovery_version or (job.get("targetVersion") if job else None)
+    reuse_only = pinned_version is not None
+    if pinned_version and (not TAG.fullmatch(pinned_version) or not job or
+                           job.get("mode") != "manual" or
+                           (recovery_version is None and job.get("reuseOnly") is not True)):
+        raise UpdateError("Pinned Release needs a manual job and reuseOnly=true")
     label = ""  # Failures before release resolution cannot report an unspecified version.
     def progress(stage: str, percent: int, message: str, *,
                  from_sha: str = "", target_sha: str = "") -> None:
@@ -1211,7 +1243,7 @@ def execute(repo: Path) -> None:
     try:
         progress("checking", 8, "检查当前 Git 状态与更新通道", from_sha=old)
         progress("fetching", 16, "优先 SSH 获取 GitHub 提交（失败回退 HTTPS）")
-        target, label = target_for_channel(repo, "release")
+        target, label = target_for_channel(repo, "release", pinned_version)
         if not is_descendant(repo, old, target):
             raise UpdateError("Target commit is not a fast-forward descendant of deployed version")
         available = target != old
@@ -1219,9 +1251,13 @@ def execute(repo: Path) -> None:
         good, reason = True, ""  # CI was verified by the fetched post-Release Git proof.
         ci_pending = not good and reason.startswith(
             ("GitHub CI 尚未完成：", "GitHub CI 正在运行："))
+        # A one-time pinned recovery must not lie about the latest Release.
+        latest_tag = max(list_release_tags(repo), key=version_key)
+        latest_sha = (git(repo, "rev-parse", RELEASE_TAG_REFS + "/" +
+                          latest_tag + "^{commit}") if pinned_version else target)
         report(repo, currentSha=old, currentVersion=version_for_sha(repo, old),
-               latestSha=target, latestVersion=label, latestLabel=label,
-               latestUrl="https://github.com/" + REPO + "/releases/tag/" + label,
+               latestSha=latest_sha, latestVersion=latest_tag, latestLabel=latest_tag,
+               latestUrl="https://github.com/" + REPO + "/releases/tag/" + latest_tag,
                checkedAt=utc_now(), updateAvailable=available,
                ciMessage=reason if ci_pending else "",
                **({"status": "checking", "lastError": ""}
@@ -1283,7 +1319,11 @@ def execute(repo: Path) -> None:
     )
     heartbeat_thread.start()
     try:
-        outcome, log, error = deploy(repo, old, target, on_progress=progress)
+        if reuse_only:
+            print("Pinned cached Release deployment; Docker build prohibited: " + label,
+                  flush=True)
+        outcome, log, error = deploy(repo, old, target,
+                                    on_progress=progress, reuse_only=reuse_only)
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=2)
@@ -1306,6 +1346,8 @@ def execute(repo: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="mv3c host update worker")
     parser.add_argument("--repo", required=True, type=Path, help="Host Git checkout path")
+    parser.add_argument("--recover-cached-release", default=None,
+                        help="One-shot official cached Release; manual queued job required")
     args = parser.parse_args()
     repo = args.repo.resolve(strict=True)
     if os.geteuid() != 0:
@@ -1317,7 +1359,7 @@ def main() -> int:
         except BlockingIOError:
             print("Another mv3c update check is already running")
             return 0
-        execute(repo)
+        execute(repo, recovery_version=args.recover_cached_release)
     return 0
 
 
