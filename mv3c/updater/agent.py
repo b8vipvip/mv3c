@@ -253,6 +253,22 @@ def build_local_image(repo: Path, sha: str) -> None:
     heap = os.environ.get("MV3C_BUILD_NODE_HEAP_MB", "2560")
     if not heap.isdecimal() or not 1024 <= int(heap) <= 8192:
         raise UpdateError("MV3C_BUILD_NODE_HEAP_MB must be 1024..8192")
+    # Prevent a local frontend build from claiming nearly all RAM while the
+    # production API and MongoDB stay online. Node heap is a ceiling, not total
+    # build memory, so reserve at least 1GiB of MemAvailable for other processes.
+    available_mib = meminfo_kib().get("MemAvailable", 0) // 1024
+    if available_mib:
+        if available_mib < 2048:
+            raise UpdateError(
+                "Docker build deferred: less than 2GiB MemAvailable on host; "
+                "protecting live MongoDB and API. Add RAM or use an independently "
+                "validated, immutable prebuilt Release candidate.")
+        capped_heap = min(int(heap), max(1024, available_mib - 1024))
+        if capped_heap < int(heap):
+            print("MV3C build heap capped from {}MiB to {}MiB; "
+                  "preserving >=1GiB for live services".format(heap, capped_heap),
+                  flush=True)
+        heap = str(capped_heap)
     env = os.environ.copy()
     env["DOCKER_BUILDKIT"] = "1"
     details = run([
