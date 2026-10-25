@@ -58,6 +58,7 @@ type UpdateProgress = {
 };
 type UpdateJob = {
   id: string; mode: string; requestedAt: string; requestedBy: string;
+  targetVersion?: string; reuseOnly?: boolean;
   progress?: UpdateProgress;
 };
 type UpdateHistory = {
@@ -160,6 +161,7 @@ export default function Mv3cAdmin() {
   const [requestDownloading, setRequestDownloading] = useState(false);
   const [requestExportCount, setRequestExportCount] = useState(100);
   const [updates, setUpdates] = useState<UpdateState | null>(null);
+  const [cachedReleaseVersion, setCachedReleaseVersion] = useState('v0.1.22');
   const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
     autoEnabled: true, autoDeployEnabled: false, channel: 'release', intervalMinutes: 10,
@@ -460,6 +462,26 @@ export default function Mv3cAdmin() {
     });
   };
 
+  const requestCachedReleaseDeployment = () => {
+    const version = cachedReleaseVersion.trim();
+    if (!/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
+      setError('请输入正式版本号，例如 v0.1.22。');
+      return;
+    }
+    if (!window.confirm(
+      '仅复用本地已经构建且通过 SHA/正式版验证的 ' + version +
+      ' 镜像。若镜像不存在会直接失败，绝不重新构建或删除缓存。确认加入单次部署队列？'
+    )) return;
+    void run(async () => {
+      if (!token) return;
+      await adminRequest(token, '/updates/deploy', {
+        method: 'POST', body: JSON.stringify({ targetVersion: version, reuseOnly: true }),
+      });
+      await loadUpdates();
+      setMessage('已排队复用 ' + version + ' 本地镜像；不存在或不匹配时将拒绝构建。');
+    });
+  };
+
   const downloadUpdateReport = async (jobId: string) => {
     if (!token || downloadingReport) return;
     setDownloadingReport(jobId);
@@ -753,8 +775,10 @@ export default function Mv3cAdmin() {
                       {updates.blockedSha && (
                         <p className="text-amber-600">自动重试已暂停的提交：{updates.blockedSha.slice(0, 12)}</p>
                       )}
-                      {updates.pendingJob && <p>排队任务：{updates.pendingJob.id}</p>}
-                      {updates.activeJob && <p>正在执行：{updates.activeJob.id}</p>}
+                      {updates.pendingJob && <p>排队任务：{updates.pendingJob.id}
+                        {updates.pendingJob.targetVersion && '（仅复用 ' + updates.pendingJob.targetVersion + '）'}</p>}
+                      {updates.activeJob && <p>正在执行：{updates.activeJob.id}
+                        {updates.activeJob.targetVersion && '（仅复用 ' + updates.activeJob.targetVersion + '）'}</p>}
                     </div>
                     {(updates.pendingJob || updates.activeJob) && (() => {
                       const job = updates.activeJob || updates.pendingJob!;
@@ -901,6 +925,31 @@ export default function Mv3cAdmin() {
                         onClick={() => void loadUpdates()}>
                         刷新状态
                       </button>
+                    </div>
+                    <div className="space-y-3 rounded-lg border border-border-medium bg-surface-secondary p-4">
+                      <h3 className="font-semibold">仅复用本地正式版镜像（不构建）</h3>
+                      <p className="text-sm text-text-secondary">
+                        适合磁盘不足时恢复已经完成构建的历史正式版。版本必须附有 GitHub 正式发布及 CI 证明，
+                        且是当前版本之后、可信 main 历史上的提交。若候选镜像不存在、元数据不匹配或剩余空间不足 2 GiB，
+                        会安全失败，不会拉起 Docker build，也不会清理 BuildKit 缓存。
+                      </p>
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="min-w-[180px] flex-1 space-y-1 text-sm">
+                          <span className="font-medium">本地候选镜像的正式版本</span>
+                          <input className={fieldClass} value={cachedReleaseVersion}
+                            placeholder="v0.1.22" onChange={(e) => setCachedReleaseVersion(e.target.value)} />
+                        </label>
+                        <button className={subtleButton}
+                          disabled={busy || !updates.agentOnline ||
+                            Boolean(updates.pendingJob || updates.activeJob)}
+                          onClick={requestCachedReleaseDeployment}>
+                          指定正式版 · 只复用不构建
+                        </button>
+                      </div>
+                      <p className="text-xs text-text-secondary">
+                        此功能需要宿主机更新器也已具备版本锁定能力。旧版更新器不得处理此类任务；
+                        一次性恢复请使用官方维护文档的唯一更新器引导流程。
+                      </p>
                     </div>
                     <p className="text-xs text-text-secondary">
                       更新会保留 MongoDB 与持久化数据卷。部署失败时尝试回滚应用代码和镜像；
