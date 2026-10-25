@@ -53,9 +53,9 @@ export function findInstalledPreset(
   return servers.some((server) => server.config?.url?.replace(/\/+$/, '') === expected);
 }
 
-export function filterPluginCatalog(query: string, category: string = '全部'): PluginPreset[] {
+export function filterPluginCatalog(query: string, category: string = '全部', items: readonly PluginPreset[] = pluginCatalog): PluginPreset[] {
   const needle = query.trim().toLocaleLowerCase();
-  return pluginCatalog.filter((preset) =>
+  return items.filter((preset) =>
     (category === '全部' || preset.category === category) &&
     [preset.name, preset.description, preset.category].some((value) =>
       value.toLocaleLowerCase().includes(needle),
