@@ -729,7 +729,15 @@ export default function Mv3cAdmin() {
                   <p>正在读取更新状态…</p>
                 ) : (
                   <>
-                    {!updates.agentOnline && (
+                    {!updates.agentOnline && (updates.activeJob || updates.pendingJob) && (
+                      <div role="status" className="rounded-lg border border-amber-500 p-3 text-sm">
+                        更新任务已入队或仍在执行，但最近没有收到宿主机心跳。
+                        Docker 构建可能长时间处于同一阶段；阶段百分比不等于构建百分比。
+                        查看宿主机 <code>journalctl -u mv3c-updater.service</code> 和
+                        <code> /var/log/mv3c-updater-build.log</code>，请勿重新安装更新器或重复部署。
+                      </div>
+                    )}
+                    {!updates.agentOnline && !updates.activeJob && !updates.pendingJob && (
                       <div role="alert" className="rounded-lg border border-amber-500 p-3 text-sm">
                         宿主机更新服务未连接。需要在部署 mv3c 的服务器执行一次
                         <code className="mx-1">sudo bash mv3c/updater/install.sh</code>
