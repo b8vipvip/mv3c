@@ -1117,7 +1117,27 @@ def execute(repo: Path) -> None:
         return
 
     print("Deploying published mv3c Release", label, target, flush=True)
-    outcome, log, error = deploy(repo, old, target, on_progress=progress)
+    # Docker may be busy installing dependencies or exporting layers for minutes.
+    # A heartbeat ONLY renews the current job lease; it never updates progress,
+    # declares a terminal, or authorizes a second deployment process.
+    heartbeat_stop = threading.Event()
+    def heartbeat_during_deploy() -> None:
+        while not heartbeat_stop.wait(40):
+            try:
+                bridge(repo, "heartbeat", {"jobId": job["id"]})
+            except Exception as exc:
+                # The old container might not support the command during its
+                # first upgrade, or be unavailable during recreation.
+                print("MV3C updater heartbeat warning:", str(exc)[:160], flush=True)
+    heartbeat_thread = threading.Thread(
+        target=heartbeat_during_deploy, daemon=True, name="mv3c-update-heartbeat"
+    )
+    heartbeat_thread.start()
+    try:
+        outcome, log, error = deploy(repo, old, target, on_progress=progress)
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=2)
     validation_line = next(
         (line for line in log.splitlines()
          if line.startswith(("Post-deploy validation PASSED", "Rollback validation PASSED"))),
