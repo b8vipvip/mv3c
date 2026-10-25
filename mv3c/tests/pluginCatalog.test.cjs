@@ -6,9 +6,11 @@ const {
 } = require('../pluginCatalog.cjs');
 
 test('curated catalogue is single source of published state', () => {
-  assert.equal(catalog.length, 3);
-  assert.deepEqual(allowedIds, ['github', 'linear-readonly', 'deepwiki']);
-  assert.equal(listCatalog(['github']).length, 2);
+  assert.equal(catalog.length, 4);
+  assert.deepEqual(allowedIds, ['github', 'gitee', 'linear-readonly', 'deepwiki']);
+  assert.equal(catalog.find((item) => item.id === 'gitee').url, 'https://api.gitee.com/mcp');
+  assert.equal(catalog.find((item) => item.id === 'gitee').auth, 'token');
+  assert.equal(listCatalog(['github']).length, 3);
   assert.equal(listCatalog(['github'], true).find((item) => item.id === 'github').published, false);
   assert.equal(listCatalog().find((item) => item.id === 'github').published, true);
   assert.deepEqual(validateHiddenCatalogIds(['deepwiki']), ['deepwiki']);
