@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthContext } from '~/hooks';
+import PluginAdminPanel from '~/components/Admin/PluginAdminPanel';
 
 type SiteSettings = {
   title: string;
@@ -17,12 +18,10 @@ type ProviderSettings = {
   configured: boolean;
 };
 type GuestSettings = { enabled: boolean; tokenLimit: number };
-type PluginSettings = { appsEnabled: boolean; sandboxURL: string };
 type AdminSettings = {
   guest: GuestSettings;
   site: SiteSettings;
   chat2api: ProviderSettings;
-  plugins: PluginSettings;
   updatedAt: string | null;
 };
 type ManagedUser = {
@@ -133,13 +132,12 @@ const subtleButton =
 
 export default function Mv3cAdmin() {
   const { token, isAuthenticated, user, logout } = useAuthContext();
-  const [tab, setTab] = useState<'provider' | 'site' | 'guest' | 'users' | 'audit' | 'updates' | 'logs' | 'requests'>('provider');
+  const [tab, setTab] = useState<'provider' | 'site' | 'guest' | 'users' | 'audit' | 'updates' | 'logs' | 'requests' | 'plugins'>('provider');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [site, setSite] = useState<SiteSettings>({
     title: 'mv3c', welcome: '欢迎使用 mv3c', publicUrl: '', registrationEnabled: false,
   });
   const [guest, setGuest] = useState<GuestSettings>({ enabled: true, tokenLimit: 100000 });
-  const [plugins, setPlugins] = useState<PluginSettings>({ appsEnabled: false, sandboxURL: '' });
   const [provider, setProvider] = useState<ProviderSettings>({
     enabled: true, baseURL: '', models: [], fetchModels: true,
     apiKeyConfigured: false, configured: false,
@@ -172,16 +170,12 @@ export default function Mv3cAdmin() {
   const [adminAuthExpired, setAdminAuthExpired] = useState(false);
   useEffect(() => setAdminAuthExpired(false), [token]);
   const [testModels, setTestModels] = useState<string[] | null>(null);
-  const [toolCompatibility, setToolCompatibility] = useState<{
-    supported: boolean; roundTripSupported?: boolean; reason: string; model: string; elapsedMs: number;
-  } | null>(null);
   const [downloadingReport, setDownloadingReport] = useState<string | null>(null);
 
   const applySettings = useCallback((data: AdminSettings) => {
     setSettings(data);
     setSite(data.site);
     setGuest(data.guest);
-    setPlugins(data.plugins ?? { appsEnabled: false, sandboxURL: '' });
     setProvider(data.chat2api);
     setModelsText(data.chat2api.models.join('\n'));
     setApiKey('');
@@ -402,15 +396,6 @@ export default function Mv3cAdmin() {
     setMessage('chat2api 配置已保存，新的聊天请求将使用更新后的配置。');
   });
 
-  const savePlugins = () => run(async () => {
-    if (!token) return;
-    const data = await adminRequest<AdminSettings>(token, '', {
-      method: 'PUT', body: JSON.stringify({ plugins }),
-    });
-    applySettings(data);
-    setMessage('交互式插件策略已保存。MCP Apps 只有在独立 HTTPS 沙箱域名可用时才会启用。');
-  });
-
   const saveGuest = () => run(async () => {
     if (!token) return;
     const data = await adminRequest<AdminSettings>(token, '', {
@@ -436,17 +421,6 @@ export default function Mv3cAdmin() {
       token, '/test', { method: 'POST' });
     setTestModels(result.models);
     setMessage('连接成功：从 chat2api 读取到 ' + result.count + ' 个模型。');
-  });
-
-  const checkToolCompatibility = () => run(async () => {
-    if (!token) return;
-    const result = await adminRequest<{
-      supported: boolean; roundTripSupported?: boolean; reason: string; model: string; elapsedMs: number;
-    }>(token, '/plugins/compatibility', { method: 'POST' });
-    setToolCompatibility(result);
-    setMessage(result.supported && result.roundTripSupported
-      ? 'chat2api 已通过结构化工具调用与结果续传检测；仍需验证真实 MCP 工具执行。'
-      : 'chat2api 尚未通过结构化函数调用检测：' + result.reason);
   });
 
   const syncModels = () => run(async () => {
@@ -575,6 +549,7 @@ export default function Mv3cAdmin() {
             <nav aria-label="管理栏目" className="mb-6 flex flex-wrap gap-2">
               {([
                 ['provider', 'AI 供应商与模型'],
+                ['plugins', '插件管理'],
                 ['site', '站点与注册设置'],
                 ['guest', '游客体验限制'],
                 ['users', '用户管理'],
@@ -666,45 +641,18 @@ export default function Mv3cAdmin() {
                     同步并保存模型
                   </button>
                 </div>
-                <div className="space-y-2 rounded-lg border border-border-medium p-3">
-                  <h3 className="text-sm font-semibold">插件工具协议诊断</h3>
-                  <p className="text-text-secondary text-xs">使用已保存的 chat2api 配置执行一次无副作用函数调用，不会执行任何第三方插件操作。结果只证明模型能否生成标准 tool_calls。</p>
-                  <button type="button" className={subtleButton}
-                    disabled={busy || !settings.chat2api.configured}
-                    onClick={() => void checkToolCompatibility()}>检测工具调用协议</button>
-                  {toolCompatibility && (
-                    <p role="status" className="text-sm">
-                      {toolCompatibility.supported ? '函数调用通过' : '函数调用未通过'} · {toolCompatibility.roundTripSupported ? '结果续传通过' : '结果续传待验证'} · {toolCompatibility.model} · {toolCompatibility.reason} · {toolCompatibility.elapsedMs}ms
-                    </p>
-                  )}
-                </div>
                 {testModels && (
                   <div className="rounded-lg bg-surface-secondary p-4 text-sm">
                     <strong>已发现模型：</strong> {testModels.join('、')}
                   </div>
                 )}
-                <div className="space-y-3 rounded-lg border border-border-medium p-3">
-                  <h3 className="text-sm font-semibold">MCP Apps 交互式插件</h3>
-                  <p className="text-text-secondary text-xs">默认关闭。必须先将 /api/mcp/sandbox 部署到不同于 mv3c 主站的独立 HTTPS 域名，并正确配置反向代理和 CSP。</p>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={plugins.appsEnabled}
-                      onChange={(e) => setPlugins((previous) => ({ ...previous, appsEnabled: e.target.checked }))} />
-                    启用交互式 MCP Apps
-                  </label>
-                  <label className="block space-y-1 text-xs">
-                    <span>沙箱地址（须以 /api/mcp/sandbox 结尾）</span>
-                    <input className={fieldClass} type="url" value={plugins.sandboxURL}
-                      placeholder="https://mcp-sandbox.example.net/api/mcp/sandbox"
-                      onChange={(e) => setPlugins((previous) => ({ ...previous, sandboxURL: e.target.value }))} />
-                  </label>
-                  <button className={subtleButton} type="button" disabled={busy}
-                    onClick={() => void savePlugins()}>保存交互式插件配置</button>
-                </div>
                 <p className="text-xs text-text-secondary">
                   所有 mv3c 用户共享此 chat2api API Key；Worker 和模型执行仍由 chat2api 管理。
                 </p>
               </section>
             )}
+
+            {tab === 'plugins' && <PluginAdminPanel token={token} />}
 
             {tab === 'guest' && (
               <section className="space-y-5 rounded-xl border border-border-medium p-5">
