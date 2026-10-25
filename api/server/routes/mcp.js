@@ -123,6 +123,23 @@ const checkMCPCreate = generateCheckAccess({
  * Get all MCP tools available to the user
  * Returns only MCP tools, completely decoupled from regular LibreChat tools
  */
+/**
+ * Read-only, server-filtered published catalogue.
+ * The MCP create/edit routes retain their existing ACL/OAuth and SSRF checks;
+ * hiding a preset does not silently delete an installed MCP server.
+ */
+router.get('/store/catalog', requireJwtAuth, checkMCPUsePermissions, async (req, res) => {
+  try {
+    const settings = await require('~/server/services/Config/mv3cSettings').getPublicSettings();
+    const { listCatalog } = require('../../../mv3c/pluginCatalog.cjs');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ items: listCatalog(settings.plugins.catalogHidden) });
+  } catch (error) {
+    logger.error('[mcp-store] Failed to load catalogue', { type: error?.name });
+    return res.status(503).json({ error: 'Plugin catalogue is unavailable' });
+  }
+});
+
 router.get('/tools', requireJwtAuth, configMiddleware, checkMCPUsePermissions, async (req, res) => {
   return getMCPTools(req, res);
 });
