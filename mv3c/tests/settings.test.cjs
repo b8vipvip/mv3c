@@ -75,7 +75,7 @@ test('unconfigured provider is not exposed as a chat endpoint', () => {
 test('interactive MCP Apps require an explicit isolated HTTPS sandbox', () => {
   const safe = 'https://mcp-sandbox.example.net/api/mcp/sandbox';
   assert.deepEqual(core.publicSettings(null).plugins,
-    { appsEnabled: false, sandboxURL: '' });
+    { appsEnabled: false, sandboxURL: '', catalogHidden: [] });
   for (const url of [
     'http://sandbox.example.net/api/mcp/sandbox',
     'https://sandbox.example.net/other',
@@ -98,6 +98,14 @@ test('interactive MCP Apps require an explicit isolated HTTPS sandbox', () => {
     plugins: enabled.plugins,
   }, KEY);
   assert.equal(sameOrigin.mcpSettings, undefined);
+});
+
+test('curated plugin visibility accepts only a bounded known-id set', () => {
+  assert.deepEqual(core.validatePatch({ plugins: { catalogHidden: ['github', 'deepwiki'] } }).plugins,
+    { catalogHidden: ['github', 'deepwiki'] });
+  for (const ids of [['unknown'], ['github', 'github'], 'github', null, ['__proto__']]) {
+    assert.throws(() => core.validatePatch({ plugins: { catalogHidden: ids } }));
+  }
 });
 
 test('bootstrap keys persist across restarts and are owner-only', () => {
