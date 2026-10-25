@@ -9,7 +9,8 @@ export type PluginPreset = Readonly<{
   category: PluginCategory;
   url: string;
   transport: 'streamable-http';
-  auth: 'oauth' | 'none';
+  auth: 'oauth' | 'token' | 'none';
+  credentialUrl?: string;
   website: string;
 }>;
 // Published items are returned by /api/mcp/store/catalog; no second client catalogue.
