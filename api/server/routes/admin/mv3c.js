@@ -69,6 +69,112 @@ router.post('/test', async (req, res) => {
     return failure(res, error);
   }
 });
+const { listCatalog, summarizeServer } = require('../../../../mv3c/pluginCatalog.cjs');
+
+/** This is inventory and audit only: OAuth credentials and tool execution stay
+ * with the existing MCP permission-aware endpoints. */
+async function readPluginOverview() {
+  const [settingsValue, registrations, total] = await Promise.all([
+    settings.getPublicSettings(),
+    mongoose.models.MCPServer
+      ? mongoose.models.MCPServer.find({})
+        .select('serverName config author createdAt updatedAt').sort({ updatedAt: -1 })
+        .limit(100).lean()
+      : Promise.resolve([]),
+    mongoose.models.MCPServer
+      ? mongoose.models.MCPServer.countDocuments({})
+      : Promise.resolve(0),
+  ]);
+  return {
+    policy: settingsValue.plugins,
+    catalogue: listCatalog(settingsValue.plugins.catalogHidden, true),
+    registrations: registrations.map(summarizeServer),
+    registeredCount: total,
+    registrationLimit: 100,
+    // MongoDB registration is not live connection/health status.
+    inventoryIsLive: false,
+  };
+}
+function safePluginCheck(row) {
+  return {
+    id: String(row._id), at: row.at,
+    actor: String(row.actor || ''), model: String(row.model || '').slice(0, 128),
+    supported: row.supported === true,
+    roundTripSupported: row.roundTripSupported === true,
+    reason: String(row.reason || '').slice(0, 128),
+    elapsedMs: Number.isFinite(row.elapsedMs) ? row.elapsedMs : null,
+  };
+}
+function csvCell(value) {
+  const text = String(value ?? '');
+  // Prevent spreadsheet formula execution and quote/line-break injection.
+  const escaped = /^[=+\-@\t\r]/.test(text) ? "'" + text : text;
+  return '"' + escaped.replace(/"/g, '""') + '"';
+}
+
+router.get('/plugins/overview', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(await readPluginOverview());
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.put('/plugins/settings', async (req, res) => {
+  try {
+    // Admin route already requires a JWT bearer token and ACCESS_ADMIN.
+    const policy = req.body?.plugins;
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+      throw new TypeError('plugins settings object required');
+    }
+    await settings.saveSettings({ plugins: policy }, actorId(req));
+    await invalidateConfigCaches();
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(await readPluginOverview());
+  } catch (error) {
+    await invalidateConfigCaches();
+    return failure(res, error);
+  }
+});
+router.get('/plugins/checks', async (req, res) => {
+  try {
+    const limit = Number(req.query.limit ?? 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new TypeError('limit must be 1 to 100');
+    }
+    const rows = await mongoose.connection.db.collection('mv3c_plugin_bridge_checks')
+      .find({}, { projection: {
+        actor: 1, at: 1, model: 1, supported: 1, roundTripSupported: 1,
+        reason: 1, elapsedMs: 1,
+      } }).sort({ at: -1 }).limit(limit).toArray();
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ rows: rows.map(safePluginCheck) });
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+router.get('/plugins/checks/export', async (req, res) => {
+  try {
+    const rows = await mongoose.connection.db.collection('mv3c_plugin_bridge_checks')
+      .find({}, { projection: {
+        actor: 1, at: 1, model: 1, supported: 1, roundTripSupported: 1,
+        reason: 1, elapsedMs: 1,
+      } }).sort({ at: -1 }).limit(500).toArray();
+    const keys = ['id', 'at', 'actor', 'model', 'supported', 'roundTripSupported', 'reason', 'elapsedMs'];
+    const csv = [keys.join(','), ...rows.map((doc) => {
+      const safe = safePluginCheck(doc);
+      return keys.map((key) => csvCell(safe[key])).join(',');
+    })].join('\r\n') + '\r\n';
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', 'attachment; filename="mv3c-plugin-checks.csv"');
+    return res.send('\uFEFF' + csv);
+  } catch (error) {
+    return failure(res, error);
+  }
+});
+
 /** Admin-only diagnostic. The probe uses the already configured provider;
  * no arbitrary host URL, token, tool name or shell command comes from the request.
  * It never executes the function suggested by the model.
