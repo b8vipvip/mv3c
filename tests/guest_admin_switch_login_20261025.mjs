@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const menu=fs.readFileSync(new URL('../client/src/components/Nav/AccountSettings.tsx',import.meta.url),'utf8');
+const admin=fs.readFileSync(new URL('../client/src/routes/Mv3cAdmin.tsx',import.meta.url),'utf8');
+assert.ok(menu.includes("user?.provider === 'mv3c-guest'"));
+assert.ok(menu.includes('nav-guest-switch-login'));
+assert.ok(menu.includes("logout('/login?redirect=false')"));
+assert.ok(admin.includes("logout('/login?redirect=false&redirect_to=%2Fadmin')"));
+assert.ok(admin.includes('ACCESS_ADMIN'));
+assert.ok(admin.includes('切换账号并登录后台'));
+assert.ok(!admin.includes('guestAccount && allowed'));
+console.log('Guest switch and admin capability protection regression passed');
