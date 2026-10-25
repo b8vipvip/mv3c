@@ -89,6 +89,15 @@ async function readPluginOverview() {
     policy: settingsValue.plugins,
     catalogue: listCatalog(settingsValue.plugins.catalogHidden, true),
     registrations: registrations.map(summarizeServer),
+    // Counts are registration hints only; neither OAuth connection nor sharing
+    // status can be inferred from a server document.
+    pluginRegistrations: listCatalog(settingsValue.plugins.catalogHidden, true).map((plugin) => ({
+      id: plugin.id,
+      count: registrations.filter((entry) => {
+        const registeredURL = String(entry?.config?.url || '').replace(/\/+$/, '');
+        return registeredURL === plugin.url.replace(/\/+$/, '');
+      }).length,
+    })),
     registeredCount: total,
     registrationLimit: 100,
     // MongoDB registration is not live connection/health status.
