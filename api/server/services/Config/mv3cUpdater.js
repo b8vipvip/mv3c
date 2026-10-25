@@ -317,7 +317,7 @@ async function completeJob(payload) {
   const now = new Date();
   const record = await collection().findOne(
     { _id: ID, 'activeJob.id': payload.jobId },
-    { projection: { activeJob: 1 } },
+    { projection: { activeJob: 1, latestSha: 1 } },
   );
   if (!record?.activeJob) throw new Error('No matching active update job');
   const active = record.activeJob;
@@ -334,7 +334,7 @@ async function completeJob(payload) {
       agentHeartbeat: now,
       ...(payload.outcome === 'success' ? { currentSha: sha, currentVersion: version,
         lastSuccessAt: now,
-        updateAvailable: false } : {}),
+        updateAvailable: Boolean(record.latestSha && record.latestSha !== sha) } : {}),
       ...(['failed', 'rolled_back'].includes(payload.outcome) && attemptedSha
         ? { blockedSha: attemptedSha } : {}),
     },
