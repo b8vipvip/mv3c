@@ -609,7 +609,9 @@ class HostUpdaterTests(unittest.TestCase):
             if args[:3] == ["docker", "image", "inspect"]:
                 return SHA2
             return "#1 CACHED\\n#2 build successful"
-        with patch.object(agent, "run", side_effect=fake_run):
+        with patch.object(agent, "run", side_effect=fake_run), (
+            patch.object(agent, "meminfo_kib", return_value={"MemAvailable": 10 * 1024**2})
+        ):
             with patch.object(agent, "git", return_value="v1.2.3"):
                 agent.build_local_image(pathlib.Path("/tmp"), SHA2)
         build, kwargs = commands[0]
@@ -626,6 +628,33 @@ class HostUpdaterTests(unittest.TestCase):
         with patch.dict(agent.os.environ, {"MV3C_BUILD_NODE_HEAP_MB": "evil"}):
             with self.assertRaises(agent.UpdateError):
                 agent.build_local_image(pathlib.Path("/tmp"), SHA2)
+
+
+    def test_build_heap_reserves_memory_for_live_mongo_and_api(self):
+        repo = pathlib.Path("/tmp")
+        with (
+            patch.object(agent, "meminfo_kib",
+                         return_value={"MemAvailable": 1700 * 1024}),
+            patch.object(agent, "run") as run,
+        ):
+            with self.assertRaisesRegex(agent.UpdateError,
+                                        "protecting live MongoDB and API"):
+                agent.build_local_image(repo, SHA2)
+            run.assert_not_called()
+        captures = []
+        def fake_run(args, _repo, **_kwargs):
+            captures.append(args)
+            return "OK"
+        with (
+            patch.object(agent, "meminfo_kib",
+                         return_value={"MemAvailable": 3000 * 1024}),
+            patch.object(agent, "run", side_effect=fake_run),
+            patch.object(agent, "version_for_sha", return_value="v0.1.21"),
+            patch.object(agent, "verify_built_image"),
+        ):
+            agent.build_local_image(repo, SHA2)
+        self.assertIn("NODE_MAX_OLD_SPACE_SIZE=1976", captures[0])
+        self.assertIn("BUILD_COMMIT=" + SHA2, captures[0])
 
     def test_local_build_image_revision_mismatch_blocks_switch(self):
         with patch.object(agent, "run", return_value=SHA1):
