@@ -20,6 +20,7 @@ import MCPServerDialog from './MCPServerDialog';
 import MCPServerList from './MCPServerList';
 import PluginDiscovery from './PluginDiscovery';
 import type { PluginPreset } from './catalog';
+import { AuthTypeEnum, AuthorizationTypeEnum } from './MCPServerDialog/hooks/useMCPServerForm';
 import store from '~/store';
 
 export default function MCPBuilderPanel() {
@@ -53,6 +54,11 @@ export default function MCPBuilderPanel() {
     description: installPreset.description,
     url: installPreset.url,
     type: installPreset.transport,
+    auth: installPreset.auth === 'token' ? {
+      auth_type: AuthTypeEnum.ServiceHttp,
+      api_key_source: 'user' as const,
+      api_key_authorization_type: AuthorizationTypeEnum.Bearer,
+    } : undefined,
   }) : null, [installPreset]);
   const [searchQuery, setSearchQuery] = useState('');
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
