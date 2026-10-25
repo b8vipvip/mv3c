@@ -491,16 +491,69 @@ class HostUpdaterTests(unittest.TestCase):
                 patch.object(agent, "check_build_capacity"),
                 patch.object(agent, "disk_free_bytes", return_value=1024**3),
                 patch.object(agent, "build_local_image"),
-                patch.object(agent, "verified_existing_candidate", return_value="sha256:" + "a" * 64),
+                patch.object(agent, "verified_existing_candidate",
+                             side_effect=[None, "sha256:" + "a" * 64]),
                 patch.object(agent, "run", side_effect=command),
                 patch.object(agent, "git"),
-                patch.object(agent, "wait_healthy"),
+                patch.object(agent, "wait_healthy") as wait_healthy,
                 patch.object(agent, "verify_deployment", return_value="PASSED"),
             ):
                 result = agent.deploy(repo, SHA1, SHA2)
-        self.assertEqual(result[0], "rolled_back")
+        self.assertEqual(result[0], "failed")
         self.assertIn("less than 2GiB", result[2])
+        self.assertIn("no Docker restart attempted", result[1])
         self.assertFalse(any(c[:3] == ["docker", "compose", "up"] for c in calls))
+        wait_healthy.assert_not_called()
+
+    def test_cached_verified_image_skips_build_only_three_gib_requirement(self):
+        """A verified Release candidate can deploy with >=2GiB but <3GiB free."""
+        calls = []
+        def command(args, _repo, **_kwargs):
+            calls.append(args)
+            return "OK"
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            with (
+                patch.object(agent, "check_build_capacity") as build_gate,
+                patch.object(agent, "disk_free_bytes", return_value=int(2.5 * 1024**3)),
+                patch.object(agent, "verified_existing_candidate",
+                             return_value="sha256:" + "a" * 64),
+                patch.object(agent, "build_local_image") as build,
+                patch.object(agent, "run", side_effect=command),
+                patch.object(agent, "git"),
+                patch.object(agent, "wait_healthy"),
+                patch.object(agent, "verify_deployment",
+                             return_value="Post-deploy validation PASSED"),
+            ):
+                result = agent.deploy(repo, SHA1, SHA2)
+            self.assertFalse(agent.transaction_path(repo).exists())
+        self.assertEqual(result[0], "success")
+        self.assertIn("skip 3GiB build-only preflight", result[1])
+        build_gate.assert_not_called()
+        build.assert_not_called()
+        self.assertEqual(len([x for x in calls if x[:3] ==
+                              ["docker", "compose", "up"]]), 1)
+
+    def test_cached_candidate_below_two_gib_does_not_touch_live_or_git(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            with (
+                patch.object(agent, "disk_free_bytes", return_value=1024**3),
+                patch.object(agent, "verified_existing_candidate",
+                             return_value="sha256:" + "a" * 64),
+                patch.object(agent, "check_build_capacity") as gate,
+                patch.object(agent, "build_local_image") as build,
+                patch.object(agent, "run") as runner,
+                patch.object(agent, "git") as git,
+            ):
+                outcome, message, error = agent.deploy(repo, SHA1, SHA2)
+        self.assertEqual(outcome, "failed")
+        self.assertIn("less than 2GiB", error)
+        self.assertIn("Preflight failed", message)
+        gate.assert_not_called()
+        build.assert_not_called()
+        runner.assert_not_called()
+        git.assert_not_called()
 
     def test_project_scoped_sha_image_cleanup_preserves_live_and_rollback(self):
         stale = "c" * 40
@@ -721,8 +774,9 @@ class HostUpdaterTests(unittest.TestCase):
                 ):
                     result = agent.deploy(repo, SHA1, SHA2)
             self.assertFalse(agent.transaction_path(repo).exists())
-        self.assertEqual(result[0], "rolled_back")
+        self.assertEqual(result[0], "failed")
         self.assertIn("npm ci failed", result[2])
+        self.assertIn("original running image and container were never changed", result[1])
         self.assertFalse(any(cmd[:3] == ["docker", "compose", "up"]
                              for cmd in commands),
                          "Build failure must not interrupt live application")
