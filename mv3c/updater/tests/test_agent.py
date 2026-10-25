@@ -732,7 +732,7 @@ class HostUpdaterTests(unittest.TestCase):
                 with (
                     patch.object(agent, "build_local_image") as build,
                     patch.object(agent, "verified_existing_candidate",
-                                 side_effect=[None, "sha256:" + "a" * 64]),
+                                 side_effect=[None, None, "sha256:" + "a" * 64]),
                     patch.object(agent, "run", side_effect=fake_run),
                     patch.object(agent, "git"),
                     patch.object(agent, "wait_healthy"),
