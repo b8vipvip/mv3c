@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { KeyRound, PlugZap, ExternalLink } from 'lucide-react';
 import MCPServerDialog from '~/components/SidePanel/MCPBuilder/MCPServerDialog';
-import { AuthTypeEnum, AuthorizationTypeEnum } from '~/components/SidePanel/MCPBuilder/MCPServerDialog/hooks/useMCPServerForm';
+import { initialMCPConfig } from '~/components/SidePanel/MCPBuilder/presetConfig';
 
 type PluginPolicy = {
   appsEnabled: boolean;
@@ -16,6 +16,7 @@ type CatalogItem = {
   description: string;
   url: string;
   auth: 'oauth' | 'token' | 'none';
+  transport: 'streamable-http';
   credentialUrl?: string;
   website: string;
   published: boolean;
@@ -185,17 +186,7 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
     }
   };
 
-  const presetInitial = useMemo(() => configuring ? ({
-    title: configuring.name,
-    description: configuring.description,
-    type: 'streamable-http' as const,
-    url: configuring.url,
-    auth: configuring.auth === 'token' ? {
-      auth_type: AuthTypeEnum.ServiceHttp,
-      api_key_source: 'user' as const,
-      api_key_authorization_type: AuthorizationTypeEnum.Bearer,
-    } : undefined,
-  }) : null, [configuring]);
+  const presetInitial = useMemo(() => configuring ? initialMCPConfig(configuring) : null, [configuring]);
 
   if (loading && !overview) return <p role="status" className="text-text-secondary">正在加载插件管理数据…</p>;
   if (!overview || !draft) {
