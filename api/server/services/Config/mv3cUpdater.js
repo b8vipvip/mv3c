@@ -155,6 +155,20 @@ function validateProgress(payload) {
   }
   return { stage: payload.stage, percent: payload.percent, message: payload.message };
 }
+/** Liveness only; no progress or terminal state is changed. */
+async function heartbeatJob(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+      !JOB_ID.test(payload.jobId || '') || Object.keys(payload).some(key => key !== 'jobId')) {
+    throw new TypeError('Invalid updater heartbeat');
+  }
+  await initialize();
+  const result = await collection().updateOne(
+    { _id: ID, 'activeJob.id': payload.jobId },
+    { $set: { agentHeartbeat: new Date() } },
+  );
+  return { accepted: result.matchedCount === 1 };
+}
+
 async function progressJob(payload) {
   const progress = validateProgress(payload);
   const now = new Date();
@@ -324,6 +338,6 @@ async function completeJob(payload) {
 
 module.exports = {
   DEFAULT_CONFIG, format, validateConfig, validateReport, validateProgress, renderReport,
-  getState, saveConfig, requestCheck, queueJob, claimJob, report, progressJob, completeJob,
+  getState, saveConfig, requestCheck, queueJob, claimJob, report, heartbeatJob, progressJob, completeJob,
   getReport,
 };
