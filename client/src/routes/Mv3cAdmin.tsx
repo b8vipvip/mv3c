@@ -505,7 +505,7 @@ export default function Mv3cAdmin() {
       <main className="mx-auto max-w-xl p-10 text-text-primary">
         <h1 className="mb-4 text-2xl font-semibold">mv3c 管理后台</h1>
         <p className="mb-4">请先登录管理员账号。</p>
-        <Link className="text-blue-500 underline" to="/login">前往登录</Link>
+        <Link className="text-blue-500 underline" to="/login?redirect=false&redirect_to=%2Fadmin">前往管理员登录</Link>
       </main>
     );
   }
@@ -527,7 +527,7 @@ export default function Mv3cAdmin() {
             {error}
             {adminAuthExpired && (
               <button type="button" className={subtleButton + ' ml-3'}
-                onClick={() => logout('/login?redirect_to=%2Fadmin')}>
+                onClick={() => logout('/login?redirect=false&redirect_to=%2Fadmin')}>
                 退出并重新登录
               </button>
             )}
@@ -540,7 +540,16 @@ export default function Mv3cAdmin() {
         )}
         {!allowed ? (
           <section className="rounded-xl border border-border-medium p-6">
-            此账号没有管理员权限。只有具备 ACCESS_ADMIN 权限的账号可以访问本页面。
+            <p>此账号没有管理员权限。只有具备 ACCESS_ADMIN 权限的账号可以访问本页面。</p>
+            <p className="mt-2 text-text-secondary">
+              {user?.provider === 'mv3c-guest'
+                ? '当前使用游客体验身份。请退出游客身份，改用已经授权的管理员账号登录。'
+                : '请使用已获得管理员权限的正式账号登录；普通账号不会自动获得管理权限。'}
+            </p>
+            <button type="button" className={subtleButton + ' mt-4'}
+              onClick={() => logout('/login?redirect=false&redirect_to=%2Fadmin')}>
+              切换账号并登录后台
+            </button>
           </section>
         ) : !settings ? (
           <p className="text-text-secondary">正在加载管理配置…</p>

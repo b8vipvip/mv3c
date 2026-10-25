@@ -97,6 +97,9 @@ function HelpSubmenu({
 function AccountSettings({ collapsed = false }: { collapsed?: boolean }) {
   const localize = useLocalize();
   const { user, logout } = useAuthContext();
+  // Guest credentials are intentionally unprivileged. Offer an explicit
+  // account-switch path instead of suggesting a guest can use /admin.
+  const guestAccount = user?.provider === 'mv3c-guest';
   const { data: startupConfig } = useGetStartupConfig();
   const setShowSettings = useSetAtom(settingsOpenAtom);
   const setShowFiles = useSetAtom(showFilesDialogAtom);
@@ -177,6 +180,16 @@ function AccountSettings({ collapsed = false }: { collapsed?: boolean }) {
           {localize('com_nav_settings')}
         </Menu.MenuItem>
         <DropdownMenuSeparator />
+        {guestAccount && (
+          <Menu.MenuItem
+            onClick={() => logout('/login?redirect=false')}
+            className="select-item text-sm"
+            data-testid="nav-guest-switch-login"
+          >
+            <LogOut className="icon-md" aria-hidden="true" />
+            <span>登录或注册正式账号</span>
+          </Menu.MenuItem>
+        )}
         <Menu.MenuItem onClick={() => logout()} className="select-item text-sm">
           <LogOut className="icon-md" aria-hidden="true" />
           {localize('com_nav_log_out')}
