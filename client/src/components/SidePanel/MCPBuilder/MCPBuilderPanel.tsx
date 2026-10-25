@@ -20,6 +20,7 @@ import MCPServerDialog from './MCPServerDialog';
 import MCPServerList from './MCPServerList';
 import PluginDiscovery from './PluginDiscovery';
 import type { PluginPreset } from './catalog';
+import { initialMCPConfig } from './presetConfig';
 import store from '~/store';
 
 export default function MCPBuilderPanel() {
@@ -48,12 +49,7 @@ export default function MCPBuilderPanel() {
   const [showDialog, setShowDialog] = useState(false);
   const [activeView, setActiveView] = useState<'discover' | 'installed'>('discover');
   const [installPreset, setInstallPreset] = useState<PluginPreset | null>(null);
-  const installInitial = useMemo(() => installPreset ? ({
-    title: installPreset.name,
-    description: installPreset.description,
-    url: installPreset.url,
-    type: installPreset.transport,
-  }) : null, [installPreset]);
+  const installInitial = useMemo(() => installPreset ? initialMCPConfig(installPreset) : null, [installPreset]);
   const [searchQuery, setSearchQuery] = useState('');
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const configDialogProps = getConfigDialogProps();

@@ -25,7 +25,7 @@ import {
 import { useAuthContext, useHasAccess, useResourcePermissions, MCPServerDefinition } from '~/hooks';
 import { GenericGrantAccessDialog } from '~/components/Sharing';
 import { useMCPServerForm } from './hooks/useMCPServerForm';
-import type { MCPServerFormData } from './hooks/useMCPServerForm';
+import type { MCPServerInitial } from './hooks/useMCPServerForm';
 import { useLocalize, useCopyToClipboard } from '~/hooks';
 import MCPServerForm from './MCPServerForm';
 
@@ -35,7 +35,7 @@ interface MCPServerDialogProps {
   children?: React.ReactNode;
   triggerRef?: React.MutableRefObject<HTMLDivElement | HTMLButtonElement | null>;
   server?: MCPServerDefinition | null;
-  initial?: Pick<MCPServerFormData, 'title' | 'description' | 'url' | 'type'> | null;
+  initial?: MCPServerInitial | null;
 }
 
 export default function MCPServerDialog({

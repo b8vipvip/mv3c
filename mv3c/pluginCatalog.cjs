@@ -5,8 +5,17 @@ const catalog = Object.freeze([
     id: 'github', name: 'GitHub', category: '开发工具',
     description: '浏览仓库、议题与 Pull Request；授权账号决定访问范围。',
     url: 'https://api.githubcopilot.com/mcp/',
-    transport: 'streamable-http', auth: 'oauth',
+    transport: 'streamable-http', auth: 'token',
+    credentialUrl: 'https://github.com/settings/personal-access-tokens',
     website: 'https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server',
+  }),
+  Object.freeze({
+    id: 'gitee', name: 'Gitee（码云）', category: '开发工具',
+    description: '使用每位用户自己的 Gitee 访问令牌读取仓库、Issue 和 Pull Request；写操作需确认。',
+    url: 'https://api.gitee.com/mcp',
+    transport: 'streamable-http', auth: 'token',
+    credentialUrl: 'https://gitee.com/profile/personal_access_tokens',
+    website: 'https://blog.gitee.com/2026/01/26/gitee-mcp-support-remote-access-no-local-deployment-ai-assistant-plug-and-play/',
   }),
   Object.freeze({
     id: 'linear-readonly', name: 'Linear（只读）', category: '项目管理',

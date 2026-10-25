@@ -56,10 +56,14 @@ export interface MCPServerFormData {
   trust: boolean;
 }
 
+export type MCPServerInitial = Pick<MCPServerFormData, 'title' | 'description' | 'url' | 'type'> & {
+  /** Auth defaults only: never embed access tokens or OAuth secrets in the catalog. */
+  auth?: Partial<AuthConfig>;
+};
+
 interface UseMCPServerFormProps {
   server?: MCPServerDefinition | null;
-  /** Curated catalog metadata; never includes an access token or secret. */
-  initial?: Pick<MCPServerFormData, 'title' | 'description' | 'url' | 'type'> | null;
+  initial?: MCPServerInitial | null;
   onSuccess?: (serverName: string, isOAuth: boolean) => void;
   onClose?: () => void;
 }
@@ -140,6 +144,7 @@ export function useMCPServerForm({ server, initial, onSuccess, onClose }: UseMCP
         oauth_scope: '',
         oauth_token_exchange_method: undefined,
         obo_scopes: '',
+        ...initial?.auth,
       },
       trust: false,
     };
