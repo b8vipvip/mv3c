@@ -185,16 +185,6 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
     }
   };
 
-  if (loading && !overview) return <p role="status" className="text-text-secondary">正在加载插件管理数据…</p>;
-  if (!overview || !draft) {
-    return <section className={pane}>
-      <p role="alert" className="text-text-secondary">{error || '插件管理暂不可用'}</p>
-      <button type="button" className={secondary} onClick={() => void load()}>重新加载</button>
-    </section>;
-  }
-
-  const dirty = JSON.stringify(draft) !== JSON.stringify(overview.policy);
-  const configured = overview.catalogue.find((item) => item.id === detailPlugin);
   const presetInitial = useMemo(() => configuring ? ({
     title: configuring.name,
     description: configuring.description,
@@ -206,6 +196,17 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
       api_key_authorization_type: AuthorizationTypeEnum.Bearer,
     } : undefined,
   }) : null, [configuring]);
+
+  if (loading && !overview) return <p role="status" className="text-text-secondary">正在加载插件管理数据…</p>;
+  if (!overview || !draft) {
+    return <section className={pane}>
+      <p role="alert" className="text-text-secondary">{error || '插件管理暂不可用'}</p>
+      <button type="button" className={secondary} onClick={() => void load()}>重新加载</button>
+    </section>;
+  }
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(overview.policy);
+  const configured = overview.catalogue.find((item) => item.id === detailPlugin);
   return (
     <div className="space-y-5" data-testid="mv3c-admin-plugins">
       <section className={pane}>
