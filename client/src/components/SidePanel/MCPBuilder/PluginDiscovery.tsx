@@ -42,7 +42,7 @@ export default function PluginDiscovery({ servers, canInstall, onInstall }: Plug
     }).finally(() => { if (!controller.signal.aborted) setCatalogLoading(false); });
     return () => controller.abort();
   }, [token]);
-  const items = useMemo(() => filterPluginCatalog(query, category, catalog), [query, category, catalog]);
+  const items = useMemo(() => filterPluginCatalog(catalog, query, category), [query, category, catalog]);
   const installed = servers.map((server) => ({
     config: { url: 'url' in server.config ? server.config.url : undefined },
   }));
