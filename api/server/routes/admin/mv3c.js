@@ -311,7 +311,9 @@ router.post('/updates/check', async (req, res) => {
 });
 router.post('/updates/deploy', async (req, res) => {
   try {
-    const result = await updater.queueJob(actorId(req), 'manual');
+    const selection = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body : {};
+    const result = await updater.queueJob(actorId(req), 'manual', selection);
     await settings.writeAudit(actorId(req), ['updates.manual_deploy']);
     return res.status(202).json(result);
   } catch (error) {
