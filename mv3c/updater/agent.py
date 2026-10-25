@@ -49,6 +49,11 @@ MAX_RETAINED_SHA_TAGS = 0
 MIN_POST_BUILD_FREE_BYTES = 2 * 1024 ** 3
 MAX_SHA_TAG_REMOVALS_PER_DEPLOY = 5
 BUILD_LOG_PATH = Path("/var/log/mv3c-updater-build.log")
+BUILD_STATE_PATH = Path("/var/log/mv3c-updater-build-state.json")
+# This host-only diagnostic does not own the job terminal state. The MongoDB
+# completeJob endpoint remains the only success/failure authority.
+MIN_BUILD_SURVIVAL_MEM_MIB = 192
+
 
 
 def image_for_sha(sha: str) -> str:
@@ -323,6 +328,46 @@ def buildkit_summary(labels: dict[str, str], times: dict[str, float], cached: in
     return "\n".join(lines)
 
 
+def write_build_state(state: dict) -> None:
+    """Root-only durable flight recorder; never includes tokens or prompts."""
+    path = BUILD_STATE_PATH
+    tmp = path.with_name(path.name + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(state, stream, separators=(",", ":"), ensure_ascii=False)
+            stream.write("\\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def read_build_state(target: str) -> str:
+    """Recovery diagnostic only. Never changes a job or image state."""
+    if not SHA.fullmatch(target):
+        return "Build evidence: job has no valid pinned target SHA"
+    try:
+        value = json.loads(BUILD_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return ("Build evidence: no host snapshot available; inspect "
+                "/var/log/mv3c-updater-build.log and systemd journal")
+    if not isinstance(value, dict) or value.get("targetSha") != target:
+        return "Build evidence: no matching SHA snapshot; do not reuse stale evidence"
+    safe = ("state", "startUtc", "lastSampleUtc", "elapsedSeconds",
+            "minAvailableMemMiB", "peakSwapUsedMiB", "minDockerFreeGiB",
+            "exitCode", "resourceWarning")
+    data = {key: value[key] for key in safe if key in value}
+    return ("Host build evidence (diagnostic only): " +
+            json.dumps(data, ensure_ascii=False, sort_keys=True)[:1200] +
+            "\\nHost build output: /var/log/mv3c-updater-build.log" +
+            "\\nCheck OOM/systemd: journalctl -k --since '<build time>'; "
+            "journalctl -u mv3c-updater.service --since '<build time>'")
+
+
 def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
                      env: dict[str, str] | None) -> str:
     """Stream build output to a root-only host log and retain useful errors.
@@ -333,11 +378,47 @@ def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
     """
     samples: list[dict[str, float]] = []
     stop = threading.Event()
+    target = next((item.split("=", 1)[1] for item in args
+                   if item.startswith("BUILD_COMMIT=")), "")
+    began = utc_now()
+    state = {
+        "targetSha": target if SHA.fullmatch(target) else "",
+        "startUtc": began,
+        "state": "running",
+        "elapsedSeconds": 0,
+        "resourceWarning": "",
+    }
+    try:
+        write_build_state(state)
+    except OSError as error:
+        print("Build recorder initialization warning: " + str(error)[:200], flush=True)
 
     def sampler() -> None:
         while not stop.is_set():
             try:
-                samples.append(build_pressure_sample())
+                point = build_pressure_sample()
+                samples.append(point)
+                state["lastSampleUtc"] = utc_now()
+                state["elapsedSeconds"] = int(time.monotonic() - start)
+                for src, name, fn in (
+                    ("mem_available_mib", "minAvailableMemMiB", min),
+                    ("swap_used_mib", "peakSwapUsedMiB", max),
+                    ("docker_free_gib", "minDockerFreeGiB", min),
+                ):
+                    if src in point:
+                        state[name] = round(
+                            fn(state.get(name, point[src]), point[src]), 2)
+                if (0 < point.get("mem_available_mib", 1e9)
+                        < MIN_BUILD_SURVIVAL_MEM_MIB):
+                    state["resourceWarning"] = (
+                        "Critically low host available memory while building")
+                if point.get("docker_free_gib", 10) < 1:
+                    state["resourceWarning"] = (
+                        "Critically low Docker filesystem space while building")
+                try:
+                    write_build_state(state)
+                except OSError as error:
+                    print("Build recorder write warning: " + str(error)[:150], flush=True)
             except Exception:
                 pass  # Diagnostics never own deployment success or failure.
             stop.wait(5)
@@ -360,6 +441,11 @@ def run_docker_build(args: list[str], cwd: Path, *, timeout: int,
         stop.set()
         thread.join(timeout=2)
     elapsed = time.monotonic() - start
+    state.update(state="exited", elapsedSeconds=int(elapsed), exitCode=code)
+    try:
+        write_build_state(state)
+    except OSError as error:
+        print("Build recorder finalization warning: " + str(error)[:200], flush=True)
     important = deque(maxlen=12)
     causes = deque(maxlen=8)
     earliest = []
@@ -1009,6 +1095,11 @@ def recover_interrupted_job(repo: Path, active: dict, installed_sha: str) -> Non
         error = "Interrupted update verification failed: " + str(exc)[:1400]
         validation = "Interrupted update: live service verification FAILED"
         message = error
+    if not is_target:
+        diagnostic = read_build_state(attempted) if attempted else (
+            "Build evidence unavailable: claimed job has no pinned target SHA")
+        validation += "\\n" + diagnostic
+        print("MV3C interrupted update diagnostic: " + diagnostic[:1200], flush=True)
     try:
         bridge(repo, "progress", {
             "jobId": job_id, "stage": "complete", "percent": 100,
