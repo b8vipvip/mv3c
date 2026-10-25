@@ -195,3 +195,26 @@ sudo docker inspect mv3c-mongodb-1 --format 'Status={{.State.Status}} OOMKilled=
 - **长期解决方案**：把完整的大型 Docker 构建移到有足够资源的独立构建环境，并通过有完整 SHA/Release/摘要绑定及回滚验证的预构建镜像交付生产服务器；或者扩容 Docker 所在磁盘及宿主机内存。7 GiB 是保护性最低门槛，不是无限保证。
 
 若需要先部署已存在且与当前最新 Release 完全一致的候选镜像，先确认宿主机 `systemctl is-active mv3c-updater.service` 为 inactive、更新状态没有 activeJob/pendingJob、`docker image inspect mv3c:sha-<SHA>` 返回完整内容，以及 `df -h /var/lib/docker` 剩余至少 2 GiB。之后通过**现有唯一的后台更新任务**进行一次部署；不得额外手动运行独立脚本覆盖 `mv3c:local`。
+
+
+## 指定已验证正式版：只复用本地镜像，不触发 BuildKit
+
+**适用场景：** 生产 Docker 构建成功（包括镜像完成导出），但构建后可用磁盘不足 2 GiB，更新器拒绝切换。人工释放磁盘到至少 2 GiB 之后，应该先复用相同正式 Release SHA 的候选镜像。最新正式版可能已经向前发布了多个补丁，因此不能将候选 v0.1.22 冒充 v0.1.23/v0.1.24。
+
+- 管理后台「版本更新」增加「指定正式版 · 只复用不构建」：管理员填入精确版本号，例如 `v0.1.22`，再次确认后 POST `/api/admin/mv3c/updates/deploy` JSON `{"targetVersion":"v0.1.22","reuseOnly":true}`。这仍进入**同一个** `pendingJob -> claimJob -> completeJob` 生命周期；不新增并行更新器。
+- 宿主机唯一 `agent.py` 会提取此任务请求，通过固定 Git 远端拉取正式标签和 CI 发布证明、强制验证目标版本和 SHA 在受信任 main 历史上且是当前部署的快进后代。**任何镜像不存在、身份校验失败或剩余空间小于 2 GiB 时立即失败，并且不会执行 `docker build`、不会清理缓存或更改运行容器。**
+- 恢复成功仍校验 Docker 镜像 ID、健康、Git、`/readyz` 和公共配置接口；后续更新页面继续显示真实最新正式版本而不是历史指定版本。历史恢复不触发发布或创建新标签。
+- **版本升级过渡风险：** 旧版本 Web 管理后台与宿主机更新器不能理解新字段。绝不能只更新后台请求就交给旧宿主机更新器执行，否则旧更新器可能无视指定版本并直接重新构建最新正式版。正常升级成功安装新版宿主机 agent 后方可使用这个入口。
+
+### 旧版宿主机的一次性恢复过渡（仍只用原更新器）
+
+如果宿主机当前仍是旧版、恰好已有 v0.1.22 的 SHA 镜像，但新 v0.1.24 正式版已发布：先停止原 `mv3c-updater.timer`，确认原 `mv3c-updater.service` 为 inactive、没有 active/pending 任务，确认候选镜像 OCI 标签及 Build Commit、最小 2 GiB 空闲，并完成正常生产快照。
+
+新版 `agent.py` 支持一次性的 `--recover-cached-release v0.1.22`。过渡使用时，**通过 Git 拉取新的官方 Release SHA 与双 CI 发布证明，且必须验证该证明，再从此准确提交提取新版 agent 源码到 root-only 临时位置**（不能先重置正在运行的 Git checkout）；管理员在当前旧版后台只创建**一次普通手动待执行任务**，而宿主机仍暂停 timer。由具有相同 `/run/lock/mv3c-updater.lock` 排他锁的新版 `agent.py` 处理该唯一任务，显式要求 `--recover-cached-release v0.1.22`，强制无 Docker 构建。这不是第二套进程或独立的终态模块，仍通过原 MongoDB `completeJob` 写入结果。
+
+执行前必须再次确认新的原始脚本**已通过 Git Release 发布证明核验**，而不是从任意未验证 URL 直接下载脚本执行。若任一检查失败，保持旧容器运行、停止操作并保留快照。一次性部署完毕且验证成功后，执行当前仓库的 `mv3c/updater/install.sh` 原位更新**同一** systemd service/timer，移除临时代码，恢复原来调度。不能安装第二个 updater.service，也不能手动更改 `mv3c:local` 标签。
+
+### 下一阶段：避免本机重构建
+
+长期仍建议将正式运行镜像的全量 `npm ci`、前端构建、Docker 多层输出迁出生产宿主机。任何预构建交付需要在独立 Runner 生成**最终正式 Release SHA+版本**绑定的 OCI manifest/digest 和可验证的发布证明，生产仅允许通过同一个 agent 校验该来源后再切换；源代码 SHA 相同而版本/构建标签不同的 CI 临时镜像不能冒充正式版。由于你服务器当前使用的是共享 Docker builder，不能为了释放 MV3C 空间全局清理 BuildKit 的 npm 缓存。
+
