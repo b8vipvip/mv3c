@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@librechat/client';
 import { ExternalLink, PlugZap, CheckCircle2, Search } from 'lucide-react';
 import type { MCPServerDefinition } from '~/hooks';
+import { useAuthContext } from '~/hooks';
 import { filterPluginCatalog, findInstalledPreset } from './catalog';
 import type { PluginPreset } from './catalog';
 
@@ -17,9 +18,31 @@ const categories = ['全部', '开发工具', '项目管理', '知识检索'] as
  * User consent, credentials, and server creation remain owned by MCPServerDialog.
  */
 export default function PluginDiscovery({ servers, canInstall, onInstall }: PluginDiscoveryProps) {
+  const { token } = useAuthContext();
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<string>('全部');
-  const items = useMemo(() => filterPluginCatalog(query, category), [query, category]);
+  const [catalog, setCatalog] = useState<readonly PluginPreset[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    setCatalog([]);
+    if (!token) { setCatalogLoading(false); return () => controller.abort(); }
+    setCatalogLoading(true);
+    fetch('/api/mcp/store/catalog', {
+      credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+      headers: { Authorization: 'Bearer ' + token },
+    }).then(async (response) => {
+      if (!response.ok) throw new Error('商店目录暂不可用');
+      const result = await response.json() as { items?: PluginPreset[] };
+      if (!Array.isArray(result.items)) throw new Error('商店目录数据无效');
+      if (!controller.signal.aborted) { setCatalog(result.items); setCatalogError(''); }
+    }).catch(() => {
+      if (!controller.signal.aborted) { setCatalogError('插件目录加载失败，请重试'); setCatalog([]); }
+    }).finally(() => { if (!controller.signal.aborted) setCatalogLoading(false); });
+    return () => controller.abort();
+  }, [token]);
+  const items = useMemo(() => filterPluginCatalog(query, category, catalog), [query, category, catalog]);
   const installed = servers.map((server) => ({
     config: { url: 'url' in server.config ? server.config.url : undefined },
   }));
@@ -55,7 +78,9 @@ export default function PluginDiscovery({ servers, canInstall, onInstall }: Plug
           </button>
         ))}
       </div>
-      {items.length === 0 && (
+      {catalogLoading && <p role="status" className="text-text-secondary py-4 text-center text-sm">正在加载插件目录…</p>}
+      {catalogError && <p role="alert" className="text-text-secondary py-4 text-center text-sm">{catalogError}</p>}
+      {!catalogLoading && !catalogError && items.length === 0 && (
         <p className="text-text-secondary py-6 text-center text-sm">没有匹配的插件</p>
       )}
       <div className="grid gap-2">
