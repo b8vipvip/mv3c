@@ -50,7 +50,7 @@ export default function PluginDiscovery({ servers, canInstall, onInstall }: Plug
   return (
     <section aria-label="发现插件" className="space-y-3 px-3 pb-4">
       <p className="text-text-secondary text-xs">
-        选择插件后查看地址与授权范围，再由你确认安装。连接第三方账号会跳转至相应服务商。
+        GitHub / Gitee 需要每位用户提供自己的个人访问令牌，新增时选择「API Key → 用户自行提供 → Bearer」。管理员上架不等于用户已连接。
       </p>
       <label className="border-border-medium flex items-center gap-2 rounded-xl border px-3 py-2">
         <Search className="text-text-secondary h-4 w-4 shrink-0" aria-hidden="true" />
@@ -100,8 +100,12 @@ export default function PluginDiscovery({ servers, canInstall, onInstall }: Plug
                   <div className="text-text-primary text-sm font-semibold">{preset.name}</div>
                   <p className="text-text-secondary text-xs">{preset.description}</p>
                   <p className="text-text-tertiary text-xs">
-                    {preset.category} · {preset.auth === 'oauth' ? '账号授权' : '无需登录'}
+                    {preset.category} · {preset.auth === 'token' ? '个人访问令牌（PAT）' : preset.auth === 'oauth' ? 'OAuth 授权' : '无需登录'}
                   </p>
+                  {preset.credentialUrl && <a href={preset.credentialUrl} target="_blank" rel="noopener noreferrer"
+                    className="text-text-secondary mr-3 inline-flex items-center gap-1 text-xs underline">
+                    创建个人令牌 <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                  </a>}
                   <a
                     href={preset.website}
                     target="_blank"
