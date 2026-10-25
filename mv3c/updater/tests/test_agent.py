@@ -609,7 +609,9 @@ class HostUpdaterTests(unittest.TestCase):
             if args[:3] == ["docker", "image", "inspect"]:
                 return SHA2
             return "#1 CACHED\\n#2 build successful"
-        with patch.object(agent, "run", side_effect=fake_run):
+        with patch.object(agent, "run", side_effect=fake_run), (
+            patch.object(agent, "meminfo_kib", return_value={"MemAvailable": 10 * 1024**2})
+        ):
             with patch.object(agent, "git", return_value="v1.2.3"):
                 agent.build_local_image(pathlib.Path("/tmp"), SHA2)
         build, kwargs = commands[0]
@@ -626,6 +628,33 @@ class HostUpdaterTests(unittest.TestCase):
         with patch.dict(agent.os.environ, {"MV3C_BUILD_NODE_HEAP_MB": "evil"}):
             with self.assertRaises(agent.UpdateError):
                 agent.build_local_image(pathlib.Path("/tmp"), SHA2)
+
+
+    def test_build_heap_reserves_memory_for_live_mongo_and_api(self):
+        repo = pathlib.Path("/tmp")
+        with (
+            patch.object(agent, "meminfo_kib",
+                         return_value={"MemAvailable": 1700 * 1024}),
+            patch.object(agent, "run") as run,
+        ):
+            with self.assertRaisesRegex(agent.UpdateError,
+                                        "protecting live MongoDB and API"):
+                agent.build_local_image(repo, SHA2)
+            run.assert_not_called()
+        captures = []
+        def fake_run(args, _repo, **_kwargs):
+            captures.append(args)
+            return "OK"
+        with (
+            patch.object(agent, "meminfo_kib",
+                         return_value={"MemAvailable": 3000 * 1024}),
+            patch.object(agent, "run", side_effect=fake_run),
+            patch.object(agent, "version_for_sha", return_value="v0.1.21"),
+            patch.object(agent, "verify_built_image"),
+        ):
+            agent.build_local_image(repo, SHA2)
+        self.assertIn("NODE_MAX_OLD_SPACE_SIZE=1976", captures[0])
+        self.assertIn("BUILD_COMMIT=" + SHA2, captures[0])
 
     def test_local_build_image_revision_mismatch_blocks_switch(self):
         with patch.object(agent, "run", return_value=SHA1):
@@ -867,6 +896,42 @@ class HostUpdaterTests(unittest.TestCase):
             with patch.object(agent, "bridge", return_value=True) as bridge:
                 agent.recover_interrupted_job(pathlib.Path("/tmp"), not_restarted, SHA2)
         self.assertEqual(bridge.call_args_list[-1].args[2]["outcome"], "failed")
+
+
+    def test_build_recorder_has_durable_sha_bound_evidence_without_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "build-state.json"
+            with patch.object(agent, "BUILD_STATE_PATH", path):
+                agent.write_build_state({
+                    "targetSha": SHA2, "startUtc": "2026-10-25T10:15:24+00:00",
+                    "state": "running", "minAvailableMemMiB": 180.0,
+                    "resourceWarning": "Critically low host available memory while building",
+                })
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                evidence = agent.read_build_state(SHA2)
+                self.assertIn("minAvailableMemMiB", evidence)
+                self.assertIn("180.0", evidence)
+                self.assertNotIn(SHA2, evidence)  # report binds without repeating SHA
+                self.assertIn("no matching SHA snapshot", agent.read_build_state(SHA1))
+
+    def test_interrupted_job_includes_only_matching_host_build_evidence(self):
+        active = {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "fromSha": SHA1, "targetSha": SHA2,
+            "progress": {"stage": "building", "percent": 54},
+        }
+        with (
+            patch.object(agent, "verify_deployment", return_value="old healthy"),
+            patch.object(agent, "read_build_state", return_value="memory-low") as evidence,
+            patch.object(agent, "bridge", return_value=True) as bridge,
+        ):
+            agent.recover_interrupted_job(pathlib.Path("/tmp"), active, SHA1)
+        evidence.assert_called_once_with(SHA2)
+        completion = bridge.call_args_list[-1].args[2]
+        self.assertEqual(completion["outcome"], "failed")
+        self.assertIn("memory-low", completion["verification"])
+        self.assertIn("memory-low", completion["log"])
+        self.assertEqual(completion["sha"], SHA1)
 
     def test_deployment_rejects_running_image_mismatch(self):
         def fake_run(args, _repo, **_kwargs):
