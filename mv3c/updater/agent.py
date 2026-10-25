@@ -838,8 +838,20 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
                 log.append("Progress transport warning: " + str(exc)[:300])
 
     try:
-        advance("backup", 36, "检查可用空间，保留当前镜像用于回滚")
-        check_build_capacity(repo)
+        advance("backup", 36, "确认官方候选镜像与磁盘空间，保留当前镜像用于回滚")
+        # Reusing a complete, verified, immutable Release image is NOT a build.
+        # Require the 3GiB build threshold only when a new Docker build is
+        # actually needed. The post-build 2GiB switch reserve still applies.
+        staged_candidate = verified_existing_candidate(repo, target)
+        if staged_candidate is None:
+            check_build_capacity(repo)
+        elif disk_free_bytes(repo) < MIN_POST_BUILD_FREE_BYTES:
+            raise UpdateError(
+                "Verified existing Release image is ready, but less than 2GiB "
+                "disk free; refusing to switch. No build or restart attempted.")
+        else:
+            log.append("Verified immutable Release candidate already cached; "
+                       "skip 3GiB build-only preflight")
         run(["docker", "image", "tag", "mv3c:local", "mv3c:rollback"],
             repo, timeout=30)
         backed_up = True
@@ -908,14 +920,23 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
             log.append("Preflight failed; live container, Git and image unchanged")
             return "failed", "\n".join(log)[-24000:], failure
         try:
-            advance("rollback", 95, "更新失败，恢复原 Git 提交和已备份的 Docker 镜像")
+            if not switched:
+                # The only pre-switch changes were a Git fast-forward and a
+                # backup tag. Do not restart the untouched production container
+                # or depend on its MongoDB/DNS during this recovery.
+                git(repo, "reset", "--hard", old, timeout=60)
+                journal.unlink(missing_ok=True)
+                log.append("Candidate deployment blocked before container switch; "
+                           "original running image and container were never changed. "
+                           "Git checkout restored; no Docker restart attempted.")
+                return "failed", "\n".join(log)[-24000:], failure
+            advance("rollback", 95, "服务已切换，恢复旧提交与回滚镜像")
             git(repo, "reset", "--hard", old, timeout=60)
             run(["docker", "image", "tag", "mv3c:rollback", "mv3c:local"],
                 repo, timeout=30)
-            if switched:
-                log.append(run(["docker", "compose", "up", "-d", "--no-build",
-                                "--pull", "never", "--no-deps", "--force-recreate",
-                                "mv3c"], repo, timeout=240)[-2000:])
+            log.append(run(["docker", "compose", "up", "-d", "--no-build",
+                            "--pull", "never", "--no-deps", "--force-recreate",
+                            "mv3c"], repo, timeout=240)[-2000:])
             wait_healthy(repo)
             validation = verify_restored_service(repo, old)
             log.append(validation)
