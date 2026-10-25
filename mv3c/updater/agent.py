@@ -43,7 +43,11 @@ GIT_REFSPECS = (
 )
 # Local Docker images remain in the host cache across updates. The GitHub
 # Actions image is tested for the exact SHA, but does not need to be transferred.
-MIN_DOCKER_FREE_BYTES = 3 * 1024 ** 3
+# The prior 3GiB pre-build check admitted builds that consumed >4GiB and
+# filled the host, sometimes disconnecting MongoDB. New builds need a
+# conservative 7GiB floor; existing verified Release images still bypass
+# this *build-only* requirement and retain the 2GiB switch reserve.
+MIN_DOCKER_FREE_BYTES = 7 * 1024 ** 3
 BUILD_CACHE_SOFT_LIMIT_BYTES = 4 * 1024 ** 3
 MAX_RETAINED_SHA_TAGS = 0
 MIN_POST_BUILD_FREE_BYTES = 2 * 1024 ** 3
@@ -161,7 +165,7 @@ def disk_free_bytes(repo: Path) -> int:
 def disk_status(repo: Path) -> str:
     free = disk_free_bytes(repo)
     cache = build_cache_usage(repo)
-    summary = "Docker free {:.2f}GiB (minimum before build: 3GiB)".format(
+    summary = "Docker free {:.2f}GiB (minimum before NEW build: 7GiB)".format(
         free / 1024**3)
     if cache is not None:
         summary += "; shared BuildKit cache {:.2f}GiB (MV3C alert threshold: 4GiB)".format(
@@ -175,8 +179,11 @@ def check_build_capacity(repo: Path) -> None:
     free = disk_free_bytes(repo)
     if free < MIN_DOCKER_FREE_BYTES:
         raise UpdateError(
-            "Docker build blocked: {:.2f}GiB free, at least 3GiB required. "
-            "Do not prune shared BuildKit cache or data volumes automatically."
+            "Docker build deferred: {:.2f}GiB free, at least 7GiB required for "
+            "a NEW local build because this host previously exhausted disk "
+            "during image export. Verified cached Release images can still be "
+            "deployed with >=2GiB free. Do not prune shared BuildKit cache "
+            "or data volumes automatically."
             .format(free / 1024**3))
     print("MV3C pre-build disk gate: " + disk_status(repo), flush=True)
     available = meminfo_kib().get("MemAvailable", 0) * 1024
@@ -187,8 +194,10 @@ def check_build_capacity(repo: Path) -> None:
 def cleanup_stale_mv3c_image_tags(repo: Path) -> list[str]:
     """Only untag old MV3C-generated immutable SHA images, never shared caches.
 
-    Called exclusively AFTER healthy deployment, under the updater flock.
-    Docker also independently refuses non-forced deletes of referenced images.
+    May run before a NEW build (no transaction exists) or AFTER healthy
+    deployment under the updater flock; never touch local/rollback or images
+    referenced by any running or stopped container. Docker independently
+    refuses non-forced deletion of referenced images.
     """
     if transaction_path(repo).exists():
         raise UpdateError("Refusing image maintenance while deployment journal exists")
@@ -946,6 +955,18 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None) -> tuple[str,
         # actually needed. The post-build 2GiB switch reserve still applies.
         staged_candidate = verified_existing_candidate(repo, target)
         if staged_candidate is None:
+            # Only when a matching candidate is ABSENT: reclaim at most five
+            # superseded mv3c:sha-* tags before judging available capacity.
+            # No BuildKit/global prune, no other project images and no volumes.
+            # A candidate may already have complete (unpacked) layers from a
+            # prior failed switch; never remove it and rebuild needlessly.
+            try:
+                removed_before_build = cleanup_stale_mv3c_image_tags(repo)
+                log.append("Pre-build MV3C stale SHA tags removed: {}"
+                           .format(len(removed_before_build)))
+            except Exception as maintenance_error:
+                log.append("Pre-build safe tag maintenance warning: "
+                           + str(maintenance_error)[:300])
             check_build_capacity(repo)
         elif disk_free_bytes(repo) < MIN_POST_BUILD_FREE_BYTES:
             raise UpdateError(

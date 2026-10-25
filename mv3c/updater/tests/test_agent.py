@@ -463,21 +463,22 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertFalse(any("prune" in word for word in runner.call_args.args[0]))
 
     def test_preflight_fails_closed_before_docker_mutation(self):
-        # Below the user-selected 3GiB threshold, refuse any Docker changes.
-        with patch.object(agent, "disk_free_bytes", return_value=3 * 1024 ** 3 - 1):
+        # Must refuse an expensive local build while retaining enough reserve
+        # for a healthy MongoDB/API and for the new image to be switched.
+        with patch.object(agent, "disk_free_bytes", return_value=7 * 1024 ** 3 - 1):
             with patch.object(agent, "run") as runner:
-                with self.assertRaisesRegex(agent.UpdateError, "3GiB required"):
+                with self.assertRaisesRegex(agent.UpdateError, "7GiB required"):
                     agent.check_build_capacity(pathlib.Path("/tmp"))
                 runner.assert_not_called()
 
-    def test_preflight_accepts_exactly_three_gib_and_warns_on_cache(self):
+    def test_preflight_accepts_exactly_seven_gib_and_warns_on_cache(self):
         with (
-            patch.object(agent, "disk_free_bytes", return_value=3 * 1024 ** 3),
+            patch.object(agent, "disk_free_bytes", return_value=7 * 1024 ** 3),
             patch.object(agent, "build_cache_usage", return_value=5 * 1024 ** 3),
             patch("builtins.print") as logger,
         ):
             agent.check_build_capacity(pathlib.Path("/tmp"))
-            self.assertIn("minimum before build: 3GiB", logger.call_args.args[0])
+            self.assertIn("minimum before NEW build: 7GiB", logger.call_args.args[0])
             self.assertIn("shared cache over soft limit", logger.call_args.args[0])
 
     def test_post_build_reserve_prevents_container_switch(self):
@@ -592,6 +593,53 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertEqual([a for a in actions if a[:3] == ["docker", "image", "rm"]],
                          [["docker", "image", "rm", "mv3c:sha-" + stale]])
         self.assertFalse(any("prune" in arg for a in actions for arg in a))
+
+
+    def test_candidate_missing_preflight_reclaims_only_stale_mv3c_tags(self):
+        """Preflight cleanup is run before the stricter build gate only if target absent."""
+        stages = []
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            with (
+                patch.object(agent, "verified_existing_candidate", return_value=None),
+                patch.object(agent, "cleanup_stale_mv3c_image_tags",
+                             return_value=["mv3c:sha-" + "c" * 40]) as maintenance,
+                patch.object(agent, "check_build_capacity",
+                             side_effect=agent.UpdateError("at least 7GiB required")) as gate,
+                patch.object(agent, "run") as docker,
+                patch.object(agent, "git") as git,
+            ):
+                state, report, error = agent.deploy(repo, SHA1, SHA2)
+        self.assertEqual(state, "failed")
+        self.assertIn("Pre-build MV3C stale SHA tags removed: 1", report)
+        self.assertIn("7GiB", error)
+        maintenance.assert_called_once_with(repo)
+        gate.assert_called_once_with(repo)
+        docker.assert_not_called()
+        git.assert_not_called()
+
+    def test_candidate_reuse_never_runs_image_cleanup_or_build_gate(self):
+        """A verified 2.5GiB-space candidate remains usable without mutations during preflight."""
+        with tempfile.TemporaryDirectory() as directory:
+            repo = pathlib.Path(directory)
+            with (
+                patch.object(agent, "verified_existing_candidate",
+                             return_value="sha256:" + "a" * 64),
+                patch.object(agent, "disk_free_bytes",
+                             return_value=int(2.5 * 1024**3)),
+                patch.object(agent, "cleanup_stale_mv3c_image_tags") as maintenance,
+                patch.object(agent, "check_build_capacity") as gate,
+                patch.object(agent, "run", return_value="ok"),
+                patch.object(agent, "git"),
+                patch.object(agent, "wait_healthy"),
+                patch.object(agent, "verify_deployment",
+                             return_value="Post-deploy validation PASSED"),
+            ):
+                outcome, _log, error = agent.deploy(repo, SHA1, SHA2)
+        self.assertEqual((outcome, error), ("success", ""))
+        maintenance.assert_called_once()
+        # It is called exactly once *after* the transaction was completed.
+        gate.assert_not_called()
 
     def test_pending_transaction_blocks_image_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -744,7 +792,7 @@ class HostUpdaterTests(unittest.TestCase):
         from collections import namedtuple
         Usage = namedtuple("Usage", "total used free")
         with patch.object(agent.shutil, "disk_usage", return_value=Usage(10, 9, 1)):
-            with self.assertRaisesRegex(agent.UpdateError, "at least 3GiB required"):
+            with self.assertRaisesRegex(agent.UpdateError, "at least 7GiB required"):
                 agent.check_build_capacity(pathlib.Path("/tmp"))
 
     def test_successful_local_build_is_verified_before_container_switch(self):
