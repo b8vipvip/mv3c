@@ -7,7 +7,7 @@ GitHub Actions 负责 **源码和 Docker 冒烟验证**。main 提交的两项 C
 服务器上的 `mv3c-updater.timer` 每分钟检查后台更新任务（自动检查间隔由后台配置）。**与 chat2api 一样，宿主机仅使用 Git Smart 协议，无需 GitHub REST API Token**：SSH 443 → SSH 22 → HTTPS（HTTP/1.1、每条链路有界超时）。GitHub Actions 仍在发布正式 Release **且两项 main CI 都成功后**才写入不可缺失的带 CI 运行 ID 的注释标签 `mv3c-verified/vX.Y.Z`。宿主机只部署同时具有普通版本标签和此 CI/Release 发布证明、且落在可信 main 历史中的 SHA；最新标签缺少证明时拒绝更新而不回退到旧版本。请使用 GitHub 仓库 ruleset 限制谁可以创建/改写/删除 `v*` 和 `mv3c-verified/v*` 标签，因为这里是仓库权限控制的**发布证据**，不是外部密码学签名。
 
 1. 通过 SSH 443 → SSH 22 → HTTPS 有界容灾拉取 GitHub main、正式版本标签和发布证明标签；在本机按精确 Git SHA、双 CI 成功字段、两条成功运行 ID 校验发布证明，不调用 `api.github.com`。
-2. **先检查目标 SHA 是否已有经过完整 Release 元数据校验的 Docker 候选镜像**。如果存在，跳过构建专用的 3 GiB 预检门槛，仍必须满足切换前的 **2 GiB** 保留空间要求；如果不存在而需要重新构建，Docker 数据目录必须至少有 **3 GiB** 可用空间，不足时拒绝构建，且不清理其他项目缓存和数据卷。
+2. **先检查目标 SHA 是否已有经过完整 Release 元数据校验的 Docker 候选镜像**。如果存在，跳过构建专用的 3 GiB 预检门槛，仍必须满足切换前的 **2 GiB** 保留空间要求；如果不存在而需要重新构建，Docker 数据目录必须至少有 **7 GiB** 可用空间（此前 3 GiB 在实际生产构建中被证明不足），不足时拒绝构建，且不清理其他项目缓存和数据卷。
 3. Git 快进到经过 CI 验证的提交，**先严格检查本机是否已有同一正式 Release SHA 的完整候选镜像**（精确的 OCI revision/version/source、运行环境版本、镜像层及 Image ID）；通过校验则直接复用并跳过构建，候选镜像不存在才执行 `docker build` 生成 `mv3c:sha-<commit>`；现有标签若校验不通过则拒绝部署，不能静默覆盖。旧服务始终继续运行。
 4. BuildKit 自动复用本机已存在的镜像层；Dockerfile 在拷贝源码前安装 workspace 依赖，`package-lock.json` 未变时重用 `npm ci` 整层。依赖变更时则复用持久化的 `mv3c-npm-cache` npm 下载缓存（`--prefer-offline`）。
 5. 通过镜像 `org.opencontainers.image.revision` 标签核验精确 Git SHA；**仅成功后**将 `mv3c:local` 指向新镜像，并执行 `docker compose up -d --no-build --pull never --no-deps --force-recreate mv3c`。
@@ -76,7 +76,7 @@ MV3C_PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 - `runtime` 从干净的 `base` 继承 Node、Python、uv、jemalloc，再 **COPY 构建完成后的 /app**。它不再继承此前完整开发依赖安装产生的历史镜像层；保持所有运行时目录、`mv3c/entrypoint.sh`、`/app/data` 和 Compose 卷路径不变。
 - 不清理共享的 BuildKit 缓存，因此生产宿主机下次重新构建仍可复用 npm 包及稳定的依赖层。多阶段构建降低的是**最终镜像层体积与更新时同时保留两版镜像的成本**，不会保证 BuildKit 总缓存减少。
 - GitHub Actions 对完整编译阶段和最终运行阶段分别度量 `docker image inspect --format '{{.Size}}'`，要求最终镜像更小；原有首次用户注册、管理员配置、更新器集成及 readyz 的冒烟测试照常在最终 `runtime` 镜像运行。
-- 上线前使用 3 GiB 构建前检查与 2 GiB 切换前检查（仅放宽构建启动门槛，切换前保留空间的校验不变）；3 GiB 无法保证 npm/BuildKit 构建成功，尤其在旧镜像与缓存都必须保留时，应记录磁盘峰值和实际失败原因。不得仅凭 CI 的镜像大小推断宿主机的总 Docker 存储占用。
+- 上线前使用 7 GiB 新构建预检与 2 GiB 切换前检查（仅放宽构建启动门槛，切换前保留空间的校验不变）；7 GiB 仍不能对任意依赖变更保证绝对成功，尤其在旧镜像与缓存都必须保留时，应记录磁盘峰值和实际失败原因。不得仅凭 CI 的镜像大小推断宿主机的总 Docker 存储占用。
 
 ## 缓存、资源与故障排查
 
@@ -84,7 +84,7 @@ MV3C_PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 - **构建前预检**：`/var/lib/docker` 所在分区不足 3 GiB 空闲时停止升级，旧容器照常服务。3 GiB 只是允许尝试构建的门槛，不是本次构建实际需要的容量；如果构建时磁盘空间耗尽，构建仍可能失败，旧镜像与业务卷不得清理。构建成功后若剩余不足 2 GiB，也拒绝切换并恢复旧 Git 状态与服务。该阈值并非对构建磁盘使用量的硬性限制。
 - **共享 BuildKit 软上限**：通过 `docker system df --format '{{json .}}'` 读取整机 Build Cache 使用量，超过 **4 GiB** 时写入诊断日志警告。**它是预警线，不是硬性容量配额，也不会自动清理缓存**，因为默认 Docker builder 同时服务 Chat2API、MV3C 等项目，无法安全按项目区分每一层的所有权。用户可以在发现持续增长后评估专用 builder / 独立磁盘，而不是允许 MV3C 擅自全局 prune。
-- **项目专属镜像保留**：更新成功后只尝试清理过期的 `mv3c:sha-<40位SHA>` 候选镜像标签，并要求镜像修订标签与 SHA 一致；永远不会删除 `mv3c:local` 或 `mv3c:rollback`、其他仓库的镜像或运行/停止容器所引用的镜像。Docker 自身还有一层无需 `-f` 的引用保护；镜像层与 BuildKit 缓存若共用数据，删除标签后实际空间释放可能为零。
+- **项目专属镜像保留**：仅在不存在本轮 Release 候选镜像时，构建前先尝试清理最多五个过期 MV3C SHA 标签；成功部署后也进行同样的受限清理。只尝试清理过期的 `mv3c:sha-<40位SHA>` 候选镜像标签，并要求镜像修订标签与 SHA 一致；永远不会删除 `mv3c:local` 或 `mv3c:rollback`、其他仓库的镜像或运行/停止容器所引用的镜像。Docker 自身还有一层无需 `-f` 的引用保护；镜像层与 BuildKit 缓存若共用数据，删除标签后实际空间释放可能为零。
 - **缓存复用**：不会运行 `docker builder prune -a`，不删除 BuildKit `mv3c-npm-cache` 下载缓存；正常情况下下一次构建继续复用已有层，依赖变更时继续利用 npm 缓存。
 - **只读人工检查**：`df -h / && docker system df -v && docker buildx du`。当缓存超过软上限时，优先评估磁盘扩容、独立 BuildKit builder，再决定是否在维护窗口执行人工回收。不要自动删除业务 Docker 数据卷或其他项目的镜像。
 
@@ -184,3 +184,14 @@ sudo docker inspect mv3c-mongodb-1 --format 'Status={{.State.Status}} OOMKilled=
 ```
 
 本地时间按宿主机时区解释；此示例基于事发当时服务器记录的北京时间。
+
+## 小硬盘服务器的重复更新失败处理（v0.1.22 事故）
+
+生产日志明确出现两种不同错误：(1) 构建中磁盘耗尽 `No space left on device`；(2) 完成了目标 SHA 的候选镜像，但构建后的磁盘余量小于 2 GiB，因此拒绝切换。这两种情况都不能通过增加超时或继续反复重建来解决。
+
+- **首次优先复用候选**：当前 GitHub Release SHA 如果与本地 `mv3c:sha-<完整40位SHA>` 的 OCI revision/version/source、运行环境 BUILD_COMMIT/MV3C_VERSION 和镜像层一致，且磁盘至少 2 GiB，则直接切换，跳过 7 GiB 新构建门槛，绝不再次支付 Docker 导出峰值。
+- **缺少候选，才允许新构建**：自动跳过其他项目，只清理最多 5 个符合身份校验、未被任何运行/停止容器或 `mv3c:local`/`mv3c:rollback` 引用的旧 MV3C SHA 标签；若余量仍小于 7 GiB，则明确报错并保持线上容器不变。可能无法释放 BuildKit 共享缓存空间。
+- **禁止跨项目强制清理**：不能用 `docker system prune -a`、`docker builder prune`、`docker volume prune` 或删除 MongoDB 数据卷来绕过保护。
+- **长期解决方案**：把完整的大型 Docker 构建移到有足够资源的独立构建环境，并通过有完整 SHA/Release/摘要绑定及回滚验证的预构建镜像交付生产服务器；或者扩容 Docker 所在磁盘及宿主机内存。7 GiB 是保护性最低门槛，不是无限保证。
+
+若需要先部署已存在且与当前最新 Release 完全一致的候选镜像，先确认宿主机 `systemctl is-active mv3c-updater.service` 为 inactive、更新状态没有 activeJob/pendingJob、`docker image inspect mv3c:sha-<SHA>` 返回完整内容，以及 `df -h /var/lib/docker` 剩余至少 2 GiB。之后通过**现有唯一的后台更新任务**进行一次部署；不得额外手动运行独立脚本覆盖 `mv3c:local`。
