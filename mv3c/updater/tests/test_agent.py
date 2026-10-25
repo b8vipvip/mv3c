@@ -868,6 +868,42 @@ class HostUpdaterTests(unittest.TestCase):
                 agent.recover_interrupted_job(pathlib.Path("/tmp"), not_restarted, SHA2)
         self.assertEqual(bridge.call_args_list[-1].args[2]["outcome"], "failed")
 
+
+    def test_build_recorder_has_durable_sha_bound_evidence_without_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "build-state.json"
+            with patch.object(agent, "BUILD_STATE_PATH", path):
+                agent.write_build_state({
+                    "targetSha": SHA2, "startUtc": "2026-10-25T10:15:24+00:00",
+                    "state": "running", "minAvailableMemMiB": 180.0,
+                    "resourceWarning": "Critically low host available memory while building",
+                })
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                evidence = agent.read_build_state(SHA2)
+                self.assertIn("minAvailableMemMiB", evidence)
+                self.assertIn("180.0", evidence)
+                self.assertNotIn(SHA2, evidence)  # report binds without repeating SHA
+                self.assertIn("no matching SHA snapshot", agent.read_build_state(SHA1))
+
+    def test_interrupted_job_includes_only_matching_host_build_evidence(self):
+        active = {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "fromSha": SHA1, "targetSha": SHA2,
+            "progress": {"stage": "building", "percent": 54},
+        }
+        with (
+            patch.object(agent, "verify_deployment", return_value="old healthy"),
+            patch.object(agent, "read_build_state", return_value="memory-low") as evidence,
+            patch.object(agent, "bridge", return_value=True) as bridge,
+        ):
+            agent.recover_interrupted_job(pathlib.Path("/tmp"), active, SHA1)
+        evidence.assert_called_once_with(SHA2)
+        completion = bridge.call_args_list[-1].args[2]
+        self.assertEqual(completion["outcome"], "failed")
+        self.assertIn("memory-low", completion["verification"])
+        self.assertIn("memory-low", completion["log"])
+        self.assertEqual(completion["sha"], SHA1)
+
     def test_deployment_rejects_running_image_mismatch(self):
         def fake_run(args, _repo, **_kwargs):
             if args[:4] == ["docker", "compose", "ps", "-q"]:
