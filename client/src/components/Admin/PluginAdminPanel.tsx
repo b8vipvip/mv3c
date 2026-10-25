@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { KeyRound, PlugZap, ExternalLink } from 'lucide-react';
+import MCPServerDialog from '~/components/SidePanel/MCPBuilder/MCPServerDialog';
+import { AuthTypeEnum, AuthorizationTypeEnum } from '~/components/SidePanel/MCPBuilder/MCPServerDialog/hooks/useMCPServerForm';
 
 type PluginPolicy = {
   appsEnabled: boolean;
@@ -11,7 +15,8 @@ type CatalogItem = {
   category: string;
   description: string;
   url: string;
-  auth: 'oauth' | 'none';
+  auth: 'oauth' | 'token' | 'none';
+  credentialUrl?: string;
   website: string;
   published: boolean;
 };
@@ -27,6 +32,7 @@ type RegisteredServer = {
 type PluginOverview = {
   policy: PluginPolicy;
   catalogue: CatalogItem[];
+  pluginRegistrations?: { id: string; count: number }[];
   registrations: RegisteredServer[];
   registeredCount: number;
   registrationLimit: number;
@@ -89,6 +95,8 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
   const [exporting, setExporting] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [configuring, setConfiguring] = useState<CatalogItem | null>(null);
+  const [detailPlugin, setDetailPlugin] = useState<string>('github');
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -186,6 +194,18 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
   }
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(overview.policy);
+  const configured = overview.catalogue.find((item) => item.id === detailPlugin);
+  const presetInitial = useMemo(() => configuring ? ({
+    title: configuring.name,
+    description: configuring.description,
+    type: 'streamable-http' as const,
+    url: configuring.url,
+    auth: configuring.auth === 'token' ? {
+      auth_type: AuthTypeEnum.ServiceHttp,
+      api_key_source: 'user' as const,
+      api_key_authorization_type: AuthorizationTypeEnum.Bearer,
+    } : undefined,
+  }) : null, [configuring]);
   return (
     <div className="space-y-5" data-testid="mv3c-admin-plugins">
       <section className={pane}>
@@ -223,7 +243,7 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
       </section>
 
       <section className={pane} aria-labelledby="plugin-store-heading">
-        <h3 id="plugin-store-heading" className="text-lg font-semibold">插件商店上架管理</h3>
+        <h3 id="plugin-store-heading" className="text-lg font-semibold">插件服务与商店配置</h3>
         <p className="text-text-secondary text-sm">
           下架仅隐藏内置商店的推荐卡片，不会删除用户已安装的 MCP 服务器，也不能替代 MCP 权限管理。
         </p>
@@ -234,10 +254,16 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
               <div className="min-w-0 flex-1">
                 <p className="font-medium">{plugin.name} <span className="text-text-secondary text-xs">{plugin.category}</span></p>
                 <p className="text-text-secondary text-xs">{plugin.description}</p>
+                <p className="text-text-secondary mt-1 text-xs">MCP: <code className="break-all">{plugin.url}</code> · {plugin.auth === 'token' ? '每位用户独立提供访问令牌' : plugin.auth === 'oauth' ? 'OAuth' : '无需登录'}</p>
+                <p className="text-text-secondary mt-1 text-xs">登记记录：{overview.pluginRegistrations?.find((item) => item.id === plugin.id)?.count ?? 0}（不代表已连接或已共享）</p>
                 <a className="text-text-secondary text-xs underline" href={plugin.website}
                   target="_blank" rel="noopener noreferrer">服务商说明</a>
               </div>
-              <label className="flex shrink-0 items-center gap-2 text-sm">
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <button type="button" className={secondary} onClick={() => { setDetailPlugin(plugin.id); setConfiguring(plugin); }}>
+                  配置连接
+                </button>
+              <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
                   aria-label={plugin.name + ' 上架'}
@@ -252,10 +278,59 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
                   })}
                 /> 上架
               </label>
+              </div>
             </div>;
           })}
         </div>
       </section>
+
+      <section className={pane} aria-labelledby="plugin-guide-heading">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 id="plugin-guide-heading" className="text-lg font-semibold">GitHub / Gitee 接入向导</h3>
+            <p className="text-text-secondary mt-1 text-sm">配置是两步：管理员创建并授权共享 MCP 服务器，用户在聊天端使用自己的令牌连接。仅上架商店不会自动连接。</p>
+          </div>
+          <PlugZap className="h-5 w-5 shrink-0 text-text-secondary" />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {overview.catalogue.filter((item) => item.id === 'github' || item.id === 'gitee').map((item) => (
+            <button type="button" key={item.id} aria-pressed={detailPlugin === item.id}
+              className={detailPlugin === item.id ? primary : secondary} onClick={() => setDetailPlugin(item.id)}>
+              {item.id === 'github' ? 'GitHub' : 'Gitee'}
+            </button>
+          ))}
+        </div>
+        {configured && (configured.id === 'github' || configured.id === 'gitee') && (
+          <div className="grid gap-4 rounded-xl bg-surface-secondary p-4 lg:grid-cols-2">
+            <div className="space-y-3 text-sm">
+              <h4 className="font-semibold">管理员配置</h4>
+              <p><strong>1.</strong> 点击「配置连接」，核对官方 MCP 地址。</p>
+              <p><strong>2.</strong> 认证选择「API Key」，勾选「用户自行提供」，请求头选择 Bearer。不要在管理员表单填入可访问全部私人仓库的共享令牌。</p>
+              <p><strong>3.</strong> 完成 MCP 创建后，在用户端「我的插件」找到该服务器，使用原有「共享」功能授予目标用户 MCP 权限。</p>
+              <button type="button" className={primary} onClick={() => setConfiguring(configured)}>
+                <KeyRound className="mr-2 inline h-4 w-4" />配置 {configured.name}
+              </button>
+            </div>
+            <div className="space-y-3 text-sm">
+              <h4 className="font-semibold">用户端连接</h4>
+              <p><strong>1.</strong> 用户从服务商页面创建最小权限个人访问令牌（PAT），仅授予所需仓库和读写范围。</p>
+              <p><strong>2.</strong> 进入「插件 → 我的插件」，选择已共享服务，输入自己的密钥并连接；确认工具可用。</p>
+              <p><strong>3.</strong> 在聊天框输入「@{configured.name}」或点击「+」选择工具。写入、提交、合并等操作需要按工具的授权/确认流程执行。</p>
+              <div className="flex flex-wrap gap-3">
+                {configured.credentialUrl && <a href={configured.credentialUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 underline">
+                  申请个人令牌 <ExternalLink className="h-3 w-3" />
+                </a>}
+                <Link to="/c/new" className="text-blue-600 underline">前往用户端</Link>
+              </div>
+            </div>
+          </div>
+        )}
+        <p className="text-text-secondary text-xs">提示：在此添加的 MCP 服务器默认属于创建者。仅「上架」不自动授予全站用户调用权；已登记也不等于已授权。若普通用户无 MCP USE 权限，需在现有管理员 MCP 权限设置中开启。</p>
+      </section>
+      <MCPServerDialog open={configuring !== null}
+        onOpenChange={(open) => { if (!open) { setConfiguring(null); void load(); } }}
+        initial={presetInitial} />
 
       <section className={pane} aria-labelledby="plugin-sandbox-heading">
         <h3 id="plugin-sandbox-heading" className="text-lg font-semibold">交互式插件与沙箱</h3>
