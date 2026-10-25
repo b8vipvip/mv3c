@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthContext } from '~/hooks';
 import PluginAdminPanel from '~/components/Admin/PluginAdminPanel';
+import AdminShell from '~/components/Admin/AdminShell';
 
 type SiteSettings = {
   title: string;
@@ -511,17 +512,11 @@ export default function Mv3cAdmin() {
   }
 
   return (
-    <main className="min-h-screen bg-surface-primary text-text-primary">
-      <header className="border-b border-border-medium bg-surface-secondary px-5 py-4">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold">mv3c Admin</h1>
-            <p className="text-sm text-text-secondary">统一管理站点、chat2api 和用户</p>
-          </div>
-          <Link to="/c/new" className={subtleButton}>返回聊天</Link>
-        </div>
-      </header>
-      <div className="mx-auto max-w-5xl px-4 py-6">
+    <AdminShell
+      active={tab}
+      onNavigate={(next) => { setTab(next); setError(''); setMessage(''); }}
+      version={updates?.currentVersion}
+    >
         {error && (
           <div role="alert" className="mb-4 rounded-lg border border-red-500 p-3 text-red-500">
             {error}
@@ -555,29 +550,6 @@ export default function Mv3cAdmin() {
           <p className="text-text-secondary">正在加载管理配置…</p>
         ) : (
           <>
-            <nav aria-label="管理栏目" className="mb-6 flex flex-wrap gap-2">
-              {([
-                ['provider', 'AI 供应商与模型'],
-                ['plugins', '插件管理'],
-                ['site', '站点与注册设置'],
-                ['guest', '游客体验限制'],
-                ['users', '用户管理'],
-                ['audit', '操作审计'],
-                ['logs', '运行日志'],
-                ['requests', '请求记录'],
-                ['updates', '版本更新'],
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => { setTab(key); setError(''); setMessage(''); }}
-                  className={tab === key ? buttonClass : subtleButton}
-                  aria-current={tab === key ? 'page' : undefined}
-                >
-                  {label}
-                </button>
-              ))}
-            </nav>
 
             {tab === 'provider' && (
               <section className="space-y-5 rounded-xl border border-border-medium p-5">
@@ -1227,7 +1199,6 @@ export default function Mv3cAdmin() {
             )}
           </>
         )}
-      </div>
-    </main>
+    </AdminShell>
   );
 }
