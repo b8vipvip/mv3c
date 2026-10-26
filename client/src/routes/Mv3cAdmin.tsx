@@ -716,7 +716,7 @@ export default function Mv3cAdmin() {
                 <div>
                   <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    代码拉取：与 chat2api 一致，依次尝试 GitHub SSH 443 → SSH 22 → HTTPS（均限时），宿主机不再查询 GitHub REST API。仅部署附有发布证明、包含两项 CI 成功记录并绑定正式版 SHA 的 GitHub Release；镜像由 GitHub Actions 预构建后通过 SSH/SCP 交付，宿主机验证完整归档 SHA-256、镜像 ID 与正式版 SHA 后无构建部署。
+                    代码拉取：与 chat2api 一致，依次尝试 GitHub SSH 443 → SSH 22 → HTTPS（均限时），宿主机不再查询 GitHub REST API。仅部署附有发布证明、包含两项 CI 成功记录并绑定正式版 SHA 的 GitHub Release；镜像由 GitHub Actions 预构建后上传至正式版 Release 下载资产，宿主机经 HTTPS 限速保护及断点续传取得镜像，再验证完整归档 SHA-256、镜像 ID 与正式版 SHA 后无构建部署。
                   </p>
                 </div>
                 {!updates ? (
