@@ -946,6 +946,10 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
     backed_up = False
     switched = False
     imported_prebuilt = False
+    # Historical manually pinned cache recovery predates Actions image proofs.
+    # Every ordinary production Release must nevertheless require exact proof.
+    require_prebuilt_proof = prebuilt_only and not reuse_only
+    prebuilt_proof = None
     journal = transaction_path(repo)
 
     def advance(stage: str, percent: int, detail: str) -> None:
@@ -961,7 +965,19 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
         # Reusing a complete, verified, immutable Release image is NOT a build.
         # Require the 3GiB build threshold only when a new Docker build is
         # actually needed. The post-build 2GiB switch reserve still applies.
+        if require_prebuilt_proof:
+            from prebuilt import verified_image_proof
+            # An image already in local Docker cache is NOT trusted on its
+            # metadata alone. Bind even the cache-hit path to the official
+            # post-transfer proof, which commits to the exact image ID.
+            prebuilt_proof = verified_image_proof(
+                repo, version_for_sha(repo, target), target, git)
         staged_candidate = verified_existing_candidate(repo, target)
+        if (prebuilt_proof is not None and staged_candidate is not None
+                and staged_candidate != prebuilt_proof["image_id"]):
+            raise UpdateError(
+                "Local SHA-tagged image ID differs from official prebuilt "
+                "image proof; refusing to deploy or replace candidate")
         if staged_candidate is None and reuse_only:
             raise UpdateError(
                 "Pinned Release is reuse-only but verified local image is missing; "
@@ -976,8 +992,16 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
             imported_prebuilt = True
             log.append(imported)
             staged_candidate = verified_existing_candidate(repo, target)
-            if staged_candidate is None:
-                raise UpdateError("Actions image import completed without a verified candidate")
+            if staged_candidate is None or (
+                    prebuilt_proof is not None and
+                    staged_candidate != prebuilt_proof["image_id"]):
+                raise UpdateError(
+                    "Actions image import did not produce exact officially "
+                    "attested candidate; refusing container switch")
+        if staged_candidate is None and prebuilt_only:
+            raise UpdateError(
+                "Prebuilt-only update has no attested candidate; NEVER "
+                "run local Docker build, cleanup or prune")
         if staged_candidate is None:
             # Only when a matching candidate is ABSENT: reclaim at most five
             # superseded mv3c:sha-* tags before judging available capacity.
@@ -1013,10 +1037,10 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
                        candidate[:24] + " for " + target[:12] +
                        " (skipped redundant Docker build)")
         else:
-            if reuse_only:
+            if reuse_only or prebuilt_only:
                 raise UpdateError(
-                    "Pinned Release candidate disappeared before switch; "
-                    "refusing Docker rebuild and preserving healthy service.")
+                    "Verified Release candidate disappeared before switch; "
+                    "refusing local Docker build and preserving healthy service")
             details = build_local_image(repo, target)
             if isinstance(details, str):
                 log.append(details[-6000:])
