@@ -9,8 +9,8 @@ on:
         type: string
 
 concurrency:
-  # Serialize *all* official image deliveries, not just the same version.
-  # A 40GB host must not receive two large archives at the same time.
+  # Serialize all official Release archives so no published proof points to
+  # an asset concurrently being replaced by a second publisher.
   group: mv3c-prebuilt-delivery
   cancel-in-progress: false
 
@@ -82,7 +82,7 @@ jobs:
             --build-arg BUILD_VERSION="$VERSION" \
             --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "mv3c:sha-$RELEASE_SHA" .
-      - name: Smoke-test exact versioned image before SCP
+      - name: Smoke-test exact versioned image before Release asset upload
         env:
           RELEASE_SHA: ${{ steps.version.outputs.sha }}
         run: |
@@ -138,7 +138,8 @@ jobs:
           image_id="$(docker image inspect --format '{{.Id}}' "mv3c:sha-$RELEASE_SHA")"
           image_size="$(docker image inspect --format '{{.Size}}' "mv3c:sha-$RELEASE_SHA")"
           test "$archive_size" -gt 0
-          test "$archive_size" -lt 6442450944
+          # GitHub Release assets allow at most 2 GiB per file.
+          test "$archive_size" -lt 2147483648
           {
             echo "name=$name"
             echo "archive_sha=$archive_sha"
@@ -146,49 +147,34 @@ jobs:
             echo "image_id=$image_id"
             echo "image_size=$image_size"
           } >> "$GITHUB_OUTPUT"
-      - name: Transfer to existing unprivileged SCP incoming directory
+      - name: Publish official archive to GitHub Release assets
         env:
-          DEPLOY_HOST: ${{ secrets.MV3C_SCP_HOST }}
-          DEPLOY_USER: ${{ secrets.MV3C_SCP_USER }}
-          DEPLOY_PORT: ${{ secrets.MV3C_SCP_PORT }}
-          DEPLOY_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
           IMAGE_NAME: ${{ steps.package.outputs.name }}
+          ARCHIVE_SIZE: ${{ steps.package.outputs.archive_size }}
         run: |
           set -euo pipefail
-          for key in DEPLOY_HOST DEPLOY_USER DEPLOY_PORT DEPLOY_KEY DEPLOY_KNOWN_HOSTS; do
-            test -n "${!key}" || { echo "::error::Missing $key Actions Secret"; exit 1; }
-          done
-          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
-          mkdir -m 700 "$RUNNER_TEMP/ssh"
-          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/ssh/key"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
-          chmod 600 "$RUNNER_TEMP/ssh/key" "$RUNNER_TEMP/ssh/known_hosts"
-          common=(-i "$RUNNER_TEMP/ssh/key" -o IdentitiesOnly=yes
-            -o BatchMode=yes -o StrictHostKeyChecking=yes
-            -o "UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts")
-          remote="$DEPLOY_USER@$DEPLOY_HOST"
-          directory=/var/lib/mv3c-prebuilt/incoming
-          ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" "test -d $directory && test -w $directory"
-          # Capacity check BEFORE transfer: at worst the uploaded tar and
-          # fully unpacked image coexist with the current healthy container.
-          free_bytes="$(ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" \
-            "df -B1 --output=avail $directory | tail -n 1" | tr -d '[:space:]')"
-          [[ "$free_bytes" =~ ^[0-9]+$ ]] || { echo "::error::Invalid host disk free bytes"; exit 1; }
-          archive_bytes="${{ steps.package.outputs.archive_size }}"
-          image_bytes="${{ steps.package.outputs.image_size }}"
-          reserve=$((2*1024*1024*1024+512*1024*1024))
-          necessary=$((archive_bytes+image_bytes+reserve))
-          if (( free_bytes < necessary )); then
-            echo "::error::Insufficient host disk: $free_bytes available < $necessary required (archive+image+2.5GiB reserve)"
-            exit 1
-          fi
-          partial=".$IMAGE_NAME.$GITHUB_RUN_ID.part"
-          scp "${common[@]}" -P "$DEPLOY_PORT" \
-            "$RUNNER_TEMP/$IMAGE_NAME" "$remote:$directory/$partial"
-          ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" \
-            "mv -f $directory/$partial $directory/$IMAGE_NAME && chmod 600 $directory/$IMAGE_NAME"
-      - name: Record protected archive/image proof AFTER successful transfer
+          # Public Release assets are downloaded by the host over HTTPS.
+          # This avoids the observed ~17 KiB/s inbound SCP bottleneck.
+          # Neither this workflow nor GitHub can access the host Docker socket.
+          test -f "$RUNNER_TEMP/$IMAGE_NAME"
+          test "$(stat -c %s "$RUNNER_TEMP/$IMAGE_NAME")" = "${{ steps.package.outputs.archive_size }}"
+          gh release upload "$VERSION" "$RUNNER_TEMP/$IMAGE_NAME" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          # Require an exact uploaded name and byte size before publishing
+          # the trusted Git proof. The host still checks SHA-256 independently.
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json assets > "$RUNNER_TEMP/assets.json"
+          python3 - <<'PY'
+          import json,os
+          data=json.load(open(os.environ["RUNNER_TEMP"]+"/assets.json"))
+          name=os.environ["IMAGE_NAME"]
+          expected=int(os.environ["ARCHIVE_SIZE"])
+          matching=[a for a in data["assets"] if a["name"] == name]
+          if len(matching)!=1 or matching[0]["size"]!=expected:
+              raise SystemExit("Uploaded GitHub Release asset name/size mismatch")
+          print("Release asset uploaded and size verified:",name,expected)
+          PY
+      - name: Record protected archive/image proof AFTER asset publication
         env:
           RELEASE_SHA: ${{ steps.version.outputs.sha }}
           ARCHIVE_SHA: ${{ steps.package.outputs.archive_sha }}
