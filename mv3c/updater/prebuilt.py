@@ -9,6 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 
@@ -119,12 +120,96 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def release_asset_url(version: str, sha: str) -> str:
+    """Fixed public GitHub Release download path; untrusted URLs are never accepted."""
+    return SOURCE + "/releases/download/" + version + "/" + filename(version, sha)
+
+
+def _download_release_asset(repo: Path, version: str, sha: str,
+                            proof: dict, disk_free) -> Path:
+    """Pull exact official Release asset via TLS; support bounded resume.
+
+    The host initiates HTTPS instead of accepting inbound SCP. The Git image
+    proof (verified before this method) cryptographically binds the payload.
+    """
+    _root_only_directory(VERIFIED)
+    path = VERIFIED / filename(version, sha)
+    partial = VERIFIED / (filename(version, sha) + ".download")
+    if partial.is_symlink():
+        raise PrebuiltError("Refusing a symlinked partial Release download")
+    previous = 0
+    if partial.exists():
+        info = partial.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+                info.st_nlink != 1):
+            raise PrebuiltError("Partial Release download is not a root-owned regular file")
+        previous = info.st_size
+    archive_bytes = int(proof["archive_size"])
+    if previous > archive_bytes:
+        raise PrebuiltError("Partial Release download larger than signed artifact")
+    # Space needed for remaining compressed bytes plus unpacked image and the
+    # same post-switch reserve as the original SCP design.
+    required = archive_bytes - previous + int(proof["image_size"]) + int(2.5 * 1024**3)
+    free = min(disk_free(repo), shutil.disk_usage(VERIFIED).free)
+    if free < required:
+        raise PrebuiltError(
+            "Insufficient space for HTTPS Release download and image import: "
+            f"free={free}, required={required}; no Docker build/prune attempted")
+    cmd = [
+        "curl", "--fail", "--location", "--silent", "--show-error",
+        "--connect-timeout", "20", "--max-time", "2400",
+        "--retry", "2", "--retry-delay", "5", "--retry-all-errors",
+        "--speed-limit", "32768", "--speed-time", "90",
+        "--continue-at", "-", "--output", str(partial),
+        release_asset_url(version, sha),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, cwd=repo, capture_output=True, text=True, timeout=2500,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PrebuiltError("HTTPS Release download unavailable or timed out") from exc
+    if result.returncode != 0:
+        raise PrebuiltError(
+            "Official GitHub Release HTTPS download failed; "
+            "no Docker mutation attempted: " + result.stderr[-500:])
+    info = partial.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_size != archive_bytes):
+        raise PrebuiltError("HTTPS Release archive file size does not match image proof")
+    os.chown(partial, 0, 0)
+    os.chmod(partial, 0o600)
+    if _sha256(partial) != proof["archive_sha256"]:
+        raise PrebuiltError("HTTPS Release SHA256 mismatch; refusing image import")
+    os.replace(partial, path)
+    return path
+
+
+def prepare_archive(repo: Path, version: str, sha: str, proof: dict,
+                    disk_free) -> Path:
+    """Stage signed bytes either from an existing complete file or HTTPS.
+
+    Reuse existing validated archival copies for interrupted deployments.
+    Partial legacy SCP files are not silently treated as complete archives.
+    """
+    _root_only_directory(VERIFIED)
+    name = filename(version, sha)
+    complete = VERIFIED / name
+    source = INCOMING / name
+    if complete.exists() or complete.is_symlink() or source.exists() or source.is_symlink():
+        path = _quarantine(version, sha, proof)
+    else:
+        path = _download_release_asset(repo, version, sha, proof, disk_free)
+    if _sha256(path) != proof["archive_sha256"]:
+        raise PrebuiltError("Official Release artifact SHA256 mismatch")
+    return path
+
+
 def import_prebuilt(repo: Path, sha: str, version: str, git, disk_free) -> str:
     """Fail-closed import; NEVER touch live tag, compose service or Git checkout."""
     proof = verified_image_proof(repo, version, sha, git)
-    path = _quarantine(version, sha, proof)
-    if _sha256(path) != proof["archive_sha256"]:
-        raise PrebuiltError("Prebuilt archive SHA-256 mismatch: refusing docker load")
+    path = prepare_archive(repo, version, sha, proof, disk_free)
     # Docker loads unpacked layers in addition to the already staged archive.
     # Conservative reserve protects the 40GB host; no prune or source build.
     minimum = 2 * 1024**3 + int(proof["image_size"]) + 512 * 1024**2
