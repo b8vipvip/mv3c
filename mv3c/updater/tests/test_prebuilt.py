@@ -101,12 +101,64 @@ class PrebuiltTests(unittest.TestCase):
                 "build_run_id": "123",
             }
             with (patch.object(prebuilt, "verified_image_proof", return_value=metadata),
-                  patch.object(prebuilt, "_quarantine", return_value=file),
+                  patch.object(prebuilt, "prepare_archive", return_value=file),
                   patch.object(prebuilt.subprocess, "run") as load):
                 with self.assertRaisesRegex(prebuilt.PrebuiltError, "Insufficient space"):
                     prebuilt.import_prebuilt(pathlib.Path(folder), SHA, VERSION,
                                             None, lambda _: 1024**3)
                 load.assert_not_called()
+
+    def test_release_url_is_exact_official_host_and_no_url_injection(self):
+        self.assertEqual(
+            prebuilt.release_asset_url(VERSION, SHA),
+            ("https://github.com/b8vipvip/mv3c/releases/download/"
+             + VERSION + "/mv3c-" + VERSION + "-" + SHA + ".tar.gz"))
+        for invalid in ("v1.0.0/evil", "https://evil.test/file", "../v1.0.0"):
+            with self.assertRaises(prebuilt.PrebuiltError):
+                prebuilt.release_asset_url(invalid, SHA)
+
+    def test_undersized_disk_refuses_https_and_docker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder) / "verified"
+            verified.mkdir()
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.subprocess, "run") as download):
+                with self.assertRaisesRegex(prebuilt.PrebuiltError, "Insufficient space"):
+                    prebuilt._download_release_asset(
+                        pathlib.Path(folder), VERSION, SHA,
+                        {"archive_size": "4096", "image_size": "1048576",
+                         "archive_sha256": ARCHIVE},
+                        lambda _: 1024)
+                download.assert_not_called()
+
+    def test_https_asset_download_checks_sha_and_uses_resumable_tls(self):
+        import hashlib
+        import types
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder) / "verified"
+            verified.mkdir()
+            payload = b"reproducible git release asset payload"
+            meta = {"archive_size": str(len(payload)), "image_size": "4096",
+                    "archive_sha256": hashlib.sha256(payload).hexdigest()}
+            commands = []
+            def mocked_curl(cmd, **_kwargs):
+                commands.append(cmd)
+                path = pathlib.Path(cmd[cmd.index("--output")+1])
+                path.write_bytes(payload)
+                return types.SimpleNamespace(returncode=0, stderr="")
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.os, "chown"),
+                  patch.object(prebuilt.subprocess, "run", side_effect=mocked_curl)):
+                resulting = prebuilt._download_release_asset(
+                    pathlib.Path(folder), VERSION, SHA, meta,
+                    lambda _: 16*1024**3)
+            self.assertEqual(resulting.read_bytes(), payload)
+            self.assertIn("--fail", commands[0])
+            self.assertIn("--location", commands[0])
+            self.assertEqual(commands[0][-1], prebuilt.release_asset_url(VERSION, SHA))
+            self.assertIn("--continue-at", commands[0])
 
     def test_canonical_agent_uses_no_build_in_all_runtime_jobs(self):
         text = (PATH.parent / "agent.py").read_text()
@@ -117,9 +169,10 @@ class PrebuiltTests(unittest.TestCase):
         self.assertIn("docker save", flow)
         self.assertIn("mv3c-image/$VERSION", flow)
         self.assertIn("refs/mv3c-release/proofs/$VERSION", flow)
-        self.assertIn("StrictHostKeyChecking=yes", flow)
+        self.assertIn("gh release upload", flow)
         self.assertIn("group: mv3c-prebuilt-delivery", flow)
-        self.assertIn("Insufficient host disk:", flow)
+        self.assertNotIn("scp ", flow)
+        self.assertIn("archive_sha256=$ARCHIVE_SHA", flow)
         self.assertLess(flow.index("docker pull mongo:8.0.20"),
                         flow.index("docker compose -f docker-compose.mv3c.yml up -d --no-build --pull never"))
 

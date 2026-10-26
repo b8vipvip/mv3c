@@ -1,3 +1,17 @@
+# 正式预构建镜像交付：GitHub Release HTTPS 拉取（替代慢速 SCP）
+
+本节为最新生产设计；后面关于 SSH/SCP 传输的段落属于历史方案，不再适用于新发布版本。
+
+**实测原因：** 2026-10-26 的 v0.1.26 SCP 进站仅约 17 KiB/s，传输 15 秒仅增长 261,120 字节，远不足以在 Actions 90 分钟上限内稳定交付。正式版 v0.1.27 起（实际以 Release 为准），GitHub Actions 在完成严格构建、启动冒烟和 OCI SHA/版本检查后，通过 GitHub Release 的 public asset 入口发布准确的 tar.gz 镜像包。然后发布注解镜像证明 mv3c-image/vX.Y.Z（绑定 Release SHA、归档 SHA256、体积、镜像 ID、构建 run id）。若上传失败则不发布证明。
+
+服务器唯一 Python agent 在原有排他锁与 MongoDB 任务下校验证明，先复用已经 SHA256 验证的本地归档；否则通过固定 https://github.com/b8vipvip/mv3c/releases/download/vX.Y.Z/mv3c-vX.Y.Z-<SHA>.tar.gz 发起有超时与低速中断的 HTTPS 拉取。curl 支持 Range 断点续传且自动使用服务器配置的 HTTPS_PROXY（若存在）。下载始终在 root-only verified 目录进行，下载完检查完整字节数和 SHA256，再 docker load、比对 OCI 镜像 ID、原地部署、健康验证或回滚。仍不允许运行生产 Docker build、npm ci、全局缓存清理或额外更新器。
+
+下载前检查至少“剩余压缩字节 + 镜像逻辑体积 + 2.5 GiB”磁盘空间；下载失败或速率低于 32 KiB/s 持续 90 秒即停止，旧服务保持原状。已有 root-only .download 临时文件用于下次续传。此设计替换入站 SCP 的网络路径，但**不保证**该主机直接访问 GitHub Release/CDN 一定更快；应先测量实际 HTTPS 速率/代理可达性，再做生产切换。
+
+从 v0.1.22 首次过渡时，仍只用仓库中的 bootstrap-prebuilt.sh；新版脚本在创建唯一 MongoDB 任务前准备并校验官方 Release 资产，因此不存在需要单独跑 SSH 上传任务的前置条件。确认服务器快照后，在生产主机执行前先核对最新 Release 和双 CI/镜像证明，再使用经过固定 Release SHA 核实的脚本。
+
+---
+
 # 正式生产更新流程（2026-10-26 起生效）
 
 **此段优先于下面保留的旧版服务器本地构建流程说明。** GitHub Actions 在正式 Release 发布后派发 mv3c-prebuilt.yml，按准确的 release SHA 和 vX.Y.Z 构建生产镜像，通过经过 known_hosts 校验的 SSH/SCP 传到 /var/lib/mv3c-prebuilt/incoming；完成传输后才发布同 SHA 注解 image proof (mv3c-image/vX.Y.Z)，其中记录 archive_sha256、archive_size、image_id、image_size 和 Actions run ID。服务器唯一 agent.py 校验正式 Release 的双 CI 证明、image proof、完整归档 SHA256、OCI 镜像身份和最少剩余磁盘空间，随后通过原有 MongoDB 单任务生命周期、Docker Compose 健康检查及回滚事务执行。**生产路径不调用 Docker build、npm ci、prune；任何交付缺失/不匹配直接失败，不回退本地构建。**

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap v0.1.22 -> newest already-delivered official prebuilt Release.
+# Bootstrap v0.1.22 -> newest GitHub Release with verified prebuilt image.
 # Same canonical Python agent, systemd lock, MongoDB job and rollback lifecycle.
 set -Eeuo pipefail
 umask 077
@@ -76,7 +76,7 @@ git show "$target:mv3c/updater/prebuilt.py" > "$TMP/prebuilt.py"
 python3 -m py_compile "$TMP/agent.py" "$TMP/prebuilt.py"
 grep -Fq 'prebuilt_only=True' "$TMP/agent.py" || { echo "Release agent not no-build"; exit 1; }
 python3 - "$target" "$VERSION" "$TMP" <<'PY'
-import importlib.util,pathlib,sys,subprocess,hashlib,stat
+import importlib.util,pathlib,sys,subprocess
 sha,version,folder=sys.argv[1:]
 repo=pathlib.Path("/opt/mv3c")
 def load(name):
@@ -88,16 +88,10 @@ def git(repo,*args):
     return subprocess.check_output(["git",*args],cwd=repo,text=True).strip()
 a.verify_release_proof(repo,version,sha)
 proof=p.verified_image_proof(repo,version,sha,git)
-artifact=p.INCOMING / p.filename(version,sha)
-info=artifact.lstat()
-if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size!=int(proof["archive_size"]):
-    raise SystemExit("Prebuilt Release file is missing/incomplete; no deployment queued")
-digest=hashlib.sha256()
-with artifact.open("rb") as f:
-    while chunk:=f.read(4*1024*1024): digest.update(chunk)
-if digest.hexdigest()!=proof["archive_sha256"]:
-    raise SystemExit("Archive SHA256 differs from official image proof")
-print("Official Release proof, CI results, image proof and archive SHA256 all PASS")
+# This is only artifact acquisition, not a second deployer or terminal-state
+# writer. HTTPS is used when no complete, verified local SCP archive exists.
+artifact=p.prepare_archive(repo,version,sha,proof,a.disk_free_bytes)
+print("Official Release proof, CI results, HTTPS/local archive SHA256 all PASS:",artifact)
 PY
 echo "Creating exactly one manual task via existing database queue"
 timeout 60s docker compose exec -T mv3c node -e '
