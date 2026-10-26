@@ -10,7 +10,7 @@
     sudo install -d -o mv3c-transfer -g mv3c-transfer -m 0700 /var/lib/mv3c-prebuilt/incoming
     sudo install -d -o root -g root -m 0700 /var/lib/mv3c-prebuilt/verified
 
-压缩 tar 和解包镜像需要足够磁盘。更新器采用保守预检：可用空间至少 2 GiB + 正式镜像逻辑尺寸 + 512 MiB，且切换时仍必须有 2 GiB。绝不自动清除共用 BuildKit 缓存、数据库卷、旧健康容器。成功导入后的正式归档暂时保存在仅 root 可读的 verified 目录中，后续可增加经核验的定向归档保留机制。
+压缩 tar 和解包镜像需要足够磁盘。更新器采用保守预检：可用空间至少 2 GiB + 正式镜像逻辑尺寸 + 512 MiB，且切换时仍必须有 2 GiB。绝不自动清除共用 BuildKit 缓存、数据库卷、旧健康容器。正式版归档在导入后先隔离到仅 root 可读的 verified 目录，只有新版本完成健康校验后才精确删除本次已消费的传输归档，释放磁盘；若更新失败则留存供审计与人工诊断，不触碰共用 BuildKit 缓存或数据库卷。
 
 保护 GitHub refs/tags/v*、refs/tags/mv3c-verified/v* 和 refs/tags/mv3c-image/v*：通过 rulesets 限制创建、改写、删除。这些 Git CI 证明依赖仓库写权限控制，并不是独立加密签名。GitHub 默认 GITHUB_TOKEN 发布 Release 不会自动触发另一条 release published 工作流，因此本仓库正式发布步骤显式 workflow_dispatch 派发镜像交付工作流。
 
