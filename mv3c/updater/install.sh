@@ -117,10 +117,11 @@ cat >/etc/systemd/system/mv3c-updater.timer <<'UNIT'
 [Unit]
 Description=Check mv3c updates and manual deployment requests every minute
 [Timer]
-OnBootSec=1min
+# OnActiveSec schedules the first run after re-enabling the timer even if
+# OnBootSec elapsed hours ago; OnUnitInactiveSec handles later cycles.
+OnActiveSec=1min
 OnUnitInactiveSec=1min
 AccuracySec=15s
-Persistent=true
 Unit=mv3c-updater.service
 [Install]
 WantedBy=timers.target
