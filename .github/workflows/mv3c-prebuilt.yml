@@ -1,0 +1,169 @@
+name: mv3c verified prebuilt image delivery
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact previously published official version (vX.Y.Z)
+        required: true
+        type: string
+
+concurrency:
+  group: mv3c-prebuilt-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prebuilt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve verified Release SHA and both successful CI runs
+        id: version
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          gh release view "$VERSION" --json isDraft,isPrerelease,tagName \
+            --jq 'select(.isDraft == false and .isPrerelease == false and .tagName == env.VERSION)' > /tmp/release-ok
+          test -s /tmp/release-ok
+          git fetch --no-tags origin \
+            "refs/tags/$VERSION:refs/mv3c-release/tags/$VERSION" \
+            "refs/tags/mv3c-verified/$VERSION:refs/mv3c-release/proofs/$VERSION" \
+            "refs/heads/main:refs/remotes/origin/main"
+          sha="$(git rev-parse "refs/mv3c-release/tags/$VERSION^{commit}")"
+          git merge-base --is-ancestor "$sha" refs/remotes/origin/main
+          export RELEASE_SHA="$sha"
+          python3 - <<'PY'
+          import os,pathlib
+          from mv3c.updater.agent import verify_release_proof
+          import subprocess
+          def git(repo,*args):
+              return subprocess.check_output(["git",*args],cwd=repo,text=True).strip()
+          verify_release_proof(pathlib.Path.cwd(),os.environ["VERSION"],os.environ["RELEASE_SHA"])
+          print("Both official CI results and Git published Release proof passed")
+          PY
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Checkout precisely attested source
+        run: |
+          git checkout --detach "${{ steps.version.outputs.sha }}"
+          test "$(git rev-parse HEAD)" = "${{ steps.version.outputs.sha }}"
+      - name: Build version-bound runtime in Actions
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker build --progress=plain \
+            --build-arg NODE_MAX_OLD_SPACE_SIZE=4096 \
+            --build-arg NPM_CI_TIMEOUT_SECONDS=1800 \
+            --build-arg BUILD_COMMIT="$RELEASE_SHA" \
+            --build-arg BUILD_BRANCH=main \
+            --build-arg BUILD_VERSION="$VERSION" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "mv3c:sha-$RELEASE_SHA" .
+      - name: Verify OCI revision/version/source and package official image
+        id: package
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker image inspect "mv3c:sha-$RELEASE_SHA" > "$RUNNER_TEMP/image.json"
+          python3 - <<'PY'
+          import json,os,re
+          img=json.load(open(os.environ["RUNNER_TEMP"]+"/image.json"))[0]
+          sha=os.environ["RELEASE_SHA"]
+          version=os.environ["VERSION"]
+          labels=img["Config"]["Labels"]
+          env=img["Config"]["Env"]
+          assert labels["org.opencontainers.image.revision"]==sha
+          assert labels["org.opencontainers.image.version"]==version
+          assert labels["org.opencontainers.image.source"]=="https://github.com/b8vipvip/mv3c"
+          assert "BUILD_COMMIT="+sha in env
+          assert "MV3C_VERSION="+version in env
+          assert re.fullmatch(r"sha256:[0-9a-f]{64}",img["Id"])
+          assert img["RootFS"]["Layers"] and img["Size"]>0
+          print("Official OCI identity verified:",img["Id"])
+          PY
+          name="mv3c-$VERSION-$RELEASE_SHA.tar.gz"
+          docker save "mv3c:sha-$RELEASE_SHA" | gzip -1 > "$RUNNER_TEMP/$name"
+          archive_sha="$(sha256sum "$RUNNER_TEMP/$name" | cut -d' ' -f1)"
+          archive_size="$(stat -c %s "$RUNNER_TEMP/$name")"
+          image_id="$(docker image inspect --format '{{.Id}}' "mv3c:sha-$RELEASE_SHA")"
+          image_size="$(docker image inspect --format '{{.Size}}' "mv3c:sha-$RELEASE_SHA")"
+          test "$archive_size" -gt 0
+          test "$archive_size" -lt 6442450944
+          {
+            echo "name=$name"
+            echo "archive_sha=$archive_sha"
+            echo "archive_size=$archive_size"
+            echo "image_id=$image_id"
+            echo "image_size=$image_size"
+          } >> "$GITHUB_OUTPUT"
+      - name: Transfer to existing unprivileged SCP incoming directory
+        env:
+          DEPLOY_HOST: ${{ secrets.MV3C_SCP_HOST }}
+          DEPLOY_USER: ${{ secrets.MV3C_SCP_USER }}
+          DEPLOY_PORT: ${{ secrets.MV3C_SCP_PORT }}
+          DEPLOY_KEY: ${{ secrets.MV3C_SCP_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.MV3C_SCP_KNOWN_HOSTS }}
+          IMAGE_NAME: ${{ steps.package.outputs.name }}
+        run: |
+          set -euo pipefail
+          for key in DEPLOY_HOST DEPLOY_USER DEPLOY_PORT DEPLOY_KEY DEPLOY_KNOWN_HOSTS; do
+            test -n "${!key}" || { echo "::error::Missing $key Actions Secret"; exit 1; }
+          done
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          mkdir -m 700 "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/ssh/key" "$RUNNER_TEMP/ssh/known_hosts"
+          common=(-i "$RUNNER_TEMP/ssh/key" -o IdentitiesOnly=yes
+            -o BatchMode=yes -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts")
+          remote="$DEPLOY_USER@$DEPLOY_HOST"
+          directory=/var/lib/mv3c-prebuilt/incoming
+          ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" "test -d $directory && test -w $directory"
+          partial=".$IMAGE_NAME.$GITHUB_RUN_ID.part"
+          scp "${common[@]}" -P "$DEPLOY_PORT" \
+            "$RUNNER_TEMP/$IMAGE_NAME" "$remote:$directory/$partial"
+          ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" \
+            "mv -f $directory/$partial $directory/$IMAGE_NAME && chmod 600 $directory/$IMAGE_NAME"
+      - name: Record protected archive/image proof AFTER successful transfer
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+          ARCHIVE_SHA: ${{ steps.package.outputs.archive_sha }}
+          ARCHIVE_SIZE: ${{ steps.package.outputs.archive_size }}
+          IMAGE_ID: ${{ steps.package.outputs.image_id }}
+          IMAGE_SIZE: ${{ steps.package.outputs.image_size }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          proof="mv3c-image/$VERSION"
+          if git ls-remote --tags origin "refs/tags/$proof" | grep -q .; then
+            echo "::error::Prebuilt proof already exists: $proof"
+            exit 1
+          fi
+          git tag -a "$proof" "$RELEASE_SHA" -m "MV3C_PREBUILT_IMAGE_V1
+          release=$VERSION
+          sha=$RELEASE_SHA
+          archive_sha256=$ARCHIVE_SHA
+          archive_size=$ARCHIVE_SIZE
+          image_id=$IMAGE_ID
+          image_size=$IMAGE_SIZE
+          build_run_id=$GITHUB_RUN_ID"
+          git push origin "refs/tags/$proof"
+          {
+            echo "### Verified image delivered for $VERSION"
+            echo "Commit: $RELEASE_SHA"
+            echo "OCI image ID: $IMAGE_ID"
+            echo "Archive SHA256: $ARCHIVE_SHA"
+            echo "Proof tag: $proof"
+          } >> "$GITHUB_STEP_SUMMARY"
