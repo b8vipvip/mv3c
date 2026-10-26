@@ -73,6 +73,28 @@ jobs:
             --build-arg BUILD_VERSION="$VERSION" \
             --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -t "mv3c:sha-$RELEASE_SHA" .
+      - name: Smoke-test exact versioned image before SCP
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker image tag "mv3c:sha-$RELEASE_SHA" mv3c:local
+          docker compose -f docker-compose.mv3c.yml up -d --no-build --pull never
+          healthy=0
+          for attempt in $(seq 1 80); do
+            if curl --silent --fail http://127.0.0.1:3080/readyz >/dev/null; then
+              healthy=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$healthy" != 1 ]; then
+            docker compose -f docker-compose.mv3c.yml logs --tail=150
+            exit 1
+          fi
+          curl --silent --fail http://127.0.0.1:3080/api/config/version > /tmp/release-version.json
+          node -e 'const v=require("/tmp/release-version.json"); if(v.sha!==process.env.RELEASE_SHA||v.version!==process.env.VERSION) process.exit(1); console.log("Official Release runtime attestation PASSED")'
+          docker compose -f docker-compose.mv3c.yml down
       - name: Verify OCI revision/version/source and package official image
         id: package
         env:
