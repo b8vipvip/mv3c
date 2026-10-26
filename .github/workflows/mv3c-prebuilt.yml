@@ -88,6 +88,10 @@ jobs:
         run: |
           set -euo pipefail
           docker image tag "mv3c:sha-$RELEASE_SHA" mv3c:local
+          # Actions runners start with no Mongo image; prefetch ONLY the CI
+          # test dependency before enforcing --pull never on the smoke stack.
+          # This pull happens on GitHub Actions, NEVER on the production host.
+          docker pull mongo:8.0.20
           docker compose -f docker-compose.mv3c.yml up -d --no-build --pull never
           healthy=0
           for attempt in $(seq 1 80); do
