@@ -9,7 +9,9 @@ on:
         type: string
 
 concurrency:
-  group: mv3c-prebuilt-${{ inputs.version }}
+  # Serialize *all* official image deliveries, not just the same version.
+  # A 40GB host must not receive two large archives at the same time.
+  group: mv3c-prebuilt-delivery
   cancel-in-progress: false
 
 permissions:
@@ -164,6 +166,19 @@ jobs:
           remote="$DEPLOY_USER@$DEPLOY_HOST"
           directory=/var/lib/mv3c-prebuilt/incoming
           ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" "test -d $directory && test -w $directory"
+          # Capacity check BEFORE transfer: at worst the uploaded tar and
+          # fully unpacked image coexist with the current healthy container.
+          free_bytes="$(ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" \
+            "df -B1 --output=avail $directory | tail -n 1" | tr -d '[:space:]')"
+          [[ "$free_bytes" =~ ^[0-9]+$ ]] || { echo "::error::Invalid host disk free bytes"; exit 1; }
+          archive_bytes="${{ steps.package.outputs.archive_size }}"
+          image_bytes="${{ steps.package.outputs.image_size }}"
+          reserve=$((2*1024*1024*1024+512*1024*1024))
+          necessary=$((archive_bytes+image_bytes+reserve))
+          if (( free_bytes < necessary )); then
+            echo "::error::Insufficient host disk: $free_bytes available < $necessary required (archive+image+2.5GiB reserve)"
+            exit 1
+          fi
           partial=".$IMAGE_NAME.$GITHUB_RUN_ID.part"
           scp "${common[@]}" -P "$DEPLOY_PORT" \
             "$RUNNER_TEMP/$IMAGE_NAME" "$remote:$directory/$partial"
