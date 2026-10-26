@@ -9,7 +9,9 @@ on:
         type: string
 
 concurrency:
-  group: mv3c-prebuilt-${{ inputs.version }}
+  # Serialize *all* official image deliveries, not just the same version.
+  # A 40GB host must not receive two large archives at the same time.
+  group: mv3c-prebuilt-delivery
   cancel-in-progress: false
 
 permissions:
@@ -31,9 +33,16 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          gh release view "$VERSION" --json isDraft,isPrerelease,tagName \
-            --jq 'select(.isDraft == false and .isPrerelease == false and .tagName == env.VERSION)' > /tmp/release-ok
-          test -s /tmp/release-ok
+          gh release view "$VERSION" --json isDraft,isPrerelease,tagName > /tmp/mv3c-release.json
+          python3 - <<'PY'
+          import json, os
+          info=json.load(open("/tmp/mv3c-release.json",encoding="utf-8"))
+          if (info.get("isDraft") is not False
+                  or info.get("isPrerelease") is not False
+                  or info.get("tagName") != os.environ["VERSION"]):
+              raise SystemExit("Requested tag is not an exact published official Release")
+          print("Exact official GitHub Release verified")
+          PY
           git fetch --no-tags origin \
             "refs/tags/$VERSION:refs/mv3c-release/tags/$VERSION" \
             "refs/tags/mv3c-verified/$VERSION:refs/mv3c-release/proofs/$VERSION" \
@@ -79,6 +88,10 @@ jobs:
         run: |
           set -euo pipefail
           docker image tag "mv3c:sha-$RELEASE_SHA" mv3c:local
+          # Actions runners start with no Mongo image; prefetch ONLY the CI
+          # test dependency before enforcing --pull never on the smoke stack.
+          # This pull happens on GitHub Actions, NEVER on the production host.
+          docker pull mongo:8.0.20
           docker compose -f docker-compose.mv3c.yml up -d --no-build --pull never
           healthy=0
           for attempt in $(seq 1 80); do
@@ -157,6 +170,19 @@ jobs:
           remote="$DEPLOY_USER@$DEPLOY_HOST"
           directory=/var/lib/mv3c-prebuilt/incoming
           ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" "test -d $directory && test -w $directory"
+          # Capacity check BEFORE transfer: at worst the uploaded tar and
+          # fully unpacked image coexist with the current healthy container.
+          free_bytes="$(ssh "${common[@]}" -p "$DEPLOY_PORT" "$remote" \
+            "df -B1 --output=avail $directory | tail -n 1" | tr -d '[:space:]')"
+          [[ "$free_bytes" =~ ^[0-9]+$ ]] || { echo "::error::Invalid host disk free bytes"; exit 1; }
+          archive_bytes="${{ steps.package.outputs.archive_size }}"
+          image_bytes="${{ steps.package.outputs.image_size }}"
+          reserve=$((2*1024*1024*1024+512*1024*1024))
+          necessary=$((archive_bytes+image_bytes+reserve))
+          if (( free_bytes < necessary )); then
+            echo "::error::Insufficient host disk: $free_bytes available < $necessary required (archive+image+2.5GiB reserve)"
+            exit 1
+          fi
           partial=".$IMAGE_NAME.$GITHUB_RUN_ID.part"
           scp "${common[@]}" -P "$DEPLOY_PORT" \
             "$RUNNER_TEMP/$IMAGE_NAME" "$remote:$directory/$partial"

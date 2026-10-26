@@ -1070,6 +1070,57 @@ class HostUpdaterTests(unittest.TestCase):
                 with self.assertRaisesRegex(agent.UpdateError, "image does not match"):
                     agent.verify_deployment(pathlib.Path("/tmp"), SHA2)
 
+    def test_prebuilt_cached_image_must_match_official_image_id(self):
+        import sys
+        import types
+        repo = pathlib.Path("/tmp")
+        proof = types.ModuleType("prebuilt")
+        proof.verified_image_proof = lambda *_args: {
+            "image_id": "sha256:" + "c" * 64
+        }
+        with (
+            patch.dict(sys.modules, {"prebuilt": proof}),
+            patch.object(agent, "version_for_sha", return_value="v0.1.25"),
+            patch.object(agent, "verified_existing_candidate",
+                         return_value="sha256:" + "d" * 64),
+            patch.object(agent, "run") as docker,
+            patch.object(agent, "build_local_image") as build,
+            patch.object(agent, "cleanup_stale_mv3c_image_tags") as cleanup,
+        ):
+            outcome, detail, error = agent.deploy(
+                repo, SHA1, SHA2, prebuilt_only=True)
+        self.assertEqual(outcome, "failed")
+        self.assertIn("official prebuilt image proof", error)
+        docker.assert_not_called()
+        build.assert_not_called()
+        cleanup.assert_not_called()
+
+    def test_prebuilt_candidate_disappearing_must_not_fall_back_to_build(self):
+        import sys
+        import types
+        proof = types.ModuleType("prebuilt")
+        accepted = "sha256:" + "c" * 64
+        proof.verified_image_proof = lambda *_args: {"image_id": accepted}
+        with tempfile.TemporaryDirectory() as folder:
+            repo = pathlib.Path(folder)
+            with (
+                patch.dict(sys.modules, {"prebuilt": proof}),
+                patch.object(agent, "version_for_sha", return_value="v0.1.25"),
+                patch.object(agent, "verified_existing_candidate",
+                             side_effect=[accepted, None]),
+                patch.object(agent, "disk_free_bytes", return_value=4 * 1024**3),
+                patch.object(agent, "run", return_value="tagged"),
+                patch.object(agent, "git", return_value="ok"),
+                patch.object(agent, "build_local_image") as build,
+                patch.object(agent, "cleanup_stale_mv3c_image_tags") as cleanup,
+            ):
+                outcome, detail, error = agent.deploy(
+                    repo, SHA1, SHA2, prebuilt_only=True)
+        self.assertEqual(outcome, "failed")
+        self.assertIn("refusing local Docker build", error)
+        build.assert_not_called()
+        cleanup.assert_not_called()
+
     def test_only_fast_forward_is_allowed(self):
         with patch.object(agent.subprocess, "run") as run:
             run.return_value.returncode = 1
