@@ -1,3 +1,33 @@
+# 正式生产更新流程（2026-10-26 起生效）
+
+**此段优先于下面保留的旧版服务器本地构建流程说明。** GitHub Actions 在正式 Release 发布后派发 mv3c-prebuilt.yml，按准确的 release SHA 和 vX.Y.Z 构建生产镜像，通过经过 known_hosts 校验的 SSH/SCP 传到 /var/lib/mv3c-prebuilt/incoming；完成传输后才发布同 SHA 注解 image proof (mv3c-image/vX.Y.Z)，其中记录 archive_sha256、archive_size、image_id、image_size 和 Actions run ID。服务器唯一 agent.py 校验正式 Release 的双 CI 证明、image proof、完整归档 SHA256、OCI 镜像身份和最少剩余磁盘空间，随后通过原有 MongoDB 单任务生命周期、Docker Compose 健康检查及回滚事务执行。**生产路径不调用 Docker build、npm ci、prune；任何交付缺失/不匹配直接失败，不回退本地构建。**
+
+## 一次性配置
+
+需为 GitHub Actions Secrets 配置：MV3C_SCP_HOST、MV3C_SCP_PORT、MV3C_SCP_USER、MV3C_SCP_PRIVATE_KEY、MV3C_SCP_KNOWN_HOSTS。known_hosts 内容必须带外校验 SSH 服务端指纹，不接受 StrictHostKeyChecking=no。当前生产服务端使用独立非特权用户 mv3c-transfer，账号不应有 Docker 权限、root sudo 权限。服务器目录初始化由 root 执行：
+
+    sudo install -d -o root -g root -m 0755 /var/lib/mv3c-prebuilt
+    sudo install -d -o mv3c-transfer -g mv3c-transfer -m 0700 /var/lib/mv3c-prebuilt/incoming
+    sudo install -d -o root -g root -m 0700 /var/lib/mv3c-prebuilt/verified
+
+压缩 tar 和解包镜像需要足够磁盘。更新器采用保守预检：可用空间至少 2 GiB + 正式镜像逻辑尺寸 + 512 MiB，且切换时仍必须有 2 GiB。绝不自动清除共用 BuildKit 缓存、数据库卷、旧健康容器。成功导入后的正式归档暂时保存在仅 root 可读的 verified 目录中，后续可增加经核验的定向归档保留机制。
+
+保护 GitHub refs/tags/v*、refs/tags/mv3c-verified/v* 和 refs/tags/mv3c-image/v*：通过 rulesets 限制创建、改写、删除。这些 Git CI 证明依赖仓库写权限控制，并不是独立加密签名。GitHub 默认 GITHUB_TOKEN 发布 Release 不会自动触发另一条 release published 工作流，因此本仓库正式发布步骤显式 workflow_dispatch 派发镜像交付工作流。
+
+## v0.1.22 现有宿主机第一次无构建升级
+
+当前 v0.1.22 updater 还不懂 Actions 正式镜像证明，因此不能直接点击旧后台的“立即更新并部署”，否则可能转入旧版服务器本地 Docker 构建。
+
+在新正式版的 mv3c verified prebuilt image delivery Actions 工作流成功、压缩镜像到达服务器 incoming 后，保存服务器快照，并从**经过发布证明核验的同一个正式 Release 提交**取得 mv3c/updater/bootstrap-prebuilt.sh，检查脚本代码后上传至服务器 /root/bootstrap-prebuilt.sh。root 手动执行：
+
+    sudo bash /root/bootstrap-prebuilt.sh vX.Y.Z
+
+参数换成实际最新正式版本号。脚本会停止旧 timer、验证源 Git ref/CI proof/镜像 proof 和完整归档 SHA256、验证空闲唯一队列，再以旧后台既有 queueJob 创建单个任务。随后提取同一官方 Release SHA 的新 agent.py + prebuilt.py 到 root-only 临时目录，仅此代理运行原始 /run/lock/mv3c-updater.lock / MongoDB completeJob / Docker 回滚；成功并验证健康后只原位安装同名更新器 systemd 服务。失败则旧容器仍应运行、定时器保持暂停以备诊断，绝不增加第二套部署器。
+
+之后正常手动更新仍由原后台排队。镜像缺失、SSH 不可达、缺失证明、SHA 不匹配或容量不足都直接拒绝部署；不会回到旧的本地构建路径。**下一次正式版号不一定是 v0.1.25，务必以真实最新 Release 为准。**
+
+---
+
 # MV3C GitHub 正式版发布与服务器缓存部署
 
 ## 更新流程（与 chat2api 一致）
