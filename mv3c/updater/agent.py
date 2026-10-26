@@ -945,6 +945,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
     log: list[str] = []
     backed_up = False
     switched = False
+    imported_prebuilt = False
     journal = transaction_path(repo)
 
     def advance(stage: str, percent: int, detail: str) -> None:
@@ -972,6 +973,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
             from prebuilt import import_prebuilt
             imported = import_prebuilt(repo, target, version_for_sha(repo, target),
                                       git, disk_free_bytes)
+            imported_prebuilt = True
             log.append(imported)
             staged_candidate = verified_existing_candidate(repo, target)
             if staged_candidate is None:
@@ -1054,6 +1056,15 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
                 len(removed)))
             for tag in removed:
                 log.append("Untagged stale MV3C candidate: " + tag)
+            # The verified official image now exists under an immutable local SHA
+            # tag. Reclaim ONLY the imported archive for this successful job;
+            # never prune the shared BuildKit cache or MongoDB/data volumes.
+            if imported_prebuilt:
+                from prebuilt import VERIFIED, filename
+                archive = VERIFIED / filename(version_for_sha(repo, target), target)
+                if archive.is_file() and not archive.is_symlink():
+                    archive.unlink()
+                    log.append("Removed consumed release transport archive after healthy deploy")
             log.append("Disk after deployment: " + disk_status(repo))
         except Exception as maintenance_error:
             log.append("Post-deploy disk maintenance warning (service still healthy): "
