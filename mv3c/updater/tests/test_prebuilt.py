@@ -118,6 +118,10 @@ class PrebuiltTests(unittest.TestCase):
         self.assertIn("mv3c-image/$VERSION", flow)
         self.assertIn("refs/mv3c-release/proofs/$VERSION", flow)
         self.assertIn("StrictHostKeyChecking=yes", flow)
+        self.assertIn("group: mv3c-prebuilt-delivery", flow)
+        self.assertIn("Insufficient host disk:", flow)
+        self.assertLess(flow.index("docker pull mongo:8.0.20"),
+                        flow.index("docker compose -f docker-compose.mv3c.yml up -d --no-build --pull never"))
 
 
 if __name__ == "__main__":
