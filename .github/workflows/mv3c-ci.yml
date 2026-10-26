@@ -32,6 +32,8 @@ jobs:
           python3 -m unittest discover -s mv3c/updater/tests -p 'test_*.py' -v
           python3 -m py_compile mv3c/updater/agent.py
           bash -n mv3c/updater/install.sh
+          bash -n mv3c/updater/bootstrap-prebuilt.sh
+          python3 -m py_compile mv3c/updater/prebuilt.py
           node --check mv3c/updater/bridge.cjs
       - name: Validate env-free Compose configuration
         run: |

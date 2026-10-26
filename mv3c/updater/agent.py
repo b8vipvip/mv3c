@@ -40,6 +40,7 @@ GIT_REFSPECS = (
     "refs/heads/main:refs/remotes/origin/main",
     "refs/tags/v*:refs/mv3c-release/tags/v*",
     "refs/tags/mv3c-verified/v*:refs/mv3c-release/proofs/v*",
+    "refs/tags/mv3c-image/v*:refs/mv3c-release/images/v*",
 )
 # Local Docker images remain in the host cache across updates. The GitHub
 # Actions image is tested for the exact SHA, but does not need to be transferred.
@@ -939,11 +940,12 @@ def restore_interrupted_local_deploy(repo: Path) -> str:
 
 
 def deploy(repo: Path, old: str, target: str, *, on_progress=None,
-           reuse_only: bool = False) -> tuple[str, str, str]:
+           reuse_only: bool = False, prebuilt_only: bool = False) -> tuple[str, str, str]:
     """Build from the CI-approved commit with the host's Docker/BuildKit cache."""
     log: list[str] = []
     backed_up = False
     switched = False
+    imported_prebuilt = False
     journal = transaction_path(repo)
 
     def advance(stage: str, percent: int, detail: str) -> None:
@@ -964,6 +966,18 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
             raise UpdateError(
                 "Pinned Release is reuse-only but verified local image is missing; "
                 "no Docker build or container change attempted.")
+        if staged_candidate is None and prebuilt_only:
+            # Only the canonical agent calls this mode in production. The Actions
+            # artifact and protected image proof are mandatory; NEVER fall back
+            # to Docker build when delivery is incomplete or invalid.
+            from prebuilt import import_prebuilt
+            imported = import_prebuilt(repo, target, version_for_sha(repo, target),
+                                      git, disk_free_bytes)
+            imported_prebuilt = True
+            log.append(imported)
+            staged_candidate = verified_existing_candidate(repo, target)
+            if staged_candidate is None:
+                raise UpdateError("Actions image import completed without a verified candidate")
         if staged_candidate is None:
             # Only when a matching candidate is ABSENT: reclaim at most five
             # superseded mv3c:sha-* tags before judging available capacity.
@@ -992,7 +1006,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
         advance("merging", 43, "Git 快进至已通过 CI 的源码版本")
         git(repo, "merge", "--ff-only", target, timeout=60)
         log.append("Git fast-forward: " + old[:12] + " -> " + target[:12])
-        advance("building", 54, "先验证同 SHA 的已有镜像，缺失时再增量构建")
+        advance("building", 54, "验证同 SHA 镜像并复用 Actions 已交付的正式构建产物")
         candidate = verified_existing_candidate(repo, target)
         if candidate:
             log.append("Reused verified existing Release image " +
@@ -1042,6 +1056,15 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
                 len(removed)))
             for tag in removed:
                 log.append("Untagged stale MV3C candidate: " + tag)
+            # The verified official image now exists under an immutable local SHA
+            # tag. Reclaim ONLY the imported archive for this successful job;
+            # never prune the shared BuildKit cache or MongoDB/data volumes.
+            if imported_prebuilt:
+                from prebuilt import VERIFIED, filename
+                archive = VERIFIED / filename(version_for_sha(repo, target), target)
+                if archive.is_file() and not archive.is_symlink():
+                    archive.unlink()
+                    log.append("Removed consumed release transport archive after healthy deploy")
             log.append("Disk after deployment: " + disk_status(repo))
         except Exception as maintenance_error:
             log.append("Post-deploy disk maintenance warning (service still healthy): "
@@ -1323,7 +1346,8 @@ def execute(repo: Path, *, recovery_version: str | None = None) -> None:
             print("Pinned cached Release deployment; Docker build prohibited: " + label,
                   flush=True)
         outcome, log, error = deploy(repo, old, target,
-                                    on_progress=progress, reuse_only=reuse_only)
+                                    on_progress=progress, reuse_only=reuse_only,
+                                    prebuilt_only=True)
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=2)

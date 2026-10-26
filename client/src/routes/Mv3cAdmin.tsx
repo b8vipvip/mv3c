@@ -453,7 +453,7 @@ export default function Mv3cAdmin() {
   });
 
   const requestDeployment = () => {
-    if (!window.confirm('确定要执行更新吗？将先检查 GitHub CI，然后构建新镜像并重启 mv3c，期间服务可能短暂不可用。')) return;
+    if (!window.confirm('确定通过唯一更新器部署已交付并验证的 GitHub Actions 正式版镜像吗？若镜像尚未传输、SHA 不符或磁盘不足，会拒绝部署，绝不在生产服务器构建。切换期间可能短暂不可用。')) return;
     void run(async () => {
       if (!token) return;
       await adminRequest(token, '/updates/deploy', { method: 'POST' });
@@ -716,7 +716,7 @@ export default function Mv3cAdmin() {
                 <div>
                   <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    代码拉取：与 chat2api 一致，依次尝试 GitHub SSH 443 → SSH 22 → HTTPS（均限时），宿主机不再查询 GitHub REST API。仅部署附有发布证明、包含两项 CI 成功记录并绑定正式版 SHA 的 GitHub Release；部署使用服务器 Docker 缓存。
+                    代码拉取：与 chat2api 一致，依次尝试 GitHub SSH 443 → SSH 22 → HTTPS（均限时），宿主机不再查询 GitHub REST API。仅部署附有发布证明、包含两项 CI 成功记录并绑定正式版 SHA 的 GitHub Release；镜像由 GitHub Actions 预构建后通过 SSH/SCP 交付，宿主机验证完整归档 SHA-256、镜像 ID 与正式版 SHA 后无构建部署。
                   </p>
                 </div>
                 {!updates ? (
@@ -726,7 +726,7 @@ export default function Mv3cAdmin() {
                     {!updates.agentOnline && (updates.activeJob || updates.pendingJob) && (
                       <div role="status" className="rounded-lg border border-amber-500 p-3 text-sm">
                         更新任务已入队或仍在执行，但最近没有收到宿主机心跳。
-                        Docker 构建可能长时间处于同一阶段；阶段百分比不等于构建百分比。
+                        大体积正式镜像导入和健康检查可能长时间处于同一阶段；阶段百分比不等于实际耗时比例。
                         查看宿主机 <code>journalctl -u mv3c-updater.service</code> 和
                         <code> /var/log/mv3c-updater-build.log</code>，请勿重新安装更新器或重复部署。
                       </div>
@@ -821,7 +821,7 @@ export default function Mv3cAdmin() {
                             </details>
                           ) : null}
                           <p className="text-xs text-text-secondary">
-                            百分比表示当前进入的部署阶段，不是按时间估算。Docker 镜像构建期间可能停留在同一百分比。
+                            百分比表示当前进入的部署阶段，不是按时间估算。正式版镜像导入与健康检查期间可能停留在同一百分比。
                           </p>
                         </div>
                       );
@@ -882,7 +882,7 @@ export default function Mv3cAdmin() {
                           onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, autoDeployEnabled: e.target.checked,
                           })); }} />
-                        <span>允许无人值守自动部署（高磁盘和内存负载，默认关闭；建议仅在维护窗口开启）</span>
+                        <span>允许无人值守自动部署（需要已交付且验证的正式镜像，默认关闭；建议仅在维护窗口开启）</span>
                       </label>
                       <label className="block space-y-2">
                         <span className="block text-sm font-medium">更新通道</span>

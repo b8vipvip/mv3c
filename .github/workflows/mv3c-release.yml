@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  actions: read
+  actions: write
   contents: write
 
 jobs:
@@ -109,6 +109,10 @@ jobs:
           docker=success
           published=success"
           git push origin "refs/tags/$proof"
+          # workflow_dispatch is allowed from GITHUB_TOKEN even though
+          # release-created events would not trigger a new workflow.
+          gh workflow run mv3c-prebuilt.yml --repo "$REPOSITORY" --ref main -f version="$tag"
+          echo "Scheduled verified prebuilt image delivery for $tag" >> "$GITHUB_STEP_SUMMARY"
           echo "Git-only deployment proof: $proof"
           echo "### Published mv3c $tag" >> "$GITHUB_STEP_SUMMARY"
           echo "Commit: \`$VERIFIED_SHA\`" >> "$GITHUB_STEP_SUMMARY"
