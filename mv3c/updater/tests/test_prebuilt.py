@@ -149,6 +149,7 @@ class PrebuiltTests(unittest.TestCase):
                 return types.SimpleNamespace(returncode=0, stderr="")
             with (patch.object(prebuilt, "VERIFIED", verified),
                   patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.os, "chown"),
                   patch.object(prebuilt.subprocess, "run", side_effect=mocked_curl)):
                 resulting = prebuilt._download_release_asset(
                     pathlib.Path(folder), VERSION, SHA, meta,
