@@ -40,6 +40,11 @@ jobs:
             "refs/heads/main:refs/remotes/origin/main"
           sha="$(git rev-parse "refs/mv3c-release/tags/$VERSION^{commit}")"
           git merge-base --is-ancestor "$sha" refs/remotes/origin/main
+          # Do not overwrite a previously attested good incoming archive on rerun.
+          if git ls-remote --tags origin "refs/tags/mv3c-image/$VERSION" | grep -q .; then
+            echo "::error::This official Release already has a published image proof"
+            exit 1
+          fi
           export RELEASE_SHA="$sha"
           python3 - <<'PY'
           import os,pathlib
