@@ -113,7 +113,7 @@ class PrebuiltTests(unittest.TestCase):
         self.assertIn("prebuilt_only=True", text)
         self.assertIn("import_prebuilt(repo, target", text)
         self.assertIn("refs/tags/mv3c-image/v*:refs/mv3c-release/images/v*", text)
-        flow = (PATH.parents[3] / ".github/workflows/mv3c-prebuilt.yml").read_text()
+        flow = (PATH.parents[2] / ".github/workflows/mv3c-prebuilt.yml").read_text()
         self.assertIn("docker save", flow)
         self.assertIn("mv3c-image/$VERSION", flow)
         self.assertIn("refs/mv3c-release/proofs/$VERSION", flow)
