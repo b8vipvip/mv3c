@@ -31,9 +31,16 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          gh release view "$VERSION" --json isDraft,isPrerelease,tagName \
-            --jq 'select(.isDraft == false and .isPrerelease == false and .tagName == env.VERSION)' > /tmp/release-ok
-          test -s /tmp/release-ok
+          gh release view "$VERSION" --json isDraft,isPrerelease,tagName > /tmp/mv3c-release.json
+          python3 - <<'PY'
+          import json, os
+          info=json.load(open("/tmp/mv3c-release.json",encoding="utf-8"))
+          if (info.get("isDraft") is not False
+                  or info.get("isPrerelease") is not False
+                  or info.get("tagName") != os.environ["VERSION"]):
+              raise SystemExit("Requested tag is not an exact published official Release")
+          print("Exact official GitHub Release verified")
+          PY
           git fetch --no-tags origin \
             "refs/tags/$VERSION:refs/mv3c-release/tags/$VERSION" \
             "refs/tags/mv3c-verified/$VERSION:refs/mv3c-release/proofs/$VERSION" \
