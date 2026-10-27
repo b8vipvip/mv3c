@@ -206,6 +206,104 @@ def prepare_archive(repo: Path, version: str, sha: str, proof: dict,
     return path
 
 
+
+def archive_attested_image_ids(path: Path, proof: dict, tag: str) -> set[str]:
+    """Bind Docker's OCI manifest ID to the signed config ID in one exact archive.
+
+    Classic Docker image stores expose the config digest as .Id. Docker's
+    containerd image store may expose the OCI manifest digest instead. Never
+    accept an arbitrary manifest digest: its verified bytes must reference
+    the exact config digest attested by the Release proof, and the OCI index
+    and Docker save manifest must reference that same image.
+    """
+    import json
+    import tarfile
+
+    config_id = proof["image_id"]
+    expected_blob = "blobs/sha256/" + config_id.removeprefix("sha256:")
+    docs = {}
+    with tarfile.open(path, mode="r|gz") as source:
+        for item in source:
+            if not item.isfile():
+                continue
+            name = item.name.removeprefix("./")
+            if name not in ("manifest.json", "index.json", expected_blob) and not (
+                name.startswith("blobs/sha256/") and item.size <= 1024 * 1024
+            ):
+                continue
+            if item.size > 1024 * 1024:
+                raise PrebuiltError("OCI attestation metadata unexpectedly large")
+            stream = source.extractfile(item)
+            if stream is None:
+                raise PrebuiltError("Missing OCI archive metadata")
+            raw = stream.read()
+            if name.startswith("blobs/sha256/"):
+                digest = name.removeprefix("blobs/sha256/")
+                if not HEX.fullmatch(digest) or hashlib.sha256(raw).hexdigest() != digest:
+                    raise PrebuiltError("OCI attestation blob digest mismatch")
+            try:
+                docs[name] = json.loads(raw)
+            except (ValueError, UnicodeDecodeError) as error:
+                raise PrebuiltError("Malformed OCI attestation metadata") from error
+
+    entries = docs.get("manifest.json")
+    if (not isinstance(entries, list) or len(entries) != 1
+            or not isinstance(entries[0], dict)
+            or entries[0].get("RepoTags") != [tag]
+            or entries[0].get("Config") != expected_blob):
+        raise PrebuiltError("Docker archive does not reference signed OCI config/tag")
+    config = docs.get(expected_blob)
+    if not isinstance(config, dict):
+        raise PrebuiltError("Signed OCI image config is missing from archive")
+    labels = (config.get("config") or {}).get("Labels") or {}
+    environ = (config.get("config") or {}).get("Env") or []
+    if (labels.get("org.opencontainers.image.revision") != proof["sha"]
+            or labels.get("org.opencontainers.image.version") != proof["release"]
+            or labels.get("org.opencontainers.image.source") != SOURCE
+            or "BUILD_COMMIT=" + proof["sha"] not in environ
+            or "MV3C_VERSION=" + proof["release"] not in environ
+            or not (config.get("rootfs") or {}).get("diff_ids")):
+        raise PrebuiltError("Signed OCI config metadata does not match official Release")
+
+    allowed = {config_id}
+    index = docs.get("index.json")
+    if not isinstance(index, dict):
+        return allowed
+    descriptors = index.get("manifests")
+    if not isinstance(descriptors, list):
+        raise PrebuiltError("Invalid OCI index")
+    for descriptor in descriptors:
+        if not isinstance(descriptor, dict):
+            continue
+        digest = descriptor.get("digest", "")
+        if (not isinstance(digest, str) or
+                not re.fullmatch(r"sha256:[a-f0-9]{64}", digest)):
+            continue
+        manifest = docs.get("blobs/sha256/" + digest.removeprefix("sha256:"))
+        if (isinstance(manifest, dict) and manifest.get("schemaVersion") == 2
+                and (manifest.get("config") or {}).get("digest") == config_id
+                and (manifest.get("config") or {}).get("mediaType") in (
+                    "application/vnd.oci.image.config.v1+json",
+                    "application/vnd.docker.container.image.v1+json",
+                )
+                and isinstance(manifest.get("layers"), list)
+                and len(manifest["layers"]) > 0):
+            allowed.add(digest)
+    return allowed
+
+
+def verified_local_candidate_id(repo: Path, sha: str, version: str,
+                                proof: dict, docker_id: str, disk_free) -> bool:
+    """Accept config ID or OCI manifest ID only when bound by signed archive."""
+    if docker_id == proof["image_id"]:
+        return True
+    # Manifest digest requires its exact official archive; labels alone cannot
+    # authorize an unrelated local image or weaken the CI-bound proof.
+    archive = prepare_archive(repo, version, sha, proof, disk_free)
+    return docker_id in archive_attested_image_ids(
+        archive, proof, "mv3c:sha-" + sha)
+
+
 def import_prebuilt(repo: Path, sha: str, version: str, git, disk_free) -> str:
     """Fail-closed import; NEVER touch live tag, compose service or Git checkout."""
     proof = verified_image_proof(repo, version, sha, git)
@@ -234,6 +332,9 @@ def import_prebuilt(repo: Path, sha: str, version: str, git, disk_free) -> str:
         ).strip()
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise PrebuiltError("Imported prebuilt image has no canonical immutable SHA tag") from exc
-    if image_id != proof["image_id"]:
-        raise PrebuiltError("Imported image ID differs from protected Git release image proof")
+    if image_id not in archive_attested_image_ids(path, proof, tag):
+        raise PrebuiltError(
+            "Imported Docker image ID is not the signed config or its bound OCI "
+            "manifest digest: actual=" + image_id +
+            ", signed-config=" + proof["image_id"])
     return "Verified GitHub Actions archive/import SHA-256=" + proof["archive_sha256"][:16] + " image=" + image_id[:24]
