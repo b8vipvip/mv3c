@@ -108,6 +108,57 @@ class PrebuiltTests(unittest.TestCase):
                                             None, lambda _: 1024**3)
                 load.assert_not_called()
 
+    def test_containerd_disk_budget_matches_real_host_observation(self):
+        # Production v0.1.27/v0.1.28 Docker 29 used ~3.72GB unique layers,
+        # although Actions reported image_size ~=1.65GB. Keep the 2GiB
+        # post-import reserve and refuse underestimated imports.
+        size = 1646339292
+        allowance = prebuilt._host_import_budget(size)
+        self.assertGreaterEqual(allowance, 3723000000)
+        self.assertLess(allowance, 5 * 1024**3)
+
+    def test_host_5_6gib_free_refuses_download_before_full_disk(self):
+        import types
+        import os
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder)
+            metadata = {
+                "archive_size": "506127631",
+                "image_size": "1646339292",
+                "archive_sha256": "0" * 64,
+            }
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.shutil, "disk_usage",
+                               return_value=types.SimpleNamespace(free=10 * 1024**3)),
+                  patch.object(prebuilt.subprocess, "run") as curl):
+                with self.assertRaisesRegex(prebuilt.PrebuiltError, "Insufficient space"):
+                    prebuilt._download_release_asset(
+                        verified, VERSION, SHA, metadata,
+                        lambda _: int(5.6 * 1024**3))
+                curl.assert_not_called()
+
+    def test_host_underestimated_image_size_refuses_docker_load(self):
+        import types
+        with tempfile.TemporaryDirectory() as folder:
+            archive = pathlib.Path(folder) / "dummy.tar.gz"
+            archive.write_bytes(b"fake-pinned-archive")
+            metadata = {
+                "archive_sha256": prebuilt.hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "archive_size": str(archive.stat().st_size),
+                "image_size": "1646339292",
+                "image_id": IMAGE,
+                "release": VERSION, "sha": SHA, "build_run_id": "123",
+            }
+            with (patch.object(prebuilt, "verified_image_proof", return_value=metadata),
+                  patch.object(prebuilt, "prepare_archive", return_value=archive),
+                  patch.object(prebuilt.subprocess, "run") as loader):
+                with self.assertRaisesRegex(prebuilt.PrebuiltError, "Insufficient space"):
+                    prebuilt.import_prebuilt(
+                        pathlib.Path(folder), SHA, VERSION, None,
+                        lambda _: int(5.6 * 1024**3))
+                loader.assert_not_called()
+
     def test_release_url_is_exact_official_host_and_no_url_injection(self):
         self.assertEqual(
             prebuilt.release_asset_url(VERSION, SHA),
