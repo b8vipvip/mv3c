@@ -161,6 +161,103 @@ class PrebuiltTests(unittest.TestCase):
             self.assertIn("--continue-at", commands[0])
 
 
+
+    def test_download_reconnects_three_curl_processes_and_checks_exact_hash(self):
+        import hashlib
+        import types
+        import os
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder)
+            payload = b"abcdefghijklmnopqrstuvwxyz"
+            metadata = {
+                "archive_size": str(len(payload)),
+                "image_size": "4096",
+                "archive_sha256": hashlib.sha256(payload).hexdigest(),
+            }
+            requests = []
+            def broken_cdn(command, **kwargs):
+                requests.append(command)
+                partial = pathlib.Path(command[command.index("--output") + 1])
+                previous = partial.stat().st_size if partial.exists() else 0
+                end = [10, 19, len(payload)][len(requests) - 1]
+                with partial.open("ab") as out:
+                    out.write(payload[previous:end])
+                assert command[-1] == prebuilt.release_asset_url(VERSION, SHA)
+                return types.SimpleNamespace(
+                    returncode=[18, 56, 0][len(requests) - 1],
+                    stdout="200" if len(requests) == 1 else "206",
+                    stderr="partial transfer" if len(requests) < 3 else "",
+                )
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.shutil, "disk_usage", return_value=types.SimpleNamespace(free=100*1024**3)),
+                  patch.object(prebuilt.subprocess, "run", side_effect=broken_cdn),
+                  patch("time.sleep")):
+                path = prebuilt._download_release_asset(
+                    verified, VERSION, SHA, metadata, lambda _: 100*1024**3)
+            self.assertEqual(path.read_bytes(), payload)
+            self.assertEqual(len(requests), 3)
+            self.assertFalse((verified / (prebuilt.filename(VERSION, SHA) + ".download")).exists())
+
+    def test_download_refuses_endless_no_progress_and_preserves_partial(self):
+        import types
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder)
+            metadata = {"archive_size": "26", "image_size": "4096",
+                        "archive_sha256": "0" * 64}
+            calls = []
+            def stalled(command, **kwargs):
+                calls.append(command)
+                pathlib.Path(command[command.index("--output") + 1]).touch()
+                return types.SimpleNamespace(returncode=18, stdout="000", stderr="dropped")
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.shutil, "disk_usage", return_value=types.SimpleNamespace(free=100*1024**3)),
+                  patch.object(prebuilt.subprocess, "run", side_effect=stalled),
+                  patch("time.sleep")):
+                with self.assertRaisesRegex(prebuilt.PrebuiltError, "stalled three times"):
+                    prebuilt._download_release_asset(
+                        verified, VERSION, SHA, metadata, lambda _: 100*1024**3)
+            self.assertEqual(len(calls), 3)
+            self.assertTrue((verified / (prebuilt.filename(VERSION, SHA) + ".download")).exists())
+
+    def test_download_proxy_is_loopback_only_and_redacted_from_argv(self):
+        import os
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"MV3C_DOWNLOAD_PROXY": "socks5h://127.0.0.1:11808"}):
+            self.assertEqual(prebuilt._validated_download_proxy(),
+                             "socks5h://127.0.0.1:11808")
+        for unsafe in ("socks5://127.0.0.1:11808", "http://outside.example:443",
+                       "socks5h://user:secret@127.0.0.1:11808",
+                       "http://127.0.0.1:8888/other",
+                       "socks5h://127.0.0.1:99999"):
+            with patch.dict(os.environ, {"MV3C_DOWNLOAD_PROXY": unsafe}):
+                with self.assertRaises(prebuilt.PrebuiltError):
+                    prebuilt._validated_download_proxy()
+        import types
+        payload = b"abc"
+        with tempfile.TemporaryDirectory() as folder:
+            proxy = "socks5h://127.0.0.1:11808"
+            seen = []
+            def fake(command, **kwargs):
+                seen.append((command, kwargs["env"]))
+                pathlib.Path(command[command.index("--output") + 1]).write_bytes(payload)
+                return types.SimpleNamespace(returncode=0, stdout="200", stderr="")
+            with (patch.dict(os.environ, {"MV3C_DOWNLOAD_PROXY": proxy}),
+                  patch.object(prebuilt, "VERIFIED", pathlib.Path(folder)),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.shutil, "disk_usage", return_value=types.SimpleNamespace(free=100*1024**3)),
+                  patch.object(prebuilt.subprocess, "run", side_effect=fake)):
+                prebuilt._download_release_asset(
+                    pathlib.Path(folder), VERSION, SHA,
+                    {"archive_size": "3", "image_size": "4096",
+                     "archive_sha256": prebuilt.hashlib.sha256(payload).hexdigest()},
+                    lambda _: 100*1024**3)
+            self.assertEqual(seen[0][1]["https_proxy"], proxy)
+            self.assertNotIn(proxy, " ".join(seen[0][0]))
+            self.assertIn("--noproxy", seen[0][0])
+
+
     def test_containerd_manifest_id_is_bound_to_official_config(self):
         import hashlib
         import io
