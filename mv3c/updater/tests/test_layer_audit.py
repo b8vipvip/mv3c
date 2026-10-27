@@ -38,6 +38,12 @@ class LayerAuditTests(unittest.TestCase):
         self.assertEqual(result["identical_position_count"], 6)
         self.assertEqual(result["shared_diff_ids"], 5)
 
+    def test_dependency_fingerprint_is_measurable_only_for_known_layout(self):
+        ordered = [A, B, C, D, A, B, C, D, A, B]
+        self.assertEqual(audit.dependency_layer_fingerprint(ordered), A)
+        self.assertIsNone(audit.dependency_layer_fingerprint([A, B, C, D]))
+        self.assertIsNone(audit.dependency_layer_fingerprint(ordered, 8))
+
     def test_uncached_previous_is_unknown_not_zero_bandwidth(self):
         result = audit.compare_layers([A, B], [])
         self.assertFalse(result["previous_available"])

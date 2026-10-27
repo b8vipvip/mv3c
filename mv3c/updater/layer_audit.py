@@ -53,6 +53,18 @@ def compare_layers(current: list[str], previous: list[str]) -> dict:
             "previous_available": bool(prior)}
 
 
+def dependency_layer_fingerprint(layers: list[str], position: int = 9) -> str | None:
+    """Identify the known prod-deps COPY layer without equating it to bytes saved.
+
+    The currently audited runtime has 10 non-empty layers. A future Dockerfile
+    reordering makes position 9 unavailable rather than reporting a false hit.
+    """
+    items = validated_layers(layers)
+    if len(items) != 10 or position != 9:
+        return None
+    return items[position - 1]
+
+
 def previous_proof_diff_ids(text: str) -> list[str]:
     matching = [line.removeprefix("rootfs_diff_ids=")
                 for line in text.splitlines()
@@ -90,7 +102,13 @@ def main() -> int:
             ["git", "cat-file", "-p", "refs/tags/" + previous_version], text=True)
         previous = previous_proof_diff_ids(text)
     result = compare_layers(latest, previous)
+    dependency = dependency_layer_fingerprint(latest)
+    older_dependency = dependency_layer_fingerprint(previous) if previous else None
+    dependency_same = bool(dependency and older_dependency and dependency == older_dependency)
     print("Potential OCI layer reuse (uncompressed diffIDs only):", result)
+    print("Current production dependency layer 9 diffID:", dependency or "unavailable")
+    print("Previous attested dependency layer 9 diffID:", older_dependency or "unavailable")
+    print("Production dependency layer 9 unchanged:", dependency_same)
     print("Previous attested image:", previous_version)
     with open(os.environ["GITHUB_OUTPUT"], "a") as out:
         print("rootfs_diff_ids=" + ",".join(latest), file=out)
@@ -103,6 +121,9 @@ def main() -> int:
         print(f"Identical layer positions: {result['identical_positions']}", file=out)
         print(f"Different layer positions: {result['different_positions']}", file=out)
         print(f"Potential shared prefix: {result['shared_base_prefix']}", file=out)
+        print(f"Production dependency layer 9 stable: {dependency_same}", file=out)
+        print(f"Layer 9 current diffID: {dependency or 'not measurable'}", file=out)
+        print(f"Layer 9 preceding diffID: {older_dependency or 'not measurable'}", file=out)
         print("Compressed layer digests and actual host transfer must still be"
               " measured before claiming bandwidth savings.", file=out)
     return 0
