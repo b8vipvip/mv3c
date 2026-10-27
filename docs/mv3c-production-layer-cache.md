@@ -34,3 +34,11 @@
 - **第一轮正式版属于种子构建**：需看到 `Materialize source-invariant production dependencies` 与 `Build version-bound runtime with persistent production dependency cache` 实际运行，并检查 GitHub Cache 上传结果。
 - **第二轮使用同样依赖清单**，只有第 9 层与第一轮正式版完全相同，才能说明恢复效果。仍须单独验证 GHCR 压缩 blob 和实际流量；不能把 Release `tar.gz` 文件缩小当作缓存命中的必要条件。
 - 这些受控发布不需要也不应该立刻部署到 40GB 生产服务器。
+
+## 第二轮（相同依赖定义）正式版对照
+
+在首次开启缓存的受控正式发布**完整成功且 Git 镜像证明已发布**后，才允许合并本轮纯文档变更，用第二版的正式 Buildx 发布检查同一份 `scope=mv3c-prod-deps` 缓存。这个变更不编辑 `Dockerfile`、`package.json`、`package-lock.json`、`client/package.json` 或 `api/package.json`。
+
+必须从两个版本的 `mv3c-image/vX.Y.Z` 正式证明中分别读取第 9 项 `rootfs_diff_ids`，核对其 **64 位完整哈希** 是否一致；还需要从官方构建日志看到 `prod-deps` 缓存是否命中（`CACHED`）。不能只凭重复的 500MB Release 文件大小、相同的第 1–4 层或 CI 通过判断缓存生效。
+
+**注意：** 即使第 9 层真正稳定，当前 GitHub Release 仍是整包交付，腾讯云服务器不会因此立刻减少出站/入站流量。要测增量下载，仍须单独启用 GHCR OCI 镜像发布并确认 Docker daemon 的 registry 连接、压缩层复用和真实接收字节数。
