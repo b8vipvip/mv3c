@@ -38,6 +38,8 @@ jobs:
           bash -n mv3c/updater/install.sh
           bash -n mv3c/updater/bootstrap-prebuilt.sh
           python3 -m py_compile mv3c/updater/prebuilt.py
+          python3 -m py_compile mv3c/updater/oci_registry.py
+          python3 -m py_compile mv3c/updater/layer_audit.py
           python3 -m py_compile mv3c/updater/host_acceptance.py
           node --check mv3c/updater/bridge.cjs
       - name: Validate env-free Compose configuration
