@@ -101,7 +101,7 @@ class OCIRegistryTests(unittest.TestCase):
             fake_deps._host_import_budget = lambda n: 2 * n
             with (patch.dict(sys.modules, {"prebuilt": fake_deps}),
                   patch.object(oci.subprocess, "run",
-                               return_value=types.SimpleNamespace(returncode=1))) as pull:
+                               return_value=types.SimpleNamespace(returncode=1)) as pull):
                 self.assertIsNone(oci.pull_registry_candidate(
                     pathlib.Path(folder), VERSION, SHA, PROOF, None,
                     lambda _: 10 * 1024**3))
