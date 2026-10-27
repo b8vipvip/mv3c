@@ -65,6 +65,12 @@ def verified_image_proof(repo: Path, version: str, sha: str, git) -> dict:
             raise PrebuiltError("Invalid image proof size/run reference: " + key)
     if int(values["archive_size"]) > 6 * 1024**3 or int(values["image_size"]) > 12 * 1024**3:
         raise PrebuiltError("Image artifact is unexpectedly large")
+    # Optional OCI distribution is bound to the SAME immutable release proof.
+    # Older V1 proofs intentionally have no registry fields and use tar.gz.
+    if "registry" in values or "registry_digest" in values:
+        if (values.get("registry") != "ghcr.io/b8vipvip/mv3c"
+                or not IMAGE_ID.fullmatch(values.get("registry_digest", ""))):
+            raise PrebuiltError("Invalid optional registry digest in signed image proof")
     return values
 
 
@@ -398,6 +404,23 @@ def verified_local_candidate_id(repo: Path, sha: str, version: str,
     """Accept config ID or OCI manifest ID only when bound by signed archive."""
     if docker_id == proof["image_id"]:
         return True
+    # An OPTIONAL registry manifest is already cryptographically pinned inside
+    # the same immutable Git image proof. Its Docker RepoDigests must still
+    # include the exact attested registry reference, not a fabricated label.
+    if docker_id == proof.get("registry_digest"):
+        import json
+        try:
+            raw = subprocess.check_output(
+                ["docker", "image", "inspect", "--format", "{{json .RepoDigests}}",
+                 "mv3c:sha-" + sha],
+                cwd=repo, text=True, timeout=30,
+            )
+            if "ghcr.io/b8vipvip/mv3c@" + docker_id in (json.loads(raw) or []):
+                return True
+        except (OSError, ValueError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired):
+            pass
+        raise PrebuiltError("Signed OCI manifest is missing from local image digest references")
     # Manifest digest requires its exact official archive; labels alone cannot
     # authorize an unrelated local image or weaken the CI-bound proof.
     archive = prepare_archive(repo, version, sha, proof, disk_free)
@@ -408,6 +431,19 @@ def verified_local_candidate_id(repo: Path, sha: str, version: str,
 def import_prebuilt(repo: Path, sha: str, version: str, git, disk_free) -> str:
     """Fail-closed import; NEVER touch live tag, compose service or Git checkout."""
     proof = verified_image_proof(repo, version, sha, git)
+    # Registry pull is explicitly opt-in: public packages use content-
+    # addressable Docker layers, so unchanged dependencies are not downloaded.
+    # If GitHub Container Registry is inaccessible, retain the existing signed
+    # full-archive fallback, with no second updater or trust authority.
+    if os.environ.get("MV3C_OCI_LAYER_TRANSPORT", "") == "enabled":
+        from oci_registry import OCIProofError, pull_registry_candidate
+        try:
+            registry_result = pull_registry_candidate(
+                repo, version, sha, proof, git, disk_free)
+        except OCIProofError as error:
+            raise PrebuiltError(str(error)) from error
+        if registry_result:
+            return registry_result
     path = prepare_archive(repo, version, sha, proof, disk_free)
     # Docker loads unpacked layers in addition to the already staged archive.
     # Conservative reserve protects the 40GB host; no prune or source build.
