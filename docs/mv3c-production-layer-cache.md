@@ -26,3 +26,11 @@
 ## 生产安全边界
 
 当前生产 v0.1.33 保持健康；本功能默认关闭且不自动升级。不要删除 `mv3c:rollback`、`mv3c:local`，不要在 40GB 宿主机运行 `docker system prune`，不要擅自为 dockerd 设置全局代理。内置 OCI 传输仍默认关闭，GHCR package 的 Public 可见性需要所有者明确决定。
+
+## 2026-10-27 受控缓存试运行
+
+- 在 `main` 的 v0.1.35 发布完成之后，仓库所有者设置了 `MV3C_ENABLE_PROD_DEPS_CACHE=enabled`。此时还没有任何一版官方镜像由新缓存路径构建。
+- 本次仅新增正式 CI 中生产依赖第 9 层的明确指纹报告和防止 Dockerfile 层结构变化导致误判的测试，不修改运行时应用逻辑、Dockerfile、lockfiles 或镜像身份校验。
+- **第一轮正式版属于种子构建**：需看到 `Materialize source-invariant production dependencies` 与 `Build version-bound runtime with persistent production dependency cache` 实际运行，并检查 GitHub Cache 上传结果。
+- **第二轮使用同样依赖清单**，只有第 9 层与第一轮正式版完全相同，才能说明恢复效果。仍须单独验证 GHCR 压缩 blob 和实际流量；不能把 Release `tar.gz` 文件缩小当作缓存命中的必要条件。
+- 这些受控发布不需要也不应该立刻部署到 40GB 生产服务器。
