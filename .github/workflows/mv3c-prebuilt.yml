@@ -82,9 +82,10 @@ jobs:
         with:
           context: .
           target: prod-deps
-          load: true
+          # Keep the dependency snapshot inside Buildx and GitHub Cache.
+          # Loading an extra 1.69GB image into the runner Docker Engine is
+          # unnecessary and can exhaust Actions runner storage.
           push: false
-          tags: mv3c:prod-deps-ci-cache
           cache-from: type=gha,scope=mv3c-prod-deps
           # Only cache this dependency-only stage; do NOT export the multi-GB
           # development/build tree, source artifacts, or runtime credentials.
