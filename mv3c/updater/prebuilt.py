@@ -153,6 +153,18 @@ def _validated_download_proxy() -> str | None:
     return proxy
 
 
+def _host_import_budget(image_size: int) -> int:
+    """Conservative actual disk budget for Docker 29's containerd snapshotter.
+
+    The attested CI 'image_size' is a Docker logical size, not the on-disk
+    unpacked unique footprint on every host. The production Docker 29 host
+    observed ~3.72 GB unique disk for a ~1.65 GB CI-reported image. Keep
+    a bounded 2.5x allowance rather than filling the 40GB production volume.
+    No cleanup or image deletion is attempted here.
+    """
+    return (image_size * 5 + 1) // 2
+
+
 def _download_release_asset(repo: Path, version: str, sha: str,
                             proof: dict, disk_free) -> Path:
     """Bounded multi-process HTTP Range resume for a verified official asset.
@@ -199,7 +211,7 @@ def _download_release_asset(repo: Path, version: str, sha: str,
             raise PrebuiltError("Partial Release exceeds signed artifact size")
         if previous == archive_bytes:
             break
-        required = archive_bytes - previous + image_bytes + int(2.5 * 1024**3)
+        required = archive_bytes - previous + _host_import_budget(image_bytes) + int(2.5 * 1024**3)
         free = min(disk_free(repo), shutil.disk_usage(VERIFIED).free)
         if free < required:
             raise PrebuiltError(
@@ -399,7 +411,7 @@ def import_prebuilt(repo: Path, sha: str, version: str, git, disk_free) -> str:
     path = prepare_archive(repo, version, sha, proof, disk_free)
     # Docker loads unpacked layers in addition to the already staged archive.
     # Conservative reserve protects the 40GB host; no prune or source build.
-    minimum = 2 * 1024**3 + int(proof["image_size"]) + 512 * 1024**2
+    minimum = 2 * 1024**3 + _host_import_budget(int(proof["image_size"])) + 512 * 1024**2
     if disk_free(repo) < minimum:
         raise PrebuiltError(
             f"Insufficient space to import prebuilt image safely; need {minimum / 1024**3:.2f}GiB "
