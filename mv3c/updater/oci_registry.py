@@ -113,4 +113,4 @@ def pull_registry_candidate(repo: Path, version: str, sha: str, proof: dict,
     if result.returncode != 0:
         raise OCIProofError("Verified registry image could not receive immutable local tag")
     return "Verified OCI manifest " + digest[:24] + \
-           ", reused locally cached Docker layers; image=" + str(metadata["Id"])[:24]
+           ", OCI transfer verified (actual reused bytes require measurement); image=" + str(metadata["Id"])[:24]
