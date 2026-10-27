@@ -148,6 +148,12 @@ jobs:
             echo "image_id=$image_id"
             echo "image_size=$image_size"
           } >> "$GITHUB_OUTPUT"
+      - name: Measure OCI layer-reuse potential without overstating savings
+        id: layers
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        run: python3 mv3c/updater/layer_audit.py
       - name: Publish official archive to GitHub Release assets
         env:
           IMAGE_NAME: ${{ steps.package.outputs.name }}
@@ -211,6 +217,7 @@ jobs:
           IMAGE_ID: ${{ steps.package.outputs.image_id }}
           IMAGE_SIZE: ${{ steps.package.outputs.image_size }}
           REGISTRY_DIGEST: ${{ steps.registry.outcome == 'success' && steps.registry.outputs.digest || '' }}
+          ROOTFS_DIFF_IDS: ${{ steps.layers.outputs.rootfs_diff_ids }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -228,7 +235,8 @@ jobs:
           archive_size=$ARCHIVE_SIZE
           image_id=$IMAGE_ID
           image_size=$IMAGE_SIZE
-          build_run_id=$GITHUB_RUN_ID"
+          build_run_id=$GITHUB_RUN_ID
+          rootfs_diff_ids=$ROOTFS_DIFF_IDS"
           if [[ -n "$REGISTRY_DIGEST" ]]; then
             message="$message
           registry=ghcr.io/${GITHUB_REPOSITORY,,}
