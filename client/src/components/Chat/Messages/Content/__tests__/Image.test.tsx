@@ -1,8 +1,10 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { triggerDownload } from '~/utils';
 import Image, { _resetImageCaches } from '../Image';
 
 jest.mock('~/utils', () => ({
+  triggerDownload: jest.fn(),
   cn: (...classes: (string | boolean | undefined | null)[]) =>
     classes
       .flat(Infinity)
@@ -25,8 +27,16 @@ jest.mock('@librechat/client', () => ({
 
 jest.mock('../DialogImage', () => ({
   __esModule: true,
-  default: ({ isOpen, src }: { isOpen: boolean; src: string }) =>
-    isOpen ? <div data-testid="dialog-image" data-src={src} /> : null,
+  default: ({
+    isOpen, src, downloadImage,
+  }: {
+    isOpen: boolean; src: string; downloadImage: () => Promise<void>;
+  }) =>
+    isOpen ? (
+      <div data-testid="dialog-image" data-src={src}>
+        <button type="button" onClick={() => void downloadImage()}>download original</button>
+      </div>
+    ) : null,
 }));
 
 describe('Image', () => {
@@ -169,6 +179,54 @@ describe('Image', () => {
     expect(screen.getByRole('img')).toHaveAttribute('src', imagePath + '/thumbnail');
     fireEvent.click(screen.getByRole('button'));
     expect(screen.getByTestId('dialog-image')).toHaveAttribute('data-src', imagePath);
+  });
+
+
+  describe('generated original downloads', () => {
+    it('delegates blob URLs to shared delayed-revocation downloader', async () => {
+      const previousFetch = global.fetch;
+      const previousCreate = URL.createObjectURL;
+      try {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          blob: async () => new Blob(['generated original'], { type: 'image/png' }),
+        }) as typeof fetch;
+        URL.createObjectURL = jest.fn().mockReturnValue('blob:generated-original');
+        render(<Image {...defaultProps} />);
+        fireEvent.click(screen.getByRole('button', { name: /View Test image/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'download original' }));
+        await waitFor(() =>
+          expect(triggerDownload).toHaveBeenCalledWith('blob:generated-original', 'Test image'),
+        );
+        // The old immediate URL.revokeObjectURL() silently invalidated large
+        // downloads. The shared downloader controls the blob lifetime instead.
+      } finally {
+        global.fetch = previousFetch;
+        URL.createObjectURL = previousCreate;
+      }
+    });
+
+    it('opens a CORS-blocked original in a separate safe tab, without losing the chat', async () => {
+      const previousFetch = global.fetch;
+      const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      const original = 'https://chat2api.mv3.cn/api/media/med_1234567890123456/token1234567890';
+      try {
+        global.fetch = jest.fn().mockRejectedValue(new Error('CORS forbidden')) as typeof fetch;
+        render(<Image {...defaultProps} imagePath={original} />);
+        fireEvent.click(screen.getByRole('button', { name: /View Test image/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'download original' }));
+        await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+        const anchor = click.mock.instances[0] as HTMLAnchorElement;
+        expect(anchor.href).toBe(original);
+        expect(anchor.target).toBe('_blank');
+        expect(anchor.rel).toBe('noopener noreferrer');
+      } finally {
+        global.fetch = previousFetch;
+        click.mockRestore();
+        error.mockRestore();
+      }
+    });
   });
 
   describe('image URL resolution', () => {

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { Skeleton } from '@librechat/client';
 import { apiBaseUrl } from 'librechat-data-provider';
-import { cn, toAbsoluteFilePath } from '~/utils';
+import { cn, toAbsoluteFilePath, triggerDownload } from '~/utils';
 import DialogImage from './DialogImage';
 import { chat2apiMediaUrls } from './chat2apiMedia';
 
@@ -76,19 +76,19 @@ const Image = ({
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = altText || 'image.png';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      window.URL.revokeObjectURL(url);
+      // The shared downloader releases blob URLs after the browser has had
+      // time to claim the download. Revoking immediately after click can
+      // cancel large generated images on some browsers.
+      triggerDownload(url, altText || 'image.png');
     } catch (error) {
       console.error('Download failed:', error);
       const link = document.createElement('a');
       link.href = originalImageUrl;
+      // A cross-origin image can render in <img> but reject fetch without
+      // CORS. Open its official original URL in a separate tab rather than
+      // navigating the current chat away from the conversation.
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
       link.download = altText || 'image.png';
       document.body.appendChild(link);
       link.click();

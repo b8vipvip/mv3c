@@ -5,6 +5,7 @@ import useSmoothStreaming from '~/hooks/Messages/useSmoothStreaming';
 import MarkdownErrorBoundary from './MarkdownErrorBoundary';
 import { FADE_HYDRATION_THRESHOLD } from './animate';
 import MarkdownBlocks from './MarkdownBlocks';
+import { maskPendingInlineRasterImage } from './pendingInlineRaster';
 
 type TContentProps = {
   content: string;
@@ -22,13 +23,7 @@ const Markdown = memo(function Markdown({ content = '', isLatestMessage }: TCont
   // Legacy providers may stream an incomplete ![...](data:image;base64, ...)
   // one token at a time. Never render its unfinished Base64 as plain text.
   // chat2api now returns short archived media URLs, so this is a fallback.
-  const inlineIndex = content.indexOf('](data:image/');
-  const imageStart = inlineIndex >= 0 ? content.lastIndexOf('![', inlineIndex) : -1;
-  const unfinishedInlineImage = imageStart >= 0 &&
-    content.indexOf(')', inlineIndex + 2) < 0;
-  const renderContent = unfinishedInlineImage
-    ? content.slice(0, imageStart) + '\n\n*图片正在接收…*'
-    : content;
+  const renderContent = maskPendingInlineRasterImage(content);
   const animate = smoothStreaming && streaming;
 
   // Hydration signal for the fade: substantial content already present at the
