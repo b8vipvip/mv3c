@@ -125,63 +125,148 @@ def release_asset_url(version: str, sha: str) -> str:
     return SOURCE + "/releases/download/" + version + "/" + filename(version, sha)
 
 
+def _validated_download_proxy() -> str | None:
+    """Optional root-only host configuration; never depend on another container.
+
+    The canonical systemd unit reads /etc/mv3c/updater-proxy.env. Proxy
+    authentication in URLs is intentionally rejected to avoid credentials
+    leaking through diagnostics; prefer a dedicated loopback SOCKS/HTTP service.
+    """
+    from urllib.parse import urlsplit
+
+    proxy = os.environ.get("MV3C_DOWNLOAD_PROXY", "").strip()
+    if not proxy:
+        return None
+    try:
+        parsed = urlsplit(proxy)
+        port = parsed.port
+    except ValueError as error:
+        raise PrebuiltError("Invalid MV3C download proxy configuration") from error
+    if (parsed.scheme not in ("socks5h", "http", "https")
+            or parsed.hostname not in ("127.0.0.1", "::1", "localhost")
+            or port is None or not 1 <= port <= 65535
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+        raise PrebuiltError(
+            "MV3C_DOWNLOAD_PROXY must be a credential-free loopback "
+            "socks5h/http/https proxy (an independent host service)")
+    return proxy
+
+
 def _download_release_asset(repo: Path, version: str, sha: str,
                             proof: dict, disk_free) -> Path:
-    """Pull exact official Release asset via TLS; support bounded resume.
+    """Bounded multi-process HTTP Range resume for a verified official asset.
 
-    The host initiates HTTPS instead of accepting inbound SCP. The Git image
-    proof (verified before this method) cryptographically binds the payload.
+    Unlike curl's internal retry, each new curl starts at the actual durable
+    file offset. Transient CDN drops cannot silently force a full re-download.
+    A missing/invalid proxy fails closed, and no Docker mutation occurs here.
     """
+    import time
+
     _root_only_directory(VERIFIED)
     path = VERIFIED / filename(version, sha)
     partial = VERIFIED / (filename(version, sha) + ".download")
     if partial.is_symlink():
         raise PrebuiltError("Refusing a symlinked partial Release download")
-    previous = 0
-    if partial.exists():
-        info = partial.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
-                info.st_nlink != 1):
-            raise PrebuiltError("Partial Release download is not a root-owned regular file")
-        previous = info.st_size
     archive_bytes = int(proof["archive_size"])
-    if previous > archive_bytes:
-        raise PrebuiltError("Partial Release download larger than signed artifact")
-    # Space needed for remaining compressed bytes plus unpacked image and the
-    # same post-switch reserve as the original SCP design.
-    required = archive_bytes - previous + int(proof["image_size"]) + int(2.5 * 1024**3)
-    free = min(disk_free(repo), shutil.disk_usage(VERIFIED).free)
-    if free < required:
-        raise PrebuiltError(
-            "Insufficient space for HTTPS Release download and image import: "
-            f"free={free}, required={required}; no Docker build/prune attempted")
-    cmd = [
-        "curl", "--fail", "--location", "--silent", "--show-error",
-        "--connect-timeout", "20", "--max-time", "2400",
-        "--retry", "2", "--retry-delay", "5", "--retry-all-errors",
-        "--speed-limit", "32768", "--speed-time", "90",
-        "--continue-at", "-", "--output", str(partial),
-        release_asset_url(version, sha),
-    ]
-    try:
-        result = subprocess.run(
-            cmd, cwd=repo, capture_output=True, text=True, timeout=2500,
-            check=False,
+    image_bytes = int(proof["image_size"])
+    proxy = _validated_download_proxy()
+
+    env = os.environ.copy()
+    if proxy:
+        # The proxy secret is never written to stdout, argv, or updater DB.
+        env.update({
+            "HTTPS_PROXY": proxy, "https_proxy": proxy,
+            "ALL_PROXY": proxy, "all_proxy": proxy,
+        })
+        env.pop("NO_PROXY", None)
+        env.pop("no_proxy", None)
+    retryable = {18, 28, 35, 52, 55, 56, 92}
+    deadline = time.monotonic() + 45 * 60
+    stalls = 0
+    for attempt in range(1, 26):
+        if time.monotonic() >= deadline:
+            raise PrebuiltError("Official Release download deadline reached; partial retained")
+        if partial.exists():
+            info = partial.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or info.st_nlink != 1):
+                raise PrebuiltError("Partial Release download is not a root-owned regular file")
+            previous = info.st_size
+        else:
+            previous = 0
+        if previous > archive_bytes:
+            raise PrebuiltError("Partial Release exceeds signed artifact size")
+        if previous == archive_bytes:
+            break
+        required = archive_bytes - previous + image_bytes + int(2.5 * 1024**3)
+        free = min(disk_free(repo), shutil.disk_usage(VERIFIED).free)
+        if free < required:
+            raise PrebuiltError(
+                "Insufficient space for verified Release download/import: "
+                f"free={free}, required={required}; no Docker build/prune attempted")
+
+        curl = [
+            "curl", "--fail", "--location", "--silent", "--show-error",
+            "--proto", "=https", "--proto-redir", "=https",
+            "--connect-timeout", "20", "--max-time", "420",
+            "--speed-limit", "32768", "--speed-time", "90",
+            "--continue-at", "-", "--write-out", "%{http_code}",
+            "--output", str(partial),
+        ]
+        if proxy:
+            curl += ["--noproxy", ""]
+        curl.append(release_asset_url(version, sha))
+        try:
+            result = subprocess.run(
+                curl, cwd=repo, capture_output=True, text=True,
+                timeout=455, check=False, env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise PrebuiltError(
+                "Official Release downloader unavailable or timed out; partial retained"
+            ) from error
+        info = partial.lstat() if partial.exists() else None
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1:
+            raise PrebuiltError("Unsafe or missing partial Release file")
+        os.chmod(partial, 0o600)
+        current = info.st_size
+        if current < previous or current > archive_bytes:
+            raise PrebuiltError("Invalid resumed Release byte offset")
+        http = (getattr(result, "stdout", None) or "").strip()
+        if previous and http == "200":
+            raise PrebuiltError(
+                "Release CDN ignored HTTP Range on resumed download; rejecting partial")
+        if result.returncode == 0 and current == archive_bytes:
+            break
+        if result.returncode not in retryable and result.returncode != 0:
+            raise PrebuiltError(
+                "Official Release HTTPS failed (curl exit " +
+                str(result.returncode) + "); partial retained: " +
+                (result.stderr or "")[-250:])
+        if current == previous:
+            stalls += 1
+        else:
+            stalls = 0
+        if stalls >= 3:
+            raise PrebuiltError("Official Release download stalled three times; partial retained")
+        print(
+            "MV3C Release resume attempt {}/25: {} / {} bytes, curl={}".format(
+                attempt, current, archive_bytes, result.returncode),
+            flush=True,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise PrebuiltError("HTTPS Release download unavailable or timed out") from exc
-    if result.returncode != 0:
-        raise PrebuiltError(
-            "Official GitHub Release HTTPS download failed; "
-            "no Docker mutation attempted: " + result.stderr[-500:])
+        if attempt < 25:
+            time.sleep(min(3 * (2 ** min(attempt - 1, 4)), 30))
+    else:
+        raise PrebuiltError("Official Release retry budget exhausted; partial retained")
+
     info = partial.lstat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-            or info.st_size != archive_bytes):
-        raise PrebuiltError("HTTPS Release archive file size does not match image proof")
-    os.chown(partial, 0, 0)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            or info.st_nlink != 1 or info.st_size != archive_bytes):
+        raise PrebuiltError("Release archive size differs from official image proof")
     os.chmod(partial, 0o600)
     if _sha256(partial) != proof["archive_sha256"]:
-        raise PrebuiltError("HTTPS Release SHA256 mismatch; refusing image import")
+        raise PrebuiltError("Official Release SHA256 mismatch; refusing image import")
     os.replace(partial, path)
     return path
 
