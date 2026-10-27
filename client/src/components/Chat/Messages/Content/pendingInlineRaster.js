@@ -21,7 +21,8 @@ export function maskPendingInlineRasterImage(content) {
     // image terminator. Keep already-completed image blocks unmodified.
     const closedAt = content.indexOf(')', imageStart.lastIndex);
     if (closedAt < 0) {
-      return content.slice(0, match.index) + '\n\n*图片正在接收…*';
+      const before = content.slice(0, match.index).replace(/[\r\n]+$/, '');
+      return before ? before + '\n\n*图片正在接收…*' : '*图片正在接收…*';
     }
     imageStart.lastIndex = closedAt + 1;
   }
