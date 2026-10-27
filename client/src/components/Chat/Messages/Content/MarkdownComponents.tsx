@@ -1,4 +1,6 @@
-import React, { memo, useMemo, useRef, useEffect } from 'react';
+import React, { memo, useMemo, useRef, useEffect, useState } from 'react';
+import { Github, Link2 } from 'lucide-react';
+import { sourceFaviconDomain } from './inlineReferenceIcon';
 import { PermissionTypes, Permissions, apiBaseUrl } from 'librechat-data-provider';
 import {
   handleDoubleClick,
@@ -243,6 +245,10 @@ export const img: React.ElementType = memo(function MarkdownImage({
   className,
   style,
 }: TImageProps) {
+  // Citation favicons are inline 16px source indicators, never generated
+  // images requiring a gallery skeleton, remote file ownership or download.
+  const faviconDomain = sourceFaviconDomain(src);
+  const [faviconFailed, setFaviconFailed] = useState(false);
   // Get the base URL from the API endpoints
   const baseURL = apiBaseUrl();
   /** A model writing `![DTI](5_dti.png)` is naming a file its run produced,
@@ -263,6 +269,25 @@ export const img: React.ElementType = memo(function MarkdownImage({
   // Markdown output images share the same bounded preview/lightbox as
   // uploaded/generated attachments. Raw <img> rendered full-resolution at
   // document width and offered no click-through original.
+  if (faviconDomain) {
+    const name = alt && alt !== '图片' ? alt : faviconDomain;
+    if (faviconDomain === 'github.com' || faviconDomain.endsWith('.github.com')) {
+      return <Github aria-label={name} className="mx-0.5 inline-block size-4 align-[-2px]" />;
+    }
+    if (faviconFailed) {
+      return <Link2 aria-label={name} className="mx-0.5 inline-block size-4 align-[-2px]" />;
+    }
+    return (
+      <img
+        src={src}
+        alt={name}
+        title={title || faviconDomain}
+        className="mx-0.5 inline-block size-4 align-[-2px] object-contain"
+        loading="lazy"
+        onError={() => setFaviconFailed(true)}
+      />
+    );
+  }
   if (!fixedSrc) return null;
   return <ImagePreview imagePath={fixedSrc} altText={alt || title || '生成图片'} className={className} />;
 });
