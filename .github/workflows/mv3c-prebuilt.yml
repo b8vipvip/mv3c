@@ -253,6 +253,25 @@ jobs:
               print("digest=" + digests[0], file=out)
           print("OCI manifest was published:", digests[0][:24])
           PY
+      - name: Audit compressed GHCR layer reuse (informational only)
+        if: vars.MV3C_ENABLE_OCI_REGISTRY == 'enabled' && steps.registry.outcome == 'success'
+        continue-on-error: true
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          current="$image:sha-$RELEASE_SHA"
+          # The previous official version might predate the opt-in GHCR rollout;
+          # in that case record current compressed layers without asserting reuse.
+          previous_version="$(git tag --list 'v[0-9]*' --sort=-version:refname |
+            awk -v cur="$VERSION" '$0==cur {getline; print; exit}')"
+          previous=""
+          if [[ -n "$previous_version" ]]; then
+            previous_sha="$(git rev-parse "refs/tags/$previous_version^{commit}")"
+            previous="$image:sha-$previous_sha"
+          fi
+          python3 mv3c/updater/oci_blob_audit.py --current "$current" --previous "$previous"
       - name: Record protected archive/image proof AFTER asset publication
         env:
           RELEASE_SHA: ${{ steps.version.outputs.sha }}
