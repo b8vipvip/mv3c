@@ -160,6 +160,71 @@ class PrebuiltTests(unittest.TestCase):
             self.assertEqual(commands[0][-1], prebuilt.release_asset_url(VERSION, SHA))
             self.assertIn("--continue-at", commands[0])
 
+
+    def test_containerd_manifest_id_is_bound_to_official_config(self):
+        import hashlib
+        import io
+        import json
+        import tarfile
+
+        rev = SHA
+        config = {
+            "architecture": "amd64", "os": "linux",
+            "config": {
+                "Labels": {
+                    "org.opencontainers.image.revision": rev,
+                    "org.opencontainers.image.version": VERSION,
+                    "org.opencontainers.image.source": prebuilt.SOURCE,
+                },
+                "Env": ["BUILD_COMMIT=" + rev, "MV3C_VERSION=" + VERSION],
+            },
+            "rootfs": {"type": "layers", "diff_ids": ["sha256:" + "a" * 64]},
+        }
+        cfg = json.dumps(config, sort_keys=True).encode()
+        cfg_digest = "sha256:" + hashlib.sha256(cfg).hexdigest()
+        tag = "mv3c:sha-" + rev
+        manifest = {
+            "schemaVersion": 2,
+            "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
+                       "digest": cfg_digest},
+            "layers": [{"digest": "sha256:" + "d" * 64}],
+        }
+        manifest_bytes = json.dumps(manifest, sort_keys=True).encode()
+        manifest_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+        index = {"manifests": [{"digest": manifest_digest,
+                               "mediaType": "application/vnd.oci.image.manifest.v1+json"}]}
+        save_manifest = [{"Config": "blobs/sha256/" + cfg_digest[7:],
+                          "RepoTags": [tag], "Layers": ["blobs/sha256/layer"]}]
+        data = {
+            "manifest.json": json.dumps(save_manifest).encode(),
+            "index.json": json.dumps(index).encode(),
+            "blobs/sha256/" + cfg_digest[7:]: cfg,
+            "blobs/sha256/" + manifest_digest[7:]: manifest_bytes,
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            archive = pathlib.Path(folder) / "image.tar.gz"
+            with tarfile.open(archive, "w:gz") as dest:
+                for name, payload in data.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(payload)
+                    dest.addfile(info, io.BytesIO(payload))
+            signed = {"image_id": cfg_digest, "sha": SHA, "release": VERSION}
+            identities = prebuilt.archive_attested_image_ids(archive, signed, tag)
+            self.assertEqual(identities, {cfg_digest, manifest_digest})
+            self.assertTrue(prebuilt.verified_local_candidate_id(
+                pathlib.Path(folder), SHA, VERSION, signed, cfg_digest, None))
+            with patch.object(prebuilt, "prepare_archive", return_value=archive):
+                self.assertTrue(prebuilt.verified_local_candidate_id(
+                    pathlib.Path(folder), SHA, VERSION, signed, manifest_digest, None))
+                self.assertFalse(prebuilt.verified_local_candidate_id(
+                    pathlib.Path(folder), SHA, VERSION, signed,
+                    "sha256:" + "e" * 64, None))
+                # An arbitrary OCI manifest cannot borrow a valid config.
+                altered = dict(signed, image_id="sha256:" + "f" * 64)
+                with self.assertRaises(prebuilt.PrebuiltError):
+                    prebuilt.archive_attested_image_ids(archive, altered, tag)
+
+
     def test_canonical_agent_uses_no_build_in_all_runtime_jobs(self):
         text = (PATH.parent / "agent.py").read_text()
         self.assertIn("prebuilt_only=True", text)
