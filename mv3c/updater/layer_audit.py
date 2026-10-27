@@ -27,13 +27,27 @@ def validated_layers(values: object) -> list[str]:
 def compare_layers(current: list[str], previous: list[str]) -> dict:
     latest = validated_layers(current)
     prior = validated_layers(previous) if previous else []
+    # Do not confuse unique diffID intersection with matching layer POSITIONS.
+    # Two empty metadata-producing layers can share a single diffID, causing
+    # the older set-intersection count to understate matched positions.
     shared = len(set(latest).intersection(prior))
+    matching_positions = [
+        i + 1 for i, (left, right) in enumerate(zip(latest, prior))
+        if left == right
+    ]
+    changed_positions = [
+        i + 1 for i, (left, right) in enumerate(zip(latest, prior))
+        if left != right
+    ] + list(range(len(prior) + 1, len(latest) + 1))
     common_prefix = 0
     for left, right in zip(latest, prior):
         if left != right:
             break
         common_prefix += 1
     return {"layers": len(latest), "shared_diff_ids": shared,
+            "identical_positions": matching_positions,
+            "different_positions": changed_positions,
+            "identical_position_count": len(matching_positions),
             "shared_base_prefix": common_prefix,
             "new_diff_ids": len(latest) - shared,
             "previous_available": bool(prior)}
@@ -86,6 +100,8 @@ def main() -> int:
         print(f"Attested image: {version} ({len(latest)} rootfs diffIDs)", file=out)
         print(f"Previous: {previous_version}", file=out)
         print(f"Potential shared diffIDs: {result['shared_diff_ids']}", file=out)
+        print(f"Identical layer positions: {result['identical_positions']}", file=out)
+        print(f"Different layer positions: {result['different_positions']}", file=out)
         print(f"Potential shared prefix: {result['shared_base_prefix']}", file=out)
         print("Compressed layer digests and actual host transfer must still be"
               " measured before claiming bandwidth savings.", file=out)

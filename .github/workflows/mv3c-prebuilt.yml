@@ -70,7 +70,51 @@ jobs:
         run: |
           git checkout --detach "${{ steps.version.outputs.sha }}"
           test "$(git rev-parse HEAD)" = "${{ steps.version.outputs.sha }}"
+      # The default original docker build remains an independent fallback.
+      # The dependency snapshot experiment is opt-in, isolated to the GitHub
+      # Actions runner and never changes the production daemon or updater.
+      - name: Set up Buildx for persistent production dependency cache
+        if: vars.MV3C_ENABLE_PROD_DEPS_CACHE == 'enabled'
+        uses: docker/setup-buildx-action@v4
+      - name: Materialize source-invariant production dependencies
+        if: vars.MV3C_ENABLE_PROD_DEPS_CACHE == 'enabled'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: prod-deps
+          # Keep the dependency snapshot inside Buildx and GitHub Cache.
+          # Loading an extra 1.69GB image into the runner Docker Engine is
+          # unnecessary and can exhaust Actions runner storage.
+          push: false
+          cache-from: type=gha,scope=mv3c-prod-deps
+          # Only cache this dependency-only stage; do NOT export the multi-GB
+          # development/build tree, source artifacts, or runtime credentials.
+          cache-to: type=gha,scope=mv3c-prod-deps,mode=min,ignore-error=true,timeout=15m
+          build-args: |
+            NODE_MAX_OLD_SPACE_SIZE=4096
+            NPM_CI_TIMEOUT_SECONDS=1800
+      - name: Capture version-bound build timestamp
+        if: vars.MV3C_ENABLE_PROD_DEPS_CACHE == 'enabled'
+        id: build_timestamp
+        run: echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Build version-bound runtime with persistent production dependency cache
+        if: vars.MV3C_ENABLE_PROD_DEPS_CACHE == 'enabled'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: mv3c:sha-${{ steps.version.outputs.sha }}
+          cache-from: type=gha,scope=mv3c-prod-deps
+          build-args: |
+            NODE_MAX_OLD_SPACE_SIZE=4096
+            NPM_CI_TIMEOUT_SECONDS=1800
+            BUILD_COMMIT=${{ steps.version.outputs.sha }}
+            BUILD_BRANCH=main
+            BUILD_VERSION=${{ inputs.version }}
+            BUILD_DATE=${{ steps.build_timestamp.outputs.utc }}
       - name: Build version-bound runtime in Actions
+        if: vars.MV3C_ENABLE_PROD_DEPS_CACHE != 'enabled'
         env:
           RELEASE_SHA: ${{ steps.version.outputs.sha }}
         run: |
