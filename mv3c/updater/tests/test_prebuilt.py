@@ -195,11 +195,14 @@ class PrebuiltTests(unittest.TestCase):
                                "mediaType": "application/vnd.oci.image.manifest.v1+json"}]}
         save_manifest = [{"Config": "blobs/sha256/" + cfg_digest[7:],
                           "RepoTags": [tag], "Layers": ["blobs/sha256/layer"]}]
+        tiny_layer = b"\x1f\x8b\x08\x00not-json-oci-layer"
+        binary_digest = hashlib.sha256(tiny_layer).hexdigest()
         data = {
             "manifest.json": json.dumps(save_manifest).encode(),
             "index.json": json.dumps(index).encode(),
             "blobs/sha256/" + cfg_digest[7:]: cfg,
             "blobs/sha256/" + manifest_digest[7:]: manifest_bytes,
+            "blobs/sha256/" + binary_digest: tiny_layer,
         }
         with tempfile.TemporaryDirectory() as folder:
             archive = pathlib.Path(folder) / "image.tar.gz"
