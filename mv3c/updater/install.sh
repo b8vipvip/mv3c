@@ -96,6 +96,19 @@ if [[ "$(git -C "$REPO" remote get-url origin)" != "$SELECTED_ORIGIN" ]]; then
   echo "Git URL rewrite 导致实际远端不是预期地址；拒绝安装" >&2
   exit 1
 fi
+# An optional, independent host-local proxy is configured once by root.
+# Do not rely on a different Docker application's network namespace, and
+# never allow an untrusted/world-readable systemd environment file.
+PROXY_CONFIG=/etc/mv3c/updater-proxy.env
+if [[ -e "$PROXY_CONFIG" || -L "$PROXY_CONFIG" ]]; then
+  if [[ -L "$PROXY_CONFIG" || ! -f "$PROXY_CONFIG" ||
+        "$(stat -c %u "$PROXY_CONFIG")" != "0" ||
+        "$(( 8#$(stat -c %a "$PROXY_CONFIG") & 077 ))" != "0" ]]; then
+    echo "MV3C proxy file must be root-owned, regular, and unreadable by group/others" >&2
+    exit 1
+  fi
+fi
+
 cat >/etc/systemd/system/mv3c-updater.service <<UNIT
 [Unit]
 Description=mv3c verified GitHub deployment updater
@@ -105,6 +118,7 @@ After=docker.service network-online.target
 Type=oneshot
 User=root
 Environment=HOME=/root
+EnvironmentFile=-/etc/mv3c/updater-proxy.env
 WorkingDirectory=$REPO
 ExecStart=/usr/bin/python3 $REPO/mv3c/updater/agent.py --repo $REPO
 TimeoutStartSec=90min
