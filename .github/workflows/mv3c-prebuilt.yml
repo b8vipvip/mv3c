@@ -253,6 +253,38 @@ jobs:
               print("digest=" + digests[0], file=out)
           print("OCI manifest was published:", digests[0][:24])
           PY
+      - name: Audit compressed GHCR layer reuse (informational only)
+        if: vars.MV3C_ENABLE_OCI_REGISTRY == 'enabled' && steps.registry.outcome == 'success'
+        continue-on-error: true
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          current="$image:sha-$RELEASE_SHA"
+          # The previous official version might predate the opt-in GHCR rollout;
+          # in that case record current compressed layers without asserting reuse.
+          previous_version="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName |
+            python3 -c '
+import json,os,re,sys
+current=os.environ["VERSION"]
+m=re.fullmatch(r"v(\\d+)\\.(\\d+)\\.(\\d+)",current)
+if not m: raise SystemExit("Invalid current version")
+cur=tuple(map(int,m.groups()))
+valid=[]
+for item in json.load(sys.stdin):
+    m=re.fullmatch(r"v(\\d+)\\.(\\d+)\\.(\\d+)",item.get("tagName",""))
+    if m:
+        key=tuple(map(int,m.groups()))
+        if key<cur: valid.append((key,item["tagName"]))
+print(max(valid)[1] if valid else "")
+')"
+          previous=""
+          if [[ -n "$previous_version" ]]; then
+            previous_sha="$(git rev-parse "refs/tags/$previous_version^{commit}")"
+            previous="$image:sha-$previous_sha"
+          fi
+          python3 mv3c/updater/oci_blob_audit.py --current "$current" --previous "$previous"
       - name: Record protected archive/image proof AFTER asset publication
         env:
           RELEASE_SHA: ${{ steps.version.outputs.sha }}
