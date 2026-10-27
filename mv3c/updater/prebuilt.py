@@ -244,7 +244,11 @@ def archive_attested_image_ids(path: Path, proof: dict, tag: str) -> set[str]:
             try:
                 docs[name] = json.loads(raw)
             except (ValueError, UnicodeDecodeError) as error:
-                raise PrebuiltError("Malformed OCI attestation metadata") from error
+                # Small OCI layer blobs may be binary; only metadata required
+                # for the signed config-to-manifest chain must be JSON.
+                if name in ("manifest.json", "index.json", expected_blob):
+                    raise PrebuiltError("Malformed OCI attestation metadata") from error
+                continue
 
     entries = docs.get("manifest.json")
     if (not isinstance(entries, list) or len(entries) != 1
