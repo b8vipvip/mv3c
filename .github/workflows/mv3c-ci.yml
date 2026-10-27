@@ -27,6 +27,8 @@ jobs:
           node --test mv3c/tests/pluginCatalog.test.cjs
       - name: Audit Simplified Chinese core chat translations
         run: node --test mv3c/tests/i18n_coverage.test.cjs
+      - name: Verify guest-login switch and admin role regression
+        run: node tests/guest_admin_switch_login_20261025.mjs
       - name: Validate host-side update agent and installer
         run: |
           python3 -m unittest discover -s mv3c/updater/tests -p 'test_*.py' -v
@@ -34,6 +36,7 @@ jobs:
           bash -n mv3c/updater/install.sh
           bash -n mv3c/updater/bootstrap-prebuilt.sh
           python3 -m py_compile mv3c/updater/prebuilt.py
+          python3 -m py_compile mv3c/updater/host_acceptance.py
           node --check mv3c/updater/bridge.cjs
       - name: Validate env-free Compose configuration
         run: |
