@@ -157,6 +157,22 @@ def build_cache_usage(repo: Path) -> int | None:
     return None
 
 
+def release_download_progress(downloaded: int, total: int) -> tuple[int, str]:
+    """Represent transfer bytes in the existing monotonic 36..42% stage.
+
+    This is presentation only: completeJob stays the ONLY terminal owner.
+    Download progress is not a signal that the Release is trusted or ready.
+    """
+    if not isinstance(downloaded, int) or not isinstance(total, int) or total <= 0:
+        raise UpdateError("Invalid official Release transfer counters")
+    received = max(0, min(downloaded, total))
+    percent = 36 + min(6, 6 * received // total)
+    message = ("正在下载 GitHub Release 镜像: "
+               f"{received / 1048576:.1f}/{total / 1048576:.1f} MiB "
+               f"({100 * received / total:.1f}%)")
+    return percent, message
+
+
 def disk_free_bytes(repo: Path) -> int:
     docker_root = Path("/var/lib/docker")
     location = docker_root if docker_root.is_dir() else repo
@@ -1261,6 +1277,7 @@ def execute(repo: Path, *, recovery_version: str | None = None) -> None:
                            (recovery_version is None and job.get("reuseOnly") is not True)):
         raise UpdateError("Pinned Release needs a manual job and reuseOnly=true")
     label = ""  # Failures before release resolution cannot report an unspecified version.
+    current_job_progress = {"stage": "queued", "percent": 0}
     def progress(stage: str, percent: int, message: str, *,
                  from_sha: str = "", target_sha: str = "") -> None:
         if job:
@@ -1270,6 +1287,7 @@ def execute(repo: Path, *, recovery_version: str | None = None) -> None:
                 **({"fromSha": from_sha} if from_sha else {}),
                 **({"targetSha": target_sha} if target_sha else {}),
             })
+            current_job_progress.update(stage=stage, percent=percent)
 
     def complete(outcome: str, *, log: str, error: str = "",
                  sha: str = old, attempted: str = "", verification: str = "") -> None:
@@ -1353,18 +1371,48 @@ def execute(repo: Path, *, recovery_version: str | None = None) -> None:
         return
 
     print("Deploying published mv3c Release", label, target, flush=True)
-    # Docker may be busy installing dependencies or exporting layers for minutes.
-    # A heartbeat ONLY renews the current job lease; it never updates progress,
-    # declares a terminal, or authorizes a second deployment process.
+    # The same heartbeat thread may report transfer bytes through the existing
+    # nonterminal progressJob path. It never owns success/failure or restarts.
+    # Resolve the exact Release from its already-fetched image proof. If
+    # unavailable, deployment's fail-closed proof check still makes the call.
+    transfer_partial = None
+    transfer_total = 0
+    try:
+        from prebuilt import VERIFIED, filename, verified_image_proof
+        attestation = verified_image_proof(repo, label, target, git)
+        transfer_total = int(attestation["archive_size"])
+        transfer_partial = VERIFIED / (filename(label, target) + ".download")
+    except Exception:
+        pass
+    last_transfer_bytes = 0
     heartbeat_stop = threading.Event()
     def heartbeat_during_deploy() -> None:
+        nonlocal last_transfer_bytes
         while not heartbeat_stop.wait(40):
             try:
                 bridge(repo, "heartbeat", {"jobId": job["id"]})
             except Exception as exc:
-                # The old container might not support the command during its
-                # first upgrade, or be unavailable during recreation.
                 print("MV3C updater heartbeat warning:", str(exc)[:160], flush=True)
+            # Guard by the canonical updater's actual stage. Do not regress
+            # progress after merge, import, restart, rollback, or completion.
+            if (current_job_progress["stage"] != "backup"
+                    or transfer_partial is None or transfer_total <= 0):
+                continue
+            try:
+                info = transfer_partial.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    continue
+                current = info.st_size
+                if current <= last_transfer_bytes or current > transfer_total:
+                    continue
+                last_transfer_bytes = current
+                percent, message = release_download_progress(current, transfer_total)
+                if current_job_progress["stage"] == "backup":
+                    progress("backup", max(current_job_progress["percent"], percent), message)
+            except Exception as exc:
+                # This telemetry is advisory; it must never mask, cancel,
+                # authorize, or finalize a real production deployment.
+                print("MV3C download progress warning:", str(exc)[:160], flush=True)
     heartbeat_thread = threading.Thread(
         target=heartbeat_during_deploy, daemon=True, name="mv3c-update-heartbeat"
     )
