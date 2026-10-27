@@ -79,11 +79,11 @@ def main():
     if summary:
         with open(summary, "a", encoding="utf-8") as out:
             out.write("\n### GHCR compressed OCI layer audit\n")
-            out.write(f"- Current: \`{args.current}\`\n")
+            out.write(f"- Current: `{args.current}`\n")
             out.write(f"- Current compressed layer bytes: {audit['compressed_total_bytes']}\n")
             out.write(f"- Previous manifest available: {audit['previous_available']}\n")
             if previous is not None:
-                out.write(f"- Previous: \`{args.previous}\`\n")
+                out.write(f"- Previous: `{args.previous}`\n")
                 out.write(f"- Reusable compressed blob bytes (potential): {audit['compressed_reusable_bytes']}\n")
                 out.write(f"- New compressed blob bytes (potential): {audit['compressed_new_bytes']}\n")
             out.write("- These are manifest blob sizes, **not measured download savings**.\n")
