@@ -1078,6 +1078,7 @@ class HostUpdaterTests(unittest.TestCase):
         proof.verified_image_proof = lambda *_args: {
             "image_id": "sha256:" + "c" * 64
         }
+        proof.verified_local_candidate_id = lambda *_args: False
         with (
             patch.dict(sys.modules, {"prebuilt": proof}),
             patch.object(agent, "version_for_sha", return_value="v0.1.25"),
@@ -1101,6 +1102,7 @@ class HostUpdaterTests(unittest.TestCase):
         proof = types.ModuleType("prebuilt")
         accepted = "sha256:" + "c" * 64
         proof.verified_image_proof = lambda *_args: {"image_id": accepted}
+        proof.verified_local_candidate_id = lambda *_args: True
         with tempfile.TemporaryDirectory() as folder:
             repo = pathlib.Path(folder)
             with (
