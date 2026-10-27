@@ -24,7 +24,12 @@ class ProductionDependencyCacheWorkflowTests(unittest.TestCase):
         self.assertIn("target: prod-deps", source)
         self.assertIn("type=gha,scope=mv3c-prod-deps,mode=min", source)
         self.assertIn("type=gha,scope=mv3c-prod-deps", source)
-        self.assertIn("load: true", source)
+        self.assertIn("load: true", source)  # only final runtime image
+        deps_block = source.split(
+            "      - name: Materialize source-invariant production dependencies",
+            1,
+        )[1].split("      - name: Capture version-bound build timestamp", 1)[0]
+        self.assertNotIn("load: true", deps_block)
         self.assertNotIn("cache-to: type=gha,scope=mv3c-build", source)
         self.assertNotIn("docker system prune", source)
 
