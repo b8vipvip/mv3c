@@ -153,6 +153,11 @@ jobs:
             if(config.appTitle!=='mv3c CI' || config.registrationEnabled!==false)process.exit(1);
             console.log('Admin API, encrypted provider config and live site changes OK');
           "
+      - name: Verify read-only public health and admin authorization acceptance
+        timeout-minutes: 2
+        run: |
+          python3 mv3c/updater/host_acceptance.py \
+            --expected-version unreleased --expected-sha "$GITHUB_SHA"
       - name: Validate updater inside the live Docker stack
         timeout-minutes: 3
         run: |
