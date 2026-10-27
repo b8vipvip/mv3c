@@ -23,55 +23,21 @@ class OCIProofError(RuntimeError):
     pass
 
 
-def attested_registry_manifest(repo: Path, version: str, sha: str, image_id: str, git):
-    """Return the exact immutable digest, or None if optional proof is absent.
+def attested_registry_manifest(proof: dict, version: str, sha: str) -> str | None:
+    """The OPTIONAL registry digest must be bound in the SAME Git image proof.
 
-    An invalid *present* signed proof must fail closed, never fall back as
-    though the registry had simply been unavailable.
+    V1 Release proofs without this opt-in field remain fully supported. A
+    partially present/malformed registry field is not treated as absent.
     """
-    if not VERSION.fullmatch(version) or not COMMIT.fullmatch(sha) or not SHA256.fullmatch(image_id):
-        raise OCIProofError("Invalid official Release identity")
-    ref = PROOF_PREFIX + version
-    try:
-        kind = git(repo, "cat-file", "-t", ref)
-    except Exception as error:
-        message = str(error).lower()
-        if ("not a valid object" in message or "not a valid object name" in message
-                or "unknown revision" in message or "bad revision" in message
-                or "missing" in message):
-            return None
-        raise OCIProofError("Cannot verify optional OCI proof") from error
-    try:
-        target = git(repo, "rev-parse", ref + "^{commit}")
-        raw = git(repo, "cat-file", "-p", ref)
-    except Exception as error:
-        raise OCIProofError("Incomplete OCI proof tag") from error
-    if kind != "tag" or target != sha:
-        raise OCIProofError("OCI proof is not an annotated tag on the exact Release SHA")
-    text = raw.split("\n\n", 1)
-    if len(text) != 2:
-        raise OCIProofError("OCI proof lacks payload")
-    lines = text[1].splitlines()
-    if not lines or lines[0] != "MV3C_OCI_IMAGE_V1":
-        raise OCIProofError("Unknown OCI proof format")
-    fields = {}
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        if "=" not in line:
-            raise OCIProofError("Malformed OCI proof field")
-        key, value = line.split("=", 1)
-        if key in fields:
-            raise OCIProofError("Duplicate OCI proof field")
-        fields[key] = value.strip()
-    if (fields.get("release") != version or fields.get("sha") != sha
-            or fields.get("image_id") != image_id
-            or fields.get("registry") != REGISTRY
-            or not SHA256.fullmatch(fields.get("registry_digest", ""))):
-        raise OCIProofError("OCI proof differs from protected Release image identity")
-    if not re.fullmatch(r"[1-9][0-9]{0,19}", fields.get("build_run_id", "")):
-        raise OCIProofError("Invalid OCI provenance run ID")
-    return fields["registry_digest"]
+    digest = proof.get("registry_digest")
+    repository = proof.get("registry")
+    if digest is None and repository is None:
+        return None
+    if repository != REGISTRY or not isinstance(digest, str) or not SHA256.fullmatch(digest):
+        raise OCIProofError("Invalid registry fields in signed Release image proof")
+    if proof.get("sha") != sha or proof.get("release") != version:
+        raise OCIProofError("Registry transport is not bound to exact Release SHA")
+    return digest
 
 
 def verify_registry_image(metadata: dict, version: str, sha: str,
@@ -104,7 +70,7 @@ def pull_registry_candidate(repo: Path, version: str, sha: str, proof: dict,
     pulled image fails closed. The tag is never assigned until verified.
     This function runs inside the original updater flock and MongoDB job.
     """
-    digest = attested_registry_manifest(repo, version, sha, proof["image_id"], git)
+    digest = attested_registry_manifest(proof, version, sha)
     if digest is None:
         print("OCI layer delivery not published for this Release; using signed archive",
               flush=True)
