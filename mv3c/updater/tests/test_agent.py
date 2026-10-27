@@ -30,6 +30,33 @@ class HostUpdaterTests(unittest.TestCase):
         self.assertNotIn("--bootstrap-local", script)
         self.assertNotIn("reconcile_verified_bootstrap", script)
 
+    def test_download_byte_progress_is_bounded_nonterminal_and_monotone(self):
+        # Existing bridge accepts stage='backup', with a percent >=36 and <43.
+        # Transfer completion never grants success or shifts the sole owner of
+        # terminal status away from completeJob().
+        samples = [0, 1, 25, 50, 75, 99, 100, 1000]
+        reported = [agent.release_download_progress(n, 100) for n in samples]
+        percents = [p for p, _ in reported]
+        self.assertEqual(percents[0], 36)
+        self.assertEqual(percents[-1], 42)
+        self.assertEqual(percents, sorted(percents))
+        self.assertTrue(all(36 <= p <= 42 for p in percents))
+        self.assertIn("100.0%", reported[-1][1])
+        for bad in (0, -1):
+            with self.assertRaisesRegex(agent.UpdateError, "Invalid official Release"):
+                agent.release_download_progress(3, bad)
+
+    def test_transfer_observability_uses_existing_heartbeat_and_progress_authority(self):
+        source = (PATH.parent / "agent.py").read_text()
+        self.assertIn('progress("backup", max(current_job_progress["percent"], percent), message)', source)
+        self.assertIn('bridge(repo, "heartbeat", {"jobId": job["id"]})', source)
+        self.assertIn('current_job_progress["stage"] != "backup"', source)
+        self.assertIn('if current_job_progress["stage"] == "backup":', source)
+        self.assertIn('bridge(repo, "complete"', source)
+        # Never add a parallel terminal writer or a second updater unit.
+        self.assertNotIn("directComplete", source)
+        self.assertNotIn("secondary updater", source)
+
     def test_docker_build_error_report_keeps_original_npm_error(self):
         class Failed:
             returncode = 1
