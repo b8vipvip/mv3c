@@ -16,6 +16,7 @@ concurrency:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   prebuilt:
@@ -174,6 +175,34 @@ jobs:
               raise SystemExit("Uploaded GitHub Release asset name/size mismatch")
           print("Release asset uploaded and size verified:",name,expected)
           PY
+      - name: Optionally publish OCI image to GHCR (reusable Docker layers)
+        id: registry
+        if: vars.MV3C_ENABLE_OCI_REGISTRY == 'enabled'
+        # GHCR is optional: a private package or outage must not invalidate
+        # the full attested Release archive.
+        continue-on-error: true
+        env:
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          ref="$image:sha-$RELEASE_SHA"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag "mv3c:sha-$RELEASE_SHA" "$ref"
+          docker push "$ref"
+          docker image inspect --format '{{json .RepoDigests}}' "$ref" > "$RUNNER_TEMP/mv3c-repodigests.json"
+          export OCI_REPO="$image"
+          python3 - <<'PY'
+          import json, os, re
+          refs = json.load(open(os.environ["RUNNER_TEMP"] + "/mv3c-repodigests.json"))
+          name = os.environ["OCI_REPO"] + "@"
+          digests = [ref.removeprefix(name) for ref in refs if ref.startswith(name)]
+          if len(digests) != 1 or not re.fullmatch(r"sha256:[a-f0-9]{64}", digests[0]):
+              raise SystemExit("Registry did not return exactly one SHA256 manifest digest")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print("digest=" + digests[0], file=out)
+          print("OCI manifest was published:", digests[0][:24])
+          PY
       - name: Record protected archive/image proof AFTER asset publication
         env:
           RELEASE_SHA: ${{ steps.version.outputs.sha }}
@@ -181,6 +210,7 @@ jobs:
           ARCHIVE_SIZE: ${{ steps.package.outputs.archive_size }}
           IMAGE_ID: ${{ steps.package.outputs.image_id }}
           IMAGE_SIZE: ${{ steps.package.outputs.image_size }}
+          REGISTRY_DIGEST: ${{ steps.registry.outcome == 'success' && steps.registry.outputs.digest || '' }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -190,7 +220,8 @@ jobs:
             echo "::error::Prebuilt proof already exists: $proof"
             exit 1
           fi
-          git tag -a "$proof" "$RELEASE_SHA" -m "MV3C_PREBUILT_IMAGE_V1
+          # Registry digest (when available) joins the SAME immutable Git proof.
+          message="MV3C_PREBUILT_IMAGE_V1
           release=$VERSION
           sha=$RELEASE_SHA
           archive_sha256=$ARCHIVE_SHA
@@ -198,6 +229,12 @@ jobs:
           image_id=$IMAGE_ID
           image_size=$IMAGE_SIZE
           build_run_id=$GITHUB_RUN_ID"
+          if [[ -n "$REGISTRY_DIGEST" ]]; then
+            message="$message
+          registry=ghcr.io/${GITHUB_REPOSITORY,,}
+          registry_digest=$REGISTRY_DIGEST"
+          fi
+          git tag -a "$proof" "$RELEASE_SHA" -m "$message"
           git push origin "refs/tags/$proof"
           {
             echo "### Verified image delivered for $VERSION"
