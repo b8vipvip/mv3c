@@ -1,5 +1,45 @@
 # 正式预构建镜像交付：GitHub Release HTTPS 拉取（替代慢速 SCP）
 
+## 一键后台更新：独立宿主机代理 + 自动断点续传
+
+从包含本改动的下一正式版开始，仍由**唯一** mv3c-updater.timer / mv3c-updater.service 读取管理员按钮创建的 MongoDB 更新任务。
+更新器仅下载官方 GitHub Release、验证 Git image proof / archive SHA-256 / OCI 镜像身份、复用 Actions 预构建镜像、健康检查及失败回滚。
+不运行服务器 Docker build、不依赖另一个业务 Docker 容器、也不会引入第二套更新服务。
+
+新下载器最多尝试 25 次连接，每次从当前 .download 文件实际长度续传，总下载期限 45 分钟。
+若 CDN 拒绝 Range、校验失败、连续三次无进展或磁盘不足，保留部分文件并安全退出，绝不进入 Docker 导入。
+
+### 一次性配置独立宿主机下载代理（可选）
+
+若宿主机直连 GitHub Release 可用，不需配置代理。如果需要代理，请**先安装并验证**一个独立运行、
+监听宿主机 127.0.0.1:11808 的 SOCKS5 服务；以前位于 qianniu-api-control-plane 容器网络内的端口不能直接复用。
+
+```bash
+sudo install -d -o root -g root -m 0700 /etc/mv3c
+sudo sh -c 'printf "%s\n" "MV3C_DOWNLOAD_PROXY=socks5h://127.0.0.1:11808" > /etc/mv3c/updater-proxy.env'
+sudo chmod 600 /etc/mv3c/updater-proxy.env
+sudo bash /opt/mv3c/mv3c/updater/install.sh
+curl --fail --location --head --max-time 20 --proxy socks5h://127.0.0.1:11808 https://github.com/b8vipvip/mv3c/releases/latest
+```
+
+仅允许无账户密码的 loopback socks5h/http/https 代理 URL；安装脚本检查文件为 root 拥有且不能被其他用户读取。
+代理只在下载子进程环境中使用，不进入数据库、更新报告或进程命令行参数。
+错误的代理配置会失败关闭，而不会绕过身份验证或回退本地构建。
+默认仅自动检查更新；管理员可从后台启动手动部署，自动部署需单独主动开启。
+
+### 可执行的非破坏性功能验收
+
+```bash
+cd /opt/mv3c
+python3 mv3c/updater/host_acceptance.py --expected-version v0.1.28 --expected-sha c69f7148e9e9a689302c1d95eb85a5bedf5811d6
+```
+
+该测试只读取 /readyz、公开配置、版本与未授权管理员接口；CI 还验证注册/登录、配置保存、更新队列与历史报告。
+真实浏览器游客切换、chat2api 流式生成完整性、多图/附件交付以及插件授权仍需要真实端到端测试，不能视作已经通过。
+
+---
+
+
 本节为最新生产设计；后面关于 SSH/SCP 传输的段落属于历史方案，不再适用于新发布版本。
 
 **实测原因：** 2026-10-26 的 v0.1.26 SCP 进站仅约 17 KiB/s，传输 15 秒仅增长 261,120 字节，远不足以在 Actions 90 分钟上限内稳定交付。正式版 v0.1.27 起（实际以 Release 为准），GitHub Actions 在完成严格构建、启动冒烟和 OCI SHA/版本检查后，通过 GitHub Release 的 public asset 入口发布准确的 tar.gz 镜像包。然后发布注解镜像证明 mv3c-image/vX.Y.Z（绑定 Release SHA、归档 SHA256、体积、镜像 ID、构建 run id）。若上传失败则不发布证明。
