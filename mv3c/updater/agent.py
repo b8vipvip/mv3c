@@ -966,7 +966,7 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
         # Require the 3GiB build threshold only when a new Docker build is
         # actually needed. The post-build 2GiB switch reserve still applies.
         if require_prebuilt_proof:
-            from prebuilt import verified_image_proof
+            from prebuilt import verified_image_proof, verified_local_candidate_id
             # An image already in local Docker cache is NOT trusted on its
             # metadata alone. Bind even the cache-hit path to the official
             # post-transfer proof, which commits to the exact image ID.
@@ -974,7 +974,9 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
                 repo, version_for_sha(repo, target), target, git)
         staged_candidate = verified_existing_candidate(repo, target)
         if (prebuilt_proof is not None and staged_candidate is not None
-                and staged_candidate != prebuilt_proof["image_id"]):
+                and not verified_local_candidate_id(
+                     repo, target, version_for_sha(repo, target),
+                     prebuilt_proof, staged_candidate, disk_free_bytes)):
             raise UpdateError(
                 "Local SHA-tagged image ID differs from official prebuilt "
                 "image proof; refusing to deploy or replace candidate")
@@ -994,7 +996,9 @@ def deploy(repo: Path, old: str, target: str, *, on_progress=None,
             staged_candidate = verified_existing_candidate(repo, target)
             if staged_candidate is None or (
                     prebuilt_proof is not None and
-                    staged_candidate != prebuilt_proof["image_id"]):
+                    not verified_local_candidate_id(
+                         repo, target, version_for_sha(repo, target),
+                         prebuilt_proof, staged_candidate, disk_free_bytes)):
                 raise UpdateError(
                     "Actions image import did not produce exact officially "
                     "attested candidate; refusing container switch")
