@@ -65,6 +65,86 @@ class PrebuiltTests(unittest.TestCase):
                 prebuilt.verified_image_proof(pathlib.Path("/tmp"),
                                               VERSION, SHA, wrong)
 
+    def test_registry_digest_must_be_in_original_protected_release_proof(self):
+        registry = "ghcr.io/b8vipvip/mv3c"
+        digest = "sha256:" + "d" * 64
+        def as_proof(data):
+            def fake(_repo, command, *args):
+                if command == "cat-file" and args[0] == "-t":
+                    return "tag"
+                if command == "rev-parse":
+                    return SHA
+                return data
+            return prebuilt.verified_image_proof(
+                pathlib.Path("/tmp"), VERSION, SHA, fake)
+        result = as_proof(proof(registry=registry, registry_digest=digest))
+        self.assertEqual(result["registry_digest"], digest)
+        for wrong in (
+            proof(registry=registry),
+            proof(registry_digest=digest),
+            proof(registry="ghcr.io/attacker/mv3c", registry_digest=digest),
+            proof(registry=registry, registry_digest="latest"),
+        ):
+            with self.assertRaises(prebuilt.PrebuiltError):
+                as_proof(wrong)
+
+    def test_optin_registry_import_does_not_stage_full_archive(self):
+        import sys
+        import types
+        fake = types.ModuleType("oci_registry")
+        fake.OCIProofError = type("OCIProofError", (RuntimeError,), {})
+        fake.pull_registry_candidate = unittest.mock.Mock(
+            return_value="Verified OCI manifest sha256:...")
+        metadata = {
+            "release": VERSION, "sha": SHA, "image_id": IMAGE,
+            "image_size": "4096", "archive_size": "2048",
+            "archive_sha256": ARCHIVE,
+        }
+        with (patch.dict(sys.modules, {"oci_registry": fake}),
+              patch.dict(prebuilt.os.environ, {"MV3C_OCI_LAYER_TRANSPORT": "enabled"}),
+              patch.object(prebuilt, "verified_image_proof", return_value=metadata),
+              patch.object(prebuilt, "prepare_archive") as download,
+              patch.object(prebuilt.subprocess, "run") as docker):
+            result = prebuilt.import_prebuilt(
+                pathlib.Path("/tmp"), SHA, VERSION, None, lambda _: 10**10)
+            self.assertIn("Verified OCI manifest", result)
+            download.assert_not_called()
+            docker.assert_not_called()
+
+    def test_unenabled_registry_never_contacts_registry_for_old_proofs(self):
+        import sys
+        import types
+        fake = types.ModuleType("oci_registry")
+        fake.pull_registry_candidate = unittest.mock.Mock()
+        with (patch.dict(sys.modules, {"oci_registry": fake}),
+              patch.dict(prebuilt.os.environ, {"MV3C_OCI_LAYER_TRANSPORT": ""}),
+              patch.object(prebuilt, "verified_image_proof", return_value={
+                  "release": VERSION, "sha": SHA, "image_id": IMAGE,
+                  "image_size": "4096", "archive_size": "2048",
+                  "archive_sha256": ARCHIVE,
+              }),
+              patch.object(prebuilt, "prepare_archive",
+                           side_effect=prebuilt.PrebuiltError("Signed archive unavailable"))):
+            with self.assertRaisesRegex(prebuilt.PrebuiltError, "Signed archive unavailable"):
+                prebuilt.import_prebuilt(
+                    pathlib.Path("/tmp"), SHA, VERSION, None, lambda _: 10**10)
+            fake.pull_registry_candidate.assert_not_called()
+
+    def test_signed_registry_manifest_candidate_requires_exact_repo_digest(self):
+        import json
+        digest = "sha256:" + "d" * 64
+        proof_data = {"image_id": IMAGE, "registry_digest": digest,
+                      "release": VERSION, "sha": SHA}
+        with patch.object(prebuilt.subprocess, "check_output",
+                          return_value=json.dumps(["ghcr.io/b8vipvip/mv3c@" + digest])):
+            self.assertTrue(prebuilt.verified_local_candidate_id(
+                pathlib.Path("/tmp"), SHA, VERSION, proof_data, digest, None))
+        with patch.object(prebuilt.subprocess, "check_output",
+                          return_value=json.dumps(["ghcr.io/attacker/mv3c@" + digest])):
+            with self.assertRaises(prebuilt.PrebuiltError):
+                prebuilt.verified_local_candidate_id(
+                    pathlib.Path("/tmp"), SHA, VERSION, proof_data, digest, None)
+
     def test_invalid_proof_blocks_all_docker_commands(self):
         with (patch.object(prebuilt, "_quarantine") as quarantine,
               patch.object(prebuilt.subprocess, "run") as docker):
