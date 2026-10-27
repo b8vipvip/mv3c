@@ -15,6 +15,7 @@ import fcntl
 import shutil
 import json
 import os
+import stat
 import re
 import subprocess
 import sys
