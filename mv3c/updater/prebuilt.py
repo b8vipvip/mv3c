@@ -189,7 +189,7 @@ def _download_release_asset(repo: Path, version: str, sha: str,
             raise PrebuiltError("Official Release download deadline reached; partial retained")
         if partial.exists():
             info = partial.lstat()
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                     or info.st_nlink != 1):
                 raise PrebuiltError("Partial Release download is not a root-owned regular file")
             previous = info.st_size
@@ -227,7 +227,7 @@ def _download_release_asset(repo: Path, version: str, sha: str,
                 "Official Release downloader unavailable or timed out; partial retained"
             ) from error
         info = partial.lstat() if partial.exists() else None
-        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1:
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
             raise PrebuiltError("Unsafe or missing partial Release file")
         os.chmod(partial, 0o600)
         current = info.st_size
@@ -261,7 +261,7 @@ def _download_release_asset(repo: Path, version: str, sha: str,
         raise PrebuiltError("Official Release retry budget exhausted; partial retained")
 
     info = partial.lstat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
             or info.st_nlink != 1 or info.st_size != archive_bytes):
         raise PrebuiltError("Release archive size differs from official image proof")
     os.chmod(partial, 0o600)
