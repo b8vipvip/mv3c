@@ -22,6 +22,21 @@ class LayerAuditTests(unittest.TestCase):
         self.assertEqual(result["new_diff_ids"], 1)
         self.assertNotIn("bytes_saved", result)
 
+    def test_duplicate_empty_diffid_is_counted_in_each_matching_position(self):
+        # Production actual result: 10 positions, six equal; the same empty
+        # diffID appears twice, so only five UNIQUE shared digests exist.
+        old = [A, B, C, D, "sha256:" + "e" * 64, B,
+               "sha256:" + "f" * 64, B,
+               "sha256:" + "0" * 64, "sha256:" + "1" * 64]
+        new = [A, B, C, D, "sha256:" + "2" * 64, B,
+               "sha256:" + "3" * 64, B,
+               "sha256:" + "4" * 64, "sha256:" + "5" * 64]
+        result = audit.compare_layers(new, old)
+        self.assertEqual(result["identical_positions"], [1, 2, 3, 4, 6, 8])
+        self.assertEqual(result["different_positions"], [5, 7, 9, 10])
+        self.assertEqual(result["identical_position_count"], 6)
+        self.assertEqual(result["shared_diff_ids"], 5)
+
     def test_uncached_previous_is_unknown_not_zero_bandwidth(self):
         result = audit.compare_layers([A, B], [])
         self.assertFalse(result["previous_available"])
