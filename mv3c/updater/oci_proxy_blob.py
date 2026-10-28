@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import shutil
 import subprocess
 from pathlib import Path
@@ -86,7 +87,10 @@ def _safe_file(path: Path) -> int:
         return 0
     if not path.is_file():
         raise BlobTransferError("Refusing non-regular blob stage entry")
-    return path.stat().st_size
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise BlobTransferError("Refusing shared or non-regular blob stage entry")
+    return info.st_size
 
 
 def stage_blob(stage: Path, digest: str, size: int, *, proxy: str,
@@ -115,8 +119,10 @@ def stage_blob(stage: Path, digest: str, size: int, *, proxy: str,
     if stage.is_symlink():
         raise BlobTransferError("Refusing symbolic link stage directory")
     stage.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not stage.is_dir():
-        raise BlobTransferError("Invalid blob stage directory")
+    info = stage.stat()
+    if (not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid() or info.st_mode & 0o077):
+        raise BlobTransferError("Blob stage directory must be owner-only")
     digest_hex = digest.removeprefix("sha256:")
     final = stage / digest_hex
     part = stage / (digest_hex + ".part")
