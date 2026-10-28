@@ -69,8 +69,19 @@ def main():
                 accepted.append(image)
         if len(accepted) != 1:
             raise SystemExit("Loaded Docker candidate missing attested runtime metadata")
+        # Tag only after inspection by the immutable protected manifest digest.
+        # Synthetic CI candidate, never the production mv3c:local ref.
+        verified_ref = "mv3c-oci-verified:sha-" + SHA
+        print(run("docker", "image", "tag",
+                  proof["registry_digest"], verified_ref))
+        tagged = json.loads(run("docker", "image", "inspect",
+                                "--format", "{{json .}}", verified_ref))
+        if (tagged.get("Id") != accepted[0].get("Id")
+                or (tagged.get("Config") or {}).get("Labels", {}).get(
+                    "org.opencontainers.image.revision") != SHA):
+            raise SystemExit("Docker tag did not preserve verified OCI image")
         print(json.dumps({
-            "result": "CI_DOCKER_OCI_LOAD_PASS",
+            "result": "CI_DOCKER_OCI_IMPORT_TAG_PASS",
             "image_id": accepted[0].get("Id"),
             "protected_config_digest": proof["image_id"],
             "protected_manifest_digest": proof["registry_digest"],
