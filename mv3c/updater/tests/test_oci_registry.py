@@ -181,6 +181,19 @@ class OCIRegistryTests(unittest.TestCase):
                     lambda _: 10 * 1024**3)
             self.assertEqual(network.call_count, 2)
 
+    def test_official_ghcr_acceptance_dispatch_after_proof_only(self):
+        workflow = (ROOT.parents[1] / ".github/workflows/mv3c-prebuilt.yml").read_text()
+        self.assertIn("  actions: write", workflow)
+        self.assertIn("gh workflow run mv3c-ghcr-proof-acceptance.yml", workflow)
+        self.assertIn("steps.registry.outcome == 'success'", workflow)
+        self.assertIn("steps.registry.outputs.digest != ''", workflow)
+        self.assertIn("vars.MV3C_ENABLE_OCI_REGISTRY == 'enabled'", workflow)
+        proof = workflow.index("      - name: Record protected archive/image proof AFTER asset publication")
+        dispatch = workflow.index("      - name: Dispatch official GHCR proof acceptance after publishing image proof")
+        self.assertGreater(dispatch, proof)
+        self.assertIn("manual verification required", workflow)
+        self.assertIn("Official GHCR proof acceptance dispatched", workflow)
+
     def test_unchanged_archive_policy_retained(self):
         updater = (ROOT / "prebuilt.py").read_text()
         imageproof = (ROOT.parents[1] / ".github/workflows/mv3c-prebuilt.yml").read_text()

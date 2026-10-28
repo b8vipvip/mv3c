@@ -17,6 +17,7 @@ concurrency:
 permissions:
   contents: write
   packages: write
+  actions: write
 
 jobs:
   prebuilt:
@@ -314,3 +315,21 @@ jobs:
             echo "Archive SHA256: $ARCHIVE_SHA"
             echo "Proof tag: $proof"
           } >> "$GITHUB_STEP_SUMMARY"
+      # Run the independent acceptance on the exact immutable proof just
+      # published above. Do not treat an optional GHCR problem as an archive
+      # failure; the acceptance workflow reports its own red/green result.
+      - name: Dispatch official GHCR proof acceptance after publishing image proof
+        if: vars.MV3C_ENABLE_OCI_REGISTRY == 'enabled' && steps.registry.outcome == 'success' && steps.registry.outputs.digest != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh workflow run mv3c-ghcr-proof-acceptance.yml \
+            --repo "$GITHUB_REPOSITORY" --ref main \
+            -f version="$VERSION"; then
+            echo "Official GHCR proof acceptance dispatched for $VERSION"
+            echo "GHCR acceptance dispatched; inspect the separate workflow result before host rollout." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Automatic GHCR acceptance dispatch failed; archive delivery remains valid. Run the acceptance workflow manually for $VERSION."
+            echo "GHCR acceptance NOT dispatched automatically; manual verification required." >> "$GITHUB_STEP_SUMMARY"
+          fi
