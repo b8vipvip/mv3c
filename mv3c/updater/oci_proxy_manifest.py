@@ -40,7 +40,7 @@ def _descriptor(value: object, allowed_types: set[str], *, maximum: int) -> dict
         raise ManifestProofError("OCI descriptor must be an object")
     digest, media, size = value.get("digest"), value.get("mediaType"), value.get("size")
     if (not isinstance(digest, str) or not HEX.fullmatch(digest)
-            or media not in allowed_types
+            or not isinstance(media, str) or media not in allowed_types
             or not isinstance(size, int) or isinstance(size, bool)
             or not 0 < size <= maximum
             or value.get("urls") or value.get("artifactType")):
