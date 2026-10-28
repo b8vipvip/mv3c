@@ -1,0 +1,69 @@
+name: MV3C official GHCR OCI proxy full-image acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'mv3c/updater/oci_proxy_*.py'
+      - 'mv3c/updater/tests/oci_ci_full_release.py'
+      - 'mv3c/updater/tests/oci_ci_connect_proxy.py'
+      - '.github/workflows/mv3c-oci-official-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  official-attested-ghcr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch immutable official v0.1.45 image proof
+        run: |
+          git fetch --no-tags origin \
+            '+refs/mv3c-release/images/v0.1.45:refs/mv3c-release/images/v0.1.45'
+          test "$(git cat-file -t refs/mv3c-release/images/v0.1.45)" = tag
+      - id: docker
+        name: Set up isolated Docker 29.6.2 with containerd image store
+        uses: docker/setup-docker-action@v5
+        with:
+          version: v29.6.2
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - name: Start restricted local proxy in disposable runner
+        run: |
+          python3 -u mv3c/updater/tests/oci_ci_connect_proxy.py \
+            > /tmp/mv3c-oci-ci-proxy.log 2>&1 &
+          for n in $(seq 1 20); do
+            STATUS=$(curl --silent --show-error --max-time 10 \
+              --proxy http://127.0.0.1:11808 \
+              --output /dev/null --write-out '%{http_code}' \
+              https://ghcr.io/v2/ || true)
+            if [ "$STATUS" = 401 ] || [ "$STATUS" = 200 ]; then
+              echo 'Proxy GHCR connectivity verified'
+              break
+            fi
+            sleep 1
+          done
+          pgrep -f 'python3 -u mv3c/updater/tests/oci_ci_connect_proxy.py' >/dev/null
+      - name: Verify full signed OCI image through proxy and Docker
+        env:
+          DOCKER_HOST: ${{ steps.docker.outputs.sock }}
+          MV3C_DOWNLOAD_PROXY: http://127.0.0.1:11808
+        run: |
+          docker info --format 'Driver={{json .DriverStatus}}'
+          sudo mkdir -p /var/lib/mv3c-prebuilt/verified
+          sudo chmod 700 /var/lib/mv3c-prebuilt/verified
+          sudo --preserve-env=DOCKER_HOST,MV3C_DOWNLOAD_PROXY \
+            python3 -B mv3c/updater/tests/oci_ci_full_release.py
+      - name: Report isolated disk usage
+        if: always()
+        run: |
+          df -h /
+          echo 'No production services, tags or volumes were touched'
