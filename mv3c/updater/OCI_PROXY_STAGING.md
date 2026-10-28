@@ -2,7 +2,7 @@
 
 The production updater remains **unchanged**. This module is an isolated, offline-testable
 building block, **not** a deployable replacement for the attested Docker image path.
-Do not enable \`MV3C_OCI_LAYER_TRANSPORT=enabled\` based on this module alone.
+Do not enable `MV3C_OCI_LAYER_TRANSPORT=enabled` based on this module alone.
 
 ## Why this exists
 
@@ -11,16 +11,16 @@ client pull through the local SOCKS proxy stopped mid-layer with an unexpected
 EOF. A curl-managed stage can resume the **exact** official compressed blob,
 rather than starting a 290 MB download from zero each time.
 
-\`oci_proxy_blob.stage_blob(stage, digest, size, proxy=...)\`:
+`oci_proxy_blob.stage_blob(stage, digest, size, proxy=...)`:
 
 - accepts only strict SHA256 digests and attested positive byte sizes;
 - requires a loopback proxy, never prints a GHCR token in argv;
-- resumes a \`sha256.part\` file using curl's HTTP Range continuation;
+- resumes a `sha256.part` file using curl's HTTP Range continuation;
 - preserves resumable partials after transfer interruption;
 - verifies **both** final size and SHA256 before atomic promotion;
 - preserves a 2 GiB minimum disk reserve, refuses symlinks;
 - emits progress *counters* but not a token or untrusted redirect URL;
-- NEVER touches containerd's \`moby\` namespace, Docker daemon, image tags,
+- NEVER touches containerd's `moby` namespace, Docker daemon, image tags,
   running containers, or the canonical MongoDB updater queue.
 
 ## Not yet implemented or proven
