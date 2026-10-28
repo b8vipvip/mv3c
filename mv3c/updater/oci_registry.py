@@ -63,7 +63,7 @@ def verify_registry_image(metadata: dict, version: str, sha: str,
 
 
 def pull_registry_candidate(repo: Path, version: str, sha: str, proof: dict,
-                            git, disk_free) -> str | None:
+                            git, disk_free, *, timeout_seconds: int = 180) -> str | None:
     """Try the explicitly opted-in public registry; missing/unreachable -> archive.
 
     Network transport failures fall back, but a cryptographically mismatched
@@ -85,7 +85,7 @@ def pull_registry_candidate(repo: Path, version: str, sha: str, proof: dict,
     try:
         result = subprocess.run(
             ["docker", "image", "pull", "--platform", "linux/amd64", remote],
-            cwd=repo, text=True, capture_output=True, timeout=180, check=False,
+            cwd=repo, text=True, capture_output=True, timeout=timeout_seconds, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print("OCI layer pull unavailable; falling back to signed Release archive: "
