@@ -13,12 +13,13 @@ import re
 import shutil
 import subprocess
 import sys
+sys.dont_write_bytecode = True  # Do not create __pycache__ on the production host.
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from oci_registry import attested_registry_manifest
-from prebuilt import _host_import_budget, verified_image_proof
+from prebuilt import PrebuiltError, _host_import_budget, verified_image_proof
 
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 VERSION = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
@@ -79,7 +80,7 @@ def check(repo: Path, version: str, sha: str) -> dict:
             report["details"][key] = value
             report["checks"][key] = bool(value["passed"])
         except (OSError, ValueError, KeyError, TypeError, RuntimeError,
-                subprocess.SubprocessError, URLError, HTTPError) as exc:
+                subprocess.SubprocessError, URLError, HTTPError, PrebuiltError) as exc:
             report["checks"][key] = False
             report["details"][key] = {"passed": False, "error": type(exc).__name__}
 
