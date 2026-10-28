@@ -458,15 +458,28 @@ def import_prebuilt(repo: Path, sha: str, version: str, git, disk_free) -> str:
     # addressable Docker layers, so unchanged dependencies are not downloaded.
     # If GitHub Container Registry is inaccessible, retain the existing signed
     # full-archive fallback, with no second updater or trust authority.
-    if os.environ.get("MV3C_OCI_LAYER_TRANSPORT", "") == "enabled":
+    oci_mode = os.environ.get("MV3C_OCI_LAYER_TRANSPORT", "")
+    if oci_mode in ("enabled", "required"):
         from oci_registry import OCIProofError, pull_registry_candidate
         try:
-            registry_result = pull_registry_candidate(
-                repo, version, sha, proof, git, disk_free)
+            if oci_mode == "required":
+                # Initial deployment may explicitly prefer GHCR when the
+                # archive CDN stalls. Never silently download another 500MB
+                # archive after a required OCI transport failure.
+                registry_result = pull_registry_candidate(
+                    repo, version, sha, proof, git, disk_free,
+                    timeout_seconds=900)
+            else:
+                registry_result = pull_registry_candidate(
+                    repo, version, sha, proof, git, disk_free)
         except OCIProofError as error:
             raise PrebuiltError(str(error)) from error
         if registry_result:
             return registry_result
+        if oci_mode == "required":
+            raise PrebuiltError(
+                "Required attested GHCR transport unavailable; signed archive "
+                "fallback deliberately disabled for this one-time bootstrap")
     path = prepare_archive(repo, version, sha, proof, disk_free)
     # Docker loads unpacked layers in addition to the already staged archive.
     # Conservative reserve protects the 40GB host; no prune or source build.

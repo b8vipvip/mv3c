@@ -6,6 +6,13 @@ umask 077
 test "$#" -eq 1 || { echo "Usage: sudo bash bootstrap-prebuilt.sh vX.Y.Z"; exit 2; }
 VERSION="$1"
 [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 2
+# An explicit one-shot preference for the already attested OCI image. No
+# persistent systemd option is created, and the same canonical agent retains
+# the exclusive deployment lock and all rollback ownership.
+case "${MV3C_BOOTSTRAP_OCI:-disabled}" in
+  disabled|enabled) ;;
+  *) echo "MV3C_BOOTSTRAP_OCI must be enabled or disabled" >&2; exit 2 ;;
+esac
 REPO=/opt/mv3c
 [[ "$(id -u)" == 0 && -d "$REPO/.git" ]] || exit 1
 cd "$REPO"
@@ -67,7 +74,33 @@ latest="$(git for-each-ref --format='%(refname:strip=3)' refs/mv3c-release/tags 
 [[ "$latest" == "$VERSION" ]] || { echo "Expected latest official Release: $latest"; exit 1; }
 
 TMP="$(mktemp -d /root/mv3c-prebuilt-handoff.XXXXXXXX)"
-trap 'rm -rf -- "$TMP"' EXIT
+HANDOFF_TIMER_PAUSED=0
+cleanup_handoff() {
+  local result=$?
+  if [[ "$result" -ne 0 && "$HANDOFF_TIMER_PAUSED" == 1 ]]; then
+    echo "One-time handoff failed after pausing the timer; checking safe timer recovery" >&2
+    if ! systemctl is-active --quiet mv3c-updater.service; then
+      local queue_state=
+      queue_state="$(timeout 30s docker compose exec --interactive=false -T mv3c \
+        node /app/mv3c/updater/bridge.cjs state </dev/null 2>/dev/null)" || queue_state=
+      if printf '%s' "$queue_state" | python3 -c '
+import json,sys
+s=json.load(sys.stdin)
+assert not s.get("activeJob") and not s.get("pendingJob")
+assert (s.get("config") or {}).get("autoDeployEnabled") is False
+' 2>/dev/null; then
+        systemctl enable --now mv3c-updater.timer \
+          || echo "Timer recovery failed; manual attention required" >&2
+      else
+        echo "Update queue is not confirmed idle; keep timer paused for investigation" >&2
+      fi
+    fi
+  fi
+  rm -rf -- "$TMP"
+  trap - EXIT
+  exit "$result"
+}
+trap cleanup_handoff EXIT
 chmod 700 "$TMP"
 git show "$target:mv3c/updater/agent.py" > "$TMP/agent.py"
 git show "$target:mv3c/updater/prebuilt.py" > "$TMP/prebuilt.py"
@@ -89,10 +122,24 @@ def git(repo,*args):
     return subprocess.check_output(["git",*args],cwd=repo,text=True).strip()
 a.verify_release_proof(repo,version,sha)
 proof=p.verified_image_proof(repo,version,sha,git)
-# This is only artifact acquisition, not a second deployer or terminal-state
-# writer. HTTPS is used when no complete, verified local SCP archive exists.
-artifact=p.prepare_archive(repo,version,sha,proof,a.disk_free_bytes)
-print("Official Release proof, CI results, HTTPS/local archive SHA256 all PASS:",artifact)
+# A one-time, explicit OCI transport defers all Docker actions to the
+# canonical agent, under its existing flock and database job. In archive mode
+# the existing complete-bytes SHA256 gate remains unchanged.
+if __import__("os").environ.get("MV3C_BOOTSTRAP_OCI") == "enabled":
+    sys.path.insert(0, folder)
+    from oci_registry import attested_registry_manifest
+    digest=attested_registry_manifest(proof,version,sha)
+    if not digest:
+        raise RuntimeError("Official Release has no attested GHCR digest")
+    required=2*1024**3+p._host_import_budget(int(proof["image_size"]))+512*1024**2
+    free=a.disk_free_bytes(repo)
+    if free < required:
+        raise RuntimeError(f"Insufficient OCI handoff disk reserve: {free} < {required}")
+    print("Official Release proof PASSED; OCI manifest pinned:",digest,
+          "; Docker pull deferred to canonical locked updater",flush=True)
+else:
+    artifact=p.prepare_archive(repo,version,sha,proof,a.disk_free_bytes)
+    print("Official Release proof, CI results, HTTPS/local archive SHA256 all PASS:",artifact)
 PY
 # Keep the existing canonical timer alive during slow Git/Release archive
 # acquisition. A failed HTTPS fetch must not silently disable future checks.
@@ -102,6 +149,7 @@ if systemctl is-active --quiet mv3c-updater.service; then
   exit 1
 fi
 systemctl disable --now mv3c-updater.timer
+HANDOFF_TIMER_PAUSED=1
 echo "Original updater timer paused for exclusive one-time handoff."
 echo "Creating exactly one manual task via existing database queue"
 timeout 60s docker compose exec -T mv3c node -e '
@@ -117,7 +165,11 @@ const updates=require("/app/api/server/services/Config/mv3cUpdater");
 })().catch(e=>{console.error(e.message);process.exitCode=1;mongoose.disconnect().catch(()=>{})});
 '
 echo "Starting ONLY the verified canonical agent under its original exclusive lock"
-python3 "$TMP/agent.py" --repo "$REPO"
+if [[ "${MV3C_BOOTSTRAP_OCI:-disabled}" == enabled ]]; then
+  MV3C_OCI_LAYER_TRANSPORT=required python3 "$TMP/agent.py" --repo "$REPO"
+else
+  python3 "$TMP/agent.py" --repo "$REPO"
+fi
 [[ "$(git rev-parse HEAD)" == "$target" ]] || { echo "Deployment SHA mismatch"; exit 1; }
 curl -fsS --max-time 15 http://127.0.0.1:3080/readyz >/dev/null
 echo "New Release healthy. Reinstalling same service/timer from new checkout."
