@@ -74,7 +74,33 @@ latest="$(git for-each-ref --format='%(refname:strip=3)' refs/mv3c-release/tags 
 [[ "$latest" == "$VERSION" ]] || { echo "Expected latest official Release: $latest"; exit 1; }
 
 TMP="$(mktemp -d /root/mv3c-prebuilt-handoff.XXXXXXXX)"
-trap 'rm -rf -- "$TMP"' EXIT
+HANDOFF_TIMER_PAUSED=0
+cleanup_handoff() {
+  local result=$?
+  if [[ "$result" -ne 0 && "$HANDOFF_TIMER_PAUSED" == 1 ]]; then
+    echo "One-time handoff failed after pausing the timer; checking safe timer recovery" >&2
+    if ! systemctl is-active --quiet mv3c-updater.service; then
+      local queue_state=
+      queue_state="$(timeout 30s docker compose exec --interactive=false -T mv3c \
+        node /app/mv3c/updater/bridge.cjs state </dev/null 2>/dev/null)" || queue_state=
+      if printf '%s' "$queue_state" | python3 -c '
+import json,sys
+s=json.load(sys.stdin)
+assert not s.get("activeJob") and not s.get("pendingJob")
+assert (s.get("config") or {}).get("autoDeployEnabled") is False
+' 2>/dev/null; then
+        systemctl enable --now mv3c-updater.timer \
+          || echo "Timer recovery failed; manual attention required" >&2
+      else
+        echo "Update queue is not confirmed idle; keep timer paused for investigation" >&2
+      fi
+    fi
+  fi
+  rm -rf -- "$TMP"
+  trap - EXIT
+  exit "$result"
+}
+trap cleanup_handoff EXIT
 chmod 700 "$TMP"
 git show "$target:mv3c/updater/agent.py" > "$TMP/agent.py"
 git show "$target:mv3c/updater/prebuilt.py" > "$TMP/prebuilt.py"
@@ -123,6 +149,7 @@ if systemctl is-active --quiet mv3c-updater.service; then
   exit 1
 fi
 systemctl disable --now mv3c-updater.timer
+HANDOFF_TIMER_PAUSED=1
 echo "Original updater timer paused for exclusive one-time handoff."
 echo "Creating exactly one manual task via existing database queue"
 timeout 60s docker compose exec -T mv3c node -e '
