@@ -20,8 +20,6 @@ esac
 if systemctl is-active --quiet mv3c-updater.service; then
   echo "Another canonical updater is running"; exit 1
 fi
-systemctl disable --now mv3c-updater.timer
-echo "Original updater timer paused for one-time handoff."
 state="$(timeout 50s docker compose exec -T mv3c node /app/mv3c/updater/bridge.cjs state)"
 printf '%s' "$state" | python3 -c '
 import json,sys
@@ -96,6 +94,15 @@ proof=p.verified_image_proof(repo,version,sha,git)
 artifact=p.prepare_archive(repo,version,sha,proof,a.disk_free_bytes)
 print("Official Release proof, CI results, HTTPS/local archive SHA256 all PASS:",artifact)
 PY
+# Keep the existing canonical timer alive during slow Git/Release archive
+# acquisition. A failed HTTPS fetch must not silently disable future checks.
+# Stop the timer only immediately before queuing the single manual handoff.
+if systemctl is-active --quiet mv3c-updater.service; then
+  echo "Canonical updater became active during staging; aborting without queuing" >&2
+  exit 1
+fi
+systemctl disable --now mv3c-updater.timer
+echo "Original updater timer paused for exclusive one-time handoff."
 echo "Creating exactly one manual task via existing database queue"
 timeout 60s docker compose exec -T mv3c node -e '
 const mongoose=require("mongoose");

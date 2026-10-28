@@ -244,20 +244,43 @@ def _download_release_asset(repo: Path, version: str, sha: str,
             raise PrebuiltError(
                 "Official Release downloader unavailable or timed out; partial retained"
             ) from error
+        http = (getattr(result, "stdout", None) or "").strip()
+        retryable_failure = (result.returncode in retryable or
+                             (result.returncode == 22 and http in
+                              {"429", "500", "502", "503", "504"}))
         info = partial.lstat() if partial.exists() else None
-        if info is None or not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
-            raise PrebuiltError("Unsafe or missing partial Release file")
+        if info is None:
+            # curl may fail before it creates --output (DNS, proxy or CDN
+            # HTTP error). Do not misreport a network error as an unsafe file,
+            # and do not let transient no-byte failures bypass stall limits.
+            reason = (result.stderr or "").strip().replace("\n", " ")[-250:]
+            if result.returncode == 0 or not retryable_failure:
+                raise PrebuiltError(
+                    "Official Release HTTPS failed before creating partial "
+                    f"(curl exit={result.returncode}, http={http or 'none'}): {reason}")
+            stalls += 1
+            if stalls >= 3:
+                raise PrebuiltError(
+                    "Official Release HTTPS failed three times before creating "
+                    f"partial (last curl exit={result.returncode}, "
+                    f"http={http or 'none'}): {reason}")
+            print(f"MV3C Release network retry {attempt}/25: "
+                  f"no partial bytes, curl={result.returncode}, "
+                  f"http={http or 'none'}", flush=True)
+            time.sleep(min(3 * (2 ** min(attempt - 1, 4)), 30))
+            continue
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+            raise PrebuiltError("Unsafe partial Release file (not root-owned regular single-link)")
         os.chmod(partial, 0o600)
         current = info.st_size
         if current < previous or current > archive_bytes:
             raise PrebuiltError("Invalid resumed Release byte offset")
-        http = (getattr(result, "stdout", None) or "").strip()
         if previous and http == "200":
             raise PrebuiltError(
                 "Release CDN ignored HTTP Range on resumed download; rejecting partial")
         if result.returncode == 0 and current == archive_bytes:
             break
-        if result.returncode not in retryable and result.returncode != 0:
+        if not retryable_failure and result.returncode != 0:
             raise PrebuiltError(
                 "Official Release HTTPS failed (curl exit " +
                 str(result.returncode) + "); partial retained: " +
