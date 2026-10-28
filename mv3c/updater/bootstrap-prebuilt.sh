@@ -139,7 +139,7 @@ const updates=require("/app/api/server/services/Config/mv3cUpdater");
 '
 echo "Starting ONLY the verified canonical agent under its original exclusive lock"
 if [[ "${MV3C_BOOTSTRAP_OCI:-disabled}" == enabled ]]; then
-  MV3C_OCI_LAYER_TRANSPORT=enabled python3 "$TMP/agent.py" --repo "$REPO"
+  MV3C_OCI_LAYER_TRANSPORT=required python3 "$TMP/agent.py" --repo "$REPO"
 else
   python3 "$TMP/agent.py" --repo "$REPO"
 fi
