@@ -111,6 +111,29 @@ class PrebuiltTests(unittest.TestCase):
             download.assert_not_called()
             docker.assert_not_called()
 
+    def test_required_registry_failure_does_not_download_full_release_archive(self):
+        import sys
+        import types
+        fake = types.ModuleType("oci_registry")
+        fake.OCIProofError = type("OCIProofError", (RuntimeError,), {})
+        fake.pull_registry_candidate = unittest.mock.Mock(return_value=None)
+        metadata = {
+            "release": VERSION, "sha": SHA, "image_id": IMAGE,
+            "image_size": "4096", "archive_size": "2048",
+            "archive_sha256": ARCHIVE,
+        }
+        with (patch.dict(sys.modules, {"oci_registry": fake}),
+              patch.dict(prebuilt.os.environ, {"MV3C_OCI_LAYER_TRANSPORT": "required"}),
+              patch.object(prebuilt, "verified_image_proof", return_value=metadata),
+              patch.object(prebuilt, "prepare_archive") as download):
+            with self.assertRaisesRegex(prebuilt.PrebuiltError,
+                                        "Required attested GHCR transport unavailable"):
+                prebuilt.import_prebuilt(
+                    pathlib.Path("/tmp"), SHA, VERSION, None, lambda _: 10**10)
+            download.assert_not_called()
+            fake.pull_registry_candidate.assert_called_once()
+            self.assertEqual(fake.pull_registry_candidate.call_args.kwargs.get("timeout_seconds"), 900)
+
     def test_unenabled_registry_never_contacts_registry_for_old_proofs(self):
         import sys
         import types
@@ -420,7 +443,7 @@ class PrebuiltTests(unittest.TestCase):
         bootstrap = (PATH.parent / "bootstrap-prebuilt.sh").read_text()
         self.assertIn('MV3C_BOOTSTRAP_OCI:-disabled', bootstrap)
         self.assertIn('from oci_registry import attested_registry_manifest', bootstrap)
-        self.assertIn('MV3C_OCI_LAYER_TRANSPORT=enabled python3 "$TMP/agent.py" --repo "$REPO"',
+        self.assertIn('MV3C_OCI_LAYER_TRANSPORT=required python3 "$TMP/agent.py" --repo "$REPO"',
                       bootstrap)
         self.assertIn('artifact=p.prepare_archive(', bootstrap)
         self.assertIn('digest=attested_registry_manifest(proof,version,sha)', bootstrap)
@@ -438,6 +461,9 @@ class PrebuiltTests(unittest.TestCase):
         queue = bootstrap.index("queueJob(")
         self.assertLess(proof, pause)
         self.assertLess(pause, queue)
+        self.assertIn('HANDOFF_TIMER_PAUSED=1', bootstrap)
+        self.assertIn('systemctl enable --now mv3c-updater.timer', bootstrap)
+        self.assertIn('assert not s.get("activeJob") and not s.get("pendingJob")', bootstrap)
 
     def test_download_proxy_is_loopback_only_and_redacted_from_argv(self):
         import os
