@@ -352,6 +352,78 @@ class PrebuiltTests(unittest.TestCase):
             self.assertEqual(len(calls), 3)
             self.assertTrue((verified / (prebuilt.filename(VERSION, SHA) + ".download")).exists())
 
+    def test_http_403_before_partial_reports_root_cause_and_stops(self):
+        import types
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder)
+            response = types.SimpleNamespace(
+                returncode=22, stdout="403",
+                stderr="curl: (22) The requested URL returned error: 403")
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.subprocess, "run", return_value=response) as curl):
+                with self.assertRaisesRegex(prebuilt.PrebuiltError,
+                                            "curl exit=22, http=403"):
+                    prebuilt._download_release_asset(
+                        verified, VERSION, SHA,
+                        {"archive_size": "100", "image_size": "4096"},
+                        lambda _: 100 * 1024**3)
+            self.assertEqual(curl.call_count, 1)
+            self.assertFalse((verified / (prebuilt.filename(VERSION, SHA) + ".download")).exists())
+
+    def test_transient_no_partial_is_bounded_and_does_not_disable_timer(self):
+        import types
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder)
+            response = types.SimpleNamespace(
+                returncode=28, stdout="000", stderr="curl: (28) Connection timed out")
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.subprocess, "run", return_value=response) as curl,
+                  patch("time.sleep") as sleep):
+                with self.assertRaisesRegex(prebuilt.PrebuiltError,
+                                            "failed three times before creating partial"):
+                    prebuilt._download_release_asset(
+                        verified, VERSION, SHA,
+                        {"archive_size": "100", "image_size": "4096"},
+                        lambda _: 100 * 1024**3)
+            self.assertEqual(curl.call_count, 3)
+            self.assertEqual(sleep.call_count, 2)
+
+    def test_transient_http_503_without_partial_recovers_and_hash_verifies(self):
+        import hashlib
+        import types
+        with tempfile.TemporaryDirectory() as folder:
+            verified = pathlib.Path(folder)
+            payload = b"verified archive bytes"
+            attempts = []
+            def fake_curl(command, **kwargs):
+                attempts.append(command)
+                if len(attempts) == 1:
+                    return types.SimpleNamespace(returncode=22, stdout="503",
+                                                 stderr="curl: (22) HTTP 503")
+                pathlib.Path(command[command.index("--output") + 1]).write_bytes(payload)
+                return types.SimpleNamespace(returncode=0, stdout="200", stderr="")
+            with (patch.object(prebuilt, "VERIFIED", verified),
+                  patch.object(prebuilt, "_root_only_directory"),
+                  patch.object(prebuilt.subprocess, "run", side_effect=fake_curl),
+                  patch("time.sleep")):
+                output = prebuilt._download_release_asset(
+                    verified, VERSION, SHA,
+                    {"archive_size": str(len(payload)), "image_size": "4096",
+                     "archive_sha256": hashlib.sha256(payload).hexdigest()},
+                    lambda _: 100 * 1024**3)
+            self.assertEqual(output.read_bytes(), payload)
+            self.assertEqual(len(attempts), 2)
+
+    def test_one_time_bootstrap_keeps_timer_until_verified_archive(self):
+        bootstrap = (PATH.parent / "bootstrap-prebuilt.sh").read_text()
+        proof = bootstrap.index("artifact=p.prepare_archive(")
+        pause = bootstrap.index("systemctl disable --now mv3c-updater.timer")
+        queue = bootstrap.index("queueJob(")
+        self.assertLess(proof, pause)
+        self.assertLess(pause, queue)
+
     def test_download_proxy_is_loopback_only_and_redacted_from_argv(self):
         import os
         from unittest.mock import patch
