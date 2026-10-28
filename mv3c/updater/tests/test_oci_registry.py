@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import pathlib
+import subprocess
 import sys
 import tempfile
 import types
@@ -122,6 +123,63 @@ class OCIRegistryTests(unittest.TestCase):
                         pathlib.Path(folder), VERSION, SHA, PROOF, None,
                         lambda _: 10 * 1024**3)
             self.assertEqual(op.call_count, 1)  # pull only, never tag
+
+    def test_low_disk_fails_before_network_or_tagging(self):
+        fake_deps = types.ModuleType("prebuilt")
+        fake_deps._host_import_budget = lambda n: 2 * n
+        with (patch.dict(sys.modules, {"prebuilt": fake_deps}),
+              patch.object(oci.subprocess, "run") as network):
+            with self.assertRaisesRegex(oci.OCIProofError, "Insufficient disk reserve"):
+                oci.pull_registry_candidate(
+                    pathlib.Path("/tmp"), VERSION, SHA, PROOF, None, lambda _: 0)
+            network.assert_not_called()
+
+    def test_missing_registry_proof_does_not_attempt_pull(self):
+        with patch.object(oci.subprocess, "run") as network:
+            self.assertIsNone(oci.pull_registry_candidate(
+                pathlib.Path("/tmp"), VERSION, SHA,
+                {"release": VERSION, "sha": SHA}, None, lambda _: 0))
+            network.assert_not_called()
+
+    def test_network_timeout_falls_back_without_tagging(self):
+        fake_deps = types.ModuleType("prebuilt")
+        fake_deps._host_import_budget = lambda n: 2 * n
+        with (patch.dict(sys.modules, {"prebuilt": fake_deps}),
+              patch.object(oci.subprocess, "run",
+                           side_effect=subprocess.TimeoutExpired("docker pull", 180)) as network):
+            self.assertIsNone(oci.pull_registry_candidate(
+                pathlib.Path("/tmp"), VERSION, SHA, PROOF, None,
+                lambda _: 10 * 1024**3))
+            self.assertEqual(network.call_count, 1)
+
+    def test_inspection_failure_fails_closed(self):
+        fake_deps = types.ModuleType("prebuilt")
+        fake_deps._host_import_budget = lambda n: 2 * n
+        with (patch.dict(sys.modules, {"prebuilt": fake_deps}),
+              patch.object(oci.subprocess, "run",
+                           return_value=types.SimpleNamespace(returncode=0)) as network,
+              patch.object(oci.subprocess, "check_output",
+                           side_effect=subprocess.CalledProcessError(1, "inspect"))):
+            with self.assertRaisesRegex(oci.OCIProofError, "cannot be inspected"):
+                oci.pull_registry_candidate(
+                    pathlib.Path("/tmp"), VERSION, SHA, PROOF, None,
+                    lambda _: 10 * 1024**3)
+            self.assertEqual(network.call_count, 1)
+
+    def test_tag_failure_fails_closed_not_archive_fallback(self):
+        fake_deps = types.ModuleType("prebuilt")
+        fake_deps._host_import_budget = lambda n: 2 * n
+        with (patch.dict(sys.modules, {"prebuilt": fake_deps}),
+              patch.object(oci.subprocess, "run",
+                           side_effect=[types.SimpleNamespace(returncode=0),
+                                        types.SimpleNamespace(returncode=1)]) as network,
+              patch.object(oci.subprocess, "check_output",
+                           return_value=json.dumps(METADATA))):
+            with self.assertRaisesRegex(oci.OCIProofError, "immutable local tag"):
+                oci.pull_registry_candidate(
+                    pathlib.Path("/tmp"), VERSION, SHA, PROOF, None,
+                    lambda _: 10 * 1024**3)
+            self.assertEqual(network.call_count, 2)
 
     def test_unchanged_archive_policy_retained(self):
         updater = (ROOT / "prebuilt.py").read_text()
