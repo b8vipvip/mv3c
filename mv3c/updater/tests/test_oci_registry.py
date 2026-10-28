@@ -197,7 +197,7 @@ class OCIRegistryTests(unittest.TestCase):
     def test_unchanged_archive_policy_retained(self):
         updater = (ROOT / "prebuilt.py").read_text()
         imageproof = (ROOT.parents[1] / ".github/workflows/mv3c-prebuilt.yml").read_text()
-        self.assertIn('os.environ.get("MV3C_OCI_LAYER_TRANSPORT", "") == "enabled"', updater)
+        self.assertIn('oci_mode in ("enabled", "required")', updater)
         self.assertIn("archive_attested_image_ids(path, proof, tag)", updater)
         self.assertIn('path = prepare_archive(repo, version, sha, proof, disk_free)', updater)
         self.assertIn('vars.MV3C_ENABLE_OCI_REGISTRY', imageproof)
