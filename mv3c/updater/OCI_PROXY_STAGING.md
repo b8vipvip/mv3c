@@ -23,10 +23,18 @@ rather than starting a 290 MB download from zero each time.
 - NEVER touches containerd's `moby` namespace, Docker daemon, image tags,
   running containers, or the canonical MongoDB updater queue.
 
+## Newly staged: pinned small-metadata inspection
+
+`oci_proxy_manifest.inspect_attested_manifest(proof, version, sha, proxy=..., stage=...)`
+loads an exact SHA256-pinned single-platform GHCR manifest and stages only
+its <=1 MiB config. It refuses foreign layers and checks Release commit,
+official repository, config digest, runtime labels/env and attested rootfs
+diffIDs. It returns compressed layer descriptors for an eventual import
+adapter, but **does not fetch the large layer blobs or import an image**.
+
 ## Not yet implemented or proven
 
-- Deriving the exact layer set and sizes from the **protected release manifest**,
-  including multi-arch handling and GHCR authorization renewal.
+- Multi-arch handling, GHCR token renewal, and reliable cross-process concurrent staging.
 - Building and importing a valid OCI image **through the supported Docker API**
   while retaining compressed-layer reuse and verifying Docker's final repo
   digest, config, and image ID.
