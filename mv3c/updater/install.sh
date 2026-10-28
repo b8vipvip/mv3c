@@ -109,6 +109,18 @@ if [[ -e "$PROXY_CONFIG" || -L "$PROXY_CONFIG" ]]; then
   fi
 fi
 
+# OCI delivery is separately opt-in and uses the SAME canonical updater.
+# Keep the on-host transport switch apart from optional download-proxy settings.
+OCI_CONFIG=/etc/mv3c/updater-oci.env
+if [[ -e "$OCI_CONFIG" || -L "$OCI_CONFIG" ]]; then
+  if [[ -L "$OCI_CONFIG" || ! -f "$OCI_CONFIG" ||
+        "$(stat -c %u "$OCI_CONFIG")" != "0" ||
+        "$(( 8#$(stat -c %a "$OCI_CONFIG") & 077 ))" != "0" ]]; then
+    echo "MV3C OCI config must be root-owned, regular, and unreadable by group/others" >&2
+    exit 1
+  fi
+fi
+
 cat >/etc/systemd/system/mv3c-updater.service <<UNIT
 [Unit]
 Description=mv3c verified GitHub deployment updater
@@ -119,6 +131,7 @@ Type=oneshot
 User=root
 Environment=HOME=/root
 EnvironmentFile=-/etc/mv3c/updater-proxy.env
+EnvironmentFile=-/etc/mv3c/updater-oci.env
 WorkingDirectory=$REPO
 ExecStart=/usr/bin/python3 $REPO/mv3c/updater/agent.py --repo $REPO
 TimeoutStartSec=90min
