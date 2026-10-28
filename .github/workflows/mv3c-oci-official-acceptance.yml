@@ -20,10 +20,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Fetch immutable official v0.1.45 image proof
+      - name: Fetch immutable official v0.1.44 and v0.1.45 image proofs
         run: |
           git fetch --no-tags origin \
+            '+refs/tags/mv3c-image/v0.1.44:refs/mv3c-release/images/v0.1.44' \
             '+refs/tags/mv3c-image/v0.1.45:refs/mv3c-release/images/v0.1.45'
+          test "$(git cat-file -t refs/mv3c-release/images/v0.1.44)" = tag
           test "$(git cat-file -t refs/mv3c-release/images/v0.1.45)" = tag
       - id: docker
         name: Set up isolated Docker 29.6.2 with containerd image store
