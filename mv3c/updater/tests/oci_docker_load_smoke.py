@@ -40,9 +40,21 @@ def main():
         print("OCI archive generated, running docker image load in CI only", flush=True)
         print(run("docker", "image", "load", "--input", str(candidate)))
         candidate_ref = "mv3c-oci-verify:sha-" + SHA
-        inspected = [json.loads(run(
-            "docker", "image", "inspect", "--format", "{{json .}}",
-            candidate_ref))]
+        print("Docker post-load image listing:", flush=True)
+        print(run("docker", "image", "ls", "--all", "--no-trunc"), flush=True)
+        inspected = []
+        for ref in (candidate_ref, "docker.io/library/" + candidate_ref,
+                    proof["image_id"], proof["registry_digest"]):
+            try:
+                image = json.loads(run(
+                    "docker", "image", "inspect", "--format", "{{json .}}", ref))
+                inspected.append(image)
+                print("Docker image inspect PASS:", ref, flush=True)
+            except subprocess.CalledProcessError as error:
+                print("Docker image inspect failed:", ref,
+                      error.output[:1000], flush=True)
+        if not inspected:
+            raise SystemExit("Docker imported OCI stream but no image was inspectable")
         accepted = []
         for image in inspected:
             config = image.get("Config") or {}
