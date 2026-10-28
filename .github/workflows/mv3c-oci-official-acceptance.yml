@@ -23,7 +23,7 @@ jobs:
       - name: Fetch immutable official v0.1.45 image proof
         run: |
           git fetch --no-tags origin \
-            '+refs/mv3c-release/images/v0.1.45:refs/mv3c-release/images/v0.1.45'
+            '+refs/tags/mv3c-image/v0.1.45:refs/mv3c-release/images/v0.1.45'
           test "$(git cat-file -t refs/mv3c-release/images/v0.1.45)" = tag
       - id: docker
         name: Set up isolated Docker 29.6.2 with containerd image store
