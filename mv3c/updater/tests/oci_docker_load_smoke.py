@@ -14,6 +14,7 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from oci_proxy_archive import build_attested_oci_archive
+from oci_proxy_import import load_verified_oci_candidate
 from test_oci_proxy_archive import SHA, VERSION, digest, fixture, put
 
 
@@ -37,53 +38,21 @@ def main():
         build_attested_oci_archive(
             stage, candidate, raw_manifest=raw, raw_config=conf,
             proof=proof, version=VERSION, sha=SHA)
-        print("OCI archive generated, running docker image load in CI only", flush=True)
-        print(run("docker", "image", "load", "--input", str(candidate)))
-        candidate_ref = "mv3c-oci-verify:sha-" + SHA
-        print("Docker post-load image listing:", flush=True)
-        print(run("docker", "image", "ls", "--all", "--no-trunc"), flush=True)
-        inspected = []
-        for ref in (candidate_ref, "docker.io/library/" + candidate_ref,
-                    proof["image_id"], proof["registry_digest"]):
-            try:
-                image = json.loads(run(
-                    "docker", "image", "inspect", "--format", "{{json .}}", ref))
-                inspected.append(image)
-                print("Docker image inspect PASS:", ref, flush=True)
-            except subprocess.CalledProcessError as error:
-                print("Docker image inspect failed:", ref,
-                      error.output[:1000], flush=True)
-        if not inspected:
-            raise SystemExit("Docker imported OCI stream but no image was inspectable")
-        accepted = []
-        for image in inspected:
-            config = image.get("Config") or {}
-            labels = config.get("Labels") or {}
-            env = config.get("Env") or []
-            rootfs = (image.get("RootFS") or {}).get("Layers") or []
-            if (labels.get("org.opencontainers.image.version") == VERSION
-                    and labels.get("org.opencontainers.image.revision") == SHA
-                    and "BUILD_COMMIT=" + SHA in env
-                    and "MV3C_VERSION=" + VERSION in env
-                    and len(rootfs) == 1):
-                accepted.append(image)
-        if len(accepted) != 1:
-            raise SystemExit("Loaded Docker candidate missing attested runtime metadata")
-        # Tag only after inspection by the immutable protected manifest digest.
-        # Synthetic CI candidate, never the production mv3c:local ref.
-        verified_ref = "mv3c-oci-verified:sha-" + SHA
-        print(run("docker", "image", "tag",
-                  proof["registry_digest"], verified_ref))
-        tagged = json.loads(run("docker", "image", "inspect",
-                                "--format", "{{json .}}", verified_ref))
-        if (tagged.get("Id") != accepted[0].get("Id")
-                or (tagged.get("Config") or {}).get("Labels", {}).get(
-                    "org.opencontainers.image.revision") != SHA):
-            raise SystemExit("Docker tag did not preserve verified OCI image")
+        print("OCI archive generated; validating/importing Docker candidate in CI", flush=True)
+        report = load_verified_oci_candidate(
+            candidate, proof, VERSION, SHA,
+            cwd=stage, min_free_bytes=2 * 1024**3)
+        tagged = json.loads(run(
+            "docker", "image", "inspect", "--format", "{{json .}}",
+            "mv3c:sha-" + SHA))
+        if (report["image_id"] != proof["registry_digest"]
+                or tagged.get("Id") != report["image_id"]
+                or report.get("already_tagged")):
+            raise SystemExit("Docker immutable candidate identity mismatch")
         print(json.dumps({
             "result": "CI_DOCKER_OCI_IMPORT_TAG_PASS",
-            "image_id": accepted[0].get("Id"),
-            "protected_config_digest": proof["image_id"],
+            "candidate": report["candidate"],
+            "image_id": report["image_id"],
             "protected_manifest_digest": proof["registry_digest"],
             "docker_driver": driver,
         }, indent=2))
