@@ -73,7 +73,10 @@ trap 'rm -rf -- "$TMP"' EXIT
 chmod 700 "$TMP"
 git show "$target:mv3c/updater/agent.py" > "$TMP/agent.py"
 git show "$target:mv3c/updater/prebuilt.py" > "$TMP/prebuilt.py"
-python3 -m py_compile "$TMP/agent.py" "$TMP/prebuilt.py"
+# The canonical updater loads its opt-in OCI transport module from the same
+# attested Release tree, never from a stale host checkout or unrelated path.
+git show "$target:mv3c/updater/oci_registry.py" > "$TMP/oci_registry.py"
+python3 -m py_compile "$TMP/agent.py" "$TMP/prebuilt.py" "$TMP/oci_registry.py"
 grep -Fq 'prebuilt_only=True' "$TMP/agent.py" || { echo "Release agent not no-build"; exit 1; }
 python3 - "$target" "$VERSION" "$TMP" <<'PY'
 import importlib.util,pathlib,sys,subprocess
