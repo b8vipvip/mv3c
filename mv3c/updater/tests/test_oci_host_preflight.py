@@ -63,6 +63,15 @@ class HostPreflightTests(unittest.TestCase):
         self.assertIn('"$TMP/oci_registry.py"', source)
         self.assertIn('python3 "$TMP/agent.py"', source)
 
+    def test_oci_opt_in_is_separate_root_only_environment_file(self):
+        installer = (ROOT / "install.sh").read_text(encoding="utf8")
+        self.assertIn("OCI_CONFIG=/etc/mv3c/updater-oci.env", installer)
+        self.assertIn("EnvironmentFile=-/etc/mv3c/updater-oci.env", installer)
+        self.assertIn('"$(stat -c %u "$OCI_CONFIG")" != "0"', installer)
+        self.assertIn('"$(( 8#$(stat -c %a "$OCI_CONFIG") & 077 ))" != "0"', installer)
+        # Installing the single updater does not toggle GHCR implicitly.
+        self.assertNotIn("MV3C_OCI_LAYER_TRANSPORT=enabled", installer)
+
     def test_no_direct_host_image_mutation_path(self):
         source = (ROOT / "oci_host_preflight.py").read_text(encoding="utf8")
         for forbidden in (
