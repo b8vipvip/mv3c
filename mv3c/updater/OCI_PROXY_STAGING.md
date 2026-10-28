@@ -1,48 +1,68 @@
-# Resumable GHCR proxy blob staging (development stage)
+# MV3C official GHCR proxy transport — controlled release candidate path
 
-The production updater remains **unchanged**. This module is an isolated, offline-testable
-building block, **not** a deployable replacement for the attested Docker image path.
-Do not enable `MV3C_OCI_LAYER_TRANSPORT=enabled` based on this module alone.
+This is one **optional transport** inside the EXISTING canonical MV3C
+`prebuilt.import_prebuilt()` route, not a second updater or deployment worker.
+**Default is disabled**. Do not opt in on the production 40 GiB host until the
+next official release has a signed GHCR proof, its Docker 29 OCI import/rollback
+has been accepted, and the server preflight is green.
 
-## Why this exists
+## Verified building blocks
 
-On the 40 GiB production host, direct GHCR transfers are slow and a containerd
-client pull through the local SOCKS proxy stopped mid-layer with an unexpected
-EOF. A curl-managed stage can resume the **exact** official compressed blob,
-rather than starting a 290 MB download from zero each time.
+- `oci_proxy_manifest.py` reads the exact Release-Git-protected manifest
+  by immutable SHA256, validates single-platform descriptors, config ID,
+  OCI runtime labels, environment and RootFS diffIDs.
+- `oci_proxy_blob.py` downloads a SHA256-addressed compressed blob from GHCR
+  through an unauthenticated loopback proxy. It uses HTTP Range continuation,
+  fails closed on hash/size mismatch, retains partials on connection failure,
+  prevents symlinks and protects minimum free disk space.
+- `oci_proxy_archive.py` rehashes every staged layer, builds an OCI image
+  layout .tar with the original *compressed* bytes, and publishes the archive
+  atomically after complete validation.
+- `oci_proxy_import.py` rereads and rehashes the OCI archive, imports using
+  Docker's supported `docker image load` command (never direct writes into
+  containerd), checks the pinned manifest digest, runtime labels, env and
+  RootFS, and only THEN tags `mv3c:sha-<release-sha>`. It never changes
+  `mv3c:local`, `mv3c:rollback`, or the running service.
+- The existing agent still owns the original flock/MongoDB job, old-image
+  rollback and health checks. A cached OCI archive is reverified before
+  the agent accepts an imported manifest-digest candidate without RepoDigests.
 
-`oci_proxy_blob.stage_blob(stage, digest, size, proxy=...)`:
+## Host opt-in (DO NOT use until controlled production acceptance)
 
-- accepts only strict SHA256 digests and attested positive byte sizes;
-- requires a loopback proxy, never prints a GHCR token in argv;
-- resumes a `sha256.part` file using curl's HTTP Range continuation;
-- preserves resumable partials after transfer interruption;
-- verifies **both** final size and SHA256 before atomic promotion;
-- preserves a 2 GiB minimum disk reserve, refuses symlinks;
-- emits progress *counters* but not a token or untrusted redirect URL;
-- NEVER touches containerd's `moby` namespace, Docker daemon, image tags,
-  running containers, or the canonical MongoDB updater queue.
+`MV3C_OCI_PROXY_TRANSPORT=required` selects **only** this verified
+proxy path. No secondary GHCR pull or full-archive fallback occurs on failure.
+`MV3C_OCI_PROXY_TRANSPORT=enabled` allows a signed full-archive fallback.
+This is distinct from the legacy direct-Docker
+`MV3C_OCI_LAYER_TRANSPORT=enabled|required`; setting both is rejected.
+Existing unconfigured deployments use the old behavior unchanged.
 
-## Newly staged: pinned small-metadata inspection
+The root-owned host update unit must already read the existing secure
+`MV3C_DOWNLOAD_PROXY=socks5h://127.0.0.1:11808`, and have a root-only,
+non-world-readable `/etc/mv3c/updater-oci.env` before opt-in.
+The updater config/systemd files are NOT modified by this PR.
+Cache: `/var/lib/mv3c-prebuilt/verified/oci-blob-cache/`, mode 0700.
 
-`oci_proxy_manifest.inspect_attested_manifest(proof, version, sha, proxy=..., stage=...)`
-loads an exact SHA256-pinned single-platform GHCR manifest and stages only
-its <=1 MiB config. It refuses foreign layers and checks Release commit,
-official repository, config digest, runtime labels/env and attested rootfs
-diffIDs. It returns compressed layer descriptors for an eventual import
-adapter, but **does not fetch the large layer blobs or import an image**.
+## Safety and observability
 
-## Not yet implemented or proven
+- GitHub's annotated Release image proof remains the root of trust.
+- A short/failed HTTP download leaves resumable partial bytes but cannot
+  produce a verified candidate. No writes to `moby` with `ctr`.
+- Per-stage logs can include cached unique Blob counts and
+  `curl size_download` response-body bytes including retransmitted chunks.
+  These numbers are NOT TLS total wire bytes; do not claim measured 88% savings.
+- Do not prune Docker, clear the rollback image, restart the global daemon,
+  or create a secondary updater to recover from a failed OCI download.
+- CI Docker 29.6.2 with containerd snapshotter exercises a small synthetic
+  OCI archive, import, and immutable post-verification tag. This is NOT
+  yet evidence of a successful full production release update.
 
-- Multi-arch handling, GHCR token renewal, and reliable cross-process concurrent staging.
-- Building and importing a valid OCI image **through the supported Docker API**
-  while retaining compressed-layer reuse and verifying Docker's final repo
-  digest, config, and image ID.
-- Host proof of cache hit vs actual wire bytes. Durable byte differences are
-  *not* a measurement of network traffic: reconnect attempts can retransmit.
-- Controlled end-to-end upgrade, rollback safety and crash recovery in the
-  one canonical updater.
+## Still required before turning on production
 
-No production caller should be added until those components and an isolated
-end-to-end acceptance test exist. The existing signed GitHub Release archive
-remains the trusted production fallback.
+1. Prove an actual official GHCR release OCI image can be imported and
+   reverified on an isolated Docker runner, beyond the synthetic fixture.
+2. Inspect production startup and image service after one controlled
+   new-version deployment and verify failure rollback, storage peak, and
+   traffic/cache metrics. Keep prior healthy SHA/rollback image.
+3. Bound persistent cache retention, add explicit stale-partial cleanup
+   with safe resume under disk pressure, and extend owner/locking checks
+   for inter-process concurrency.
