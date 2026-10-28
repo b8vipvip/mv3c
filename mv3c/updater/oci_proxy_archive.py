@@ -90,18 +90,35 @@ def stage_all_attested_layers(stage: Path, manifest: dict, *, proxy: str,
         raise OCIArchiveError("Conflicting OCI descriptor sizes")
     staged_bytes = 0
     hits = 0
+    http_body_bytes = 0
+    complete_metrics = True
+
+    def record(event):
+        nonlocal http_body_bytes, complete_metrics
+        count = event.get("http_body_bytes")
+        if isinstance(count, int) and count >= 0:
+            http_body_bytes += count
+        else:
+            complete_metrics = False
+        if progress:
+            progress({**event,
+                      "cumulative_http_body_bytes":
+                          http_body_bytes if complete_metrics else None})
+
     for item in unique.values():
         path = stage / item["digest"][7:]
         try:
             if _safe_file(path) == item["size"] and _hash(path) == item["digest"]:
                 hits += 1
             stage_blob(stage, item["digest"], item["size"],
-                       proxy=proxy, progress=progress)
+                       proxy=proxy, progress=record)
         except BlobTransferError as error:
             raise OCIArchiveError("OCI layer stage failed; partial retained") from error
         staged_bytes += item["size"]
     return {"unique_blobs": len(unique), "cached_blobs": hits,
-            "staged_bytes": staged_bytes, "actual_wire_bytes": None}
+            "staged_bytes": staged_bytes,
+            "http_body_bytes": http_body_bytes if complete_metrics else None,
+            "actual_wire_bytes": None}
 
 
 def build_attested_oci_archive(stage: Path, target: Path, *,
