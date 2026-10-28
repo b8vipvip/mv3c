@@ -416,6 +416,21 @@ class PrebuiltTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), payload)
             self.assertEqual(len(attempts), 2)
 
+    def test_first_bootstrap_optional_oci_routes_only_via_canonical_agent(self):
+        bootstrap = (PATH.parent / "bootstrap-prebuilt.sh").read_text()
+        self.assertIn('MV3C_BOOTSTRAP_OCI:-disabled', bootstrap)
+        self.assertIn('from oci_registry import attested_registry_manifest', bootstrap)
+        self.assertIn('MV3C_OCI_LAYER_TRANSPORT=enabled python3 "$TMP/agent.py" --repo "$REPO"',
+                      bootstrap)
+        self.assertIn('artifact=p.prepare_archive(', bootstrap)
+        self.assertIn('digest=attested_registry_manifest(proof,version,sha)', bootstrap)
+        self.assertLess(bootstrap.index("a.verify_release_proof("),
+                        bootstrap.index("digest=attested_registry_manifest("))
+        self.assertLess(bootstrap.index("digest=attested_registry_manifest("),
+                        bootstrap.index("systemctl disable --now mv3c-updater.timer"))
+        self.assertLess(bootstrap.index("systemctl disable --now mv3c-updater.timer"),
+                        bootstrap.index("MV3C_OCI_LAYER_TRANSPORT=enabled python3"))
+
     def test_one_time_bootstrap_keeps_timer_until_verified_archive(self):
         bootstrap = (PATH.parent / "bootstrap-prebuilt.sh").read_text()
         proof = bootstrap.index("artifact=p.prepare_archive(")
