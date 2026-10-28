@@ -58,11 +58,16 @@ Cache: `/var/lib/mv3c-prebuilt/verified/oci-blob-cache/`, mode 0700.
 
 ## Still required before turning on production
 
-1. Prove an actual official GHCR release OCI image can be imported and
-   reverified on an isolated Docker runner, beyond the synthetic fixture.
-2. Inspect production startup and image service after one controlled
-   new-version deployment and verify failure rollback, storage peak, and
-   traffic/cache metrics. Keep prior healthy SHA/rollback image.
-3. Bound persistent cache retention, add explicit stale-partial cleanup
-   with safe resume under disk pressure, and extend owner/locking checks
-   for inter-process concurrency.
+1. **DONE in isolated CI:** Docker 29.6.2 successfully imported the
+   actual official v0.1.44 and v0.1.45 images by pinned Manifest Digest,
+   then created and verified the immutable SHA candidate tags. The second
+   release reused 8 of 9 distinct blobs and downloaded only 50,950,973
+   response-body bytes (the one changed layer); a repeat used 9/9 and
+   downloaded zero compressed layer bytes. Official CI acceptance:
+   https://github.com/b8vipvip/mv3c/actions/runs/40691585460
+2. **NOT YET DONE:** one controlled *new-version* production rollout,
+   /readyz, config/API checks, rollback rehearsal, and storage-peak telemetry
+   on the 40 GiB host. Retain old healthy SHA and rollback image.
+3. **NOT YET DONE:** durable cache-retention bounds and safe stale-partial
+   maintenance, plus a documented host-configuration opt-in review. Leave
+   production OCI proxy mode disabled until these are accepted.
