@@ -102,7 +102,7 @@ class ArchiveTests(unittest.TestCase):
                 desc = index["manifests"][0]
                 self.assertEqual(desc["digest"], digest(raw))
                 self.assertEqual(desc["annotations"]["org.opencontainers.image.ref.name"],
-                                 "sha-" + SHA)
+                                 "mv3c-oci-verify:sha-" + SHA)
                 self.assertEqual(
                     tar.extractfile("blobs/sha256/" + digest(raw)[7:]).read(), raw)
                 self.assertEqual(
