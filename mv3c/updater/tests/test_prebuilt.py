@@ -452,7 +452,7 @@ class PrebuiltTests(unittest.TestCase):
         self.assertLess(bootstrap.index("digest=attested_registry_manifest("),
                         bootstrap.index("systemctl disable --now mv3c-updater.timer"))
         self.assertLess(bootstrap.index("systemctl disable --now mv3c-updater.timer"),
-                        bootstrap.index("MV3C_OCI_LAYER_TRANSPORT=enabled python3"))
+                        bootstrap.index("MV3C_OCI_LAYER_TRANSPORT=required python3"))
 
     def test_one_time_bootstrap_keeps_timer_until_verified_archive(self):
         bootstrap = (PATH.parent / "bootstrap-prebuilt.sh").read_text()
