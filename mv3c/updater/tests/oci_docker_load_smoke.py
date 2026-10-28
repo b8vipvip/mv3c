@@ -39,15 +39,10 @@ def main():
             proof=proof, version=VERSION, sha=SHA)
         print("OCI archive generated, running docker image load in CI only", flush=True)
         print(run("docker", "image", "load", "--input", str(candidate)))
-        ids = run(
-            "docker", "image", "ls", "--no-trunc", "-q",
-            "--filter", "label=org.opencontainers.image.revision=" + SHA,
-        ).splitlines()
-        if not ids:
-            raise SystemExit("Docker did not expose loaded OCI candidate")
+        candidate_ref = "mv3c-oci-verify:sha-" + SHA
         inspected = [json.loads(run(
-            "docker", "image", "inspect", "--format", "{{json .}}", image_id))
-            for image_id in ids]
+            "docker", "image", "inspect", "--format", "{{json .}}",
+            candidate_ref))]
         accepted = []
         for image in inspected:
             config = image.get("Config") or {}
