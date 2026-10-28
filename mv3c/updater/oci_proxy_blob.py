@@ -160,6 +160,7 @@ def stage_blob(stage: Path, digest: str, size: int, *, proxy: str,
              "--speed-limit", "16384", "--speed-time", "45",
              "--max-filesize", str(size),
              "--continue-at", "-", "--output", str(part),
+             "--write-out", "HTTP_BODY_BYTES=%{size_download}",
              "--config", "-", url],
             input='header = "Authorization: Bearer ' + token + '"\n',
             text=True, capture_output=True, timeout=190,
@@ -168,9 +169,14 @@ def stage_blob(stage: Path, digest: str, size: int, *, proxy: str,
         updated = _safe_file(part)
         if updated > size:
             raise BlobTransferError("GHCR sent more data than attested blob size")
+        # Curl's size_download counts response-body bytes (including retried
+        # retransmissions); it excludes TLS and HTTP header overhead.
+        metric = re.fullmatch(r"HTTP_BODY_BYTES=([0-9]+)", result.stdout or "")
+        body_bytes = int(metric.group(1)) if metric else None
         if progress:
             progress({"attempt": attempt, "received_bytes": updated - initial,
                       "durable_bytes": updated, "expected_bytes": size,
+                      "http_body_bytes": body_bytes,
                       "curl_exit": result.returncode})
         if updated == size:
             break
