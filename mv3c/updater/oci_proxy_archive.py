@@ -145,17 +145,13 @@ def build_attested_oci_archive(stage: Path, target: Path, *,
     index = {
         "schemaVersion": 2,
         "manifests": [{
-            "mediaType": "application/vnd.oci.image.manifest.v1+json"
-                if raw_manifest.find(b'"application/vnd.oci.image.manifest.v1+json"') >= 0
-                else "application/vnd.docker.distribution.manifest.v2+json",
+            "mediaType": json.loads(raw_manifest)["mediaType"],
             "digest": manifest["manifest_digest"],
             "size": len(raw_manifest),
             "platform": {"os": "linux", "architecture": "amd64"},
             "annotations": {"org.opencontainers.image.ref.name": "sha-" + sha},
         }],
     }
-    # The signed manifest, rather than textual search, determines actual type.
-    index["manifests"][0]["mediaType"] = json.loads(raw_manifest)["mediaType"]
     layout_bytes = b'{"imageLayoutVersion":"1.0.0"}'
     index_bytes = json.dumps(index, sort_keys=True, separators=(",", ":")).encode()
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
