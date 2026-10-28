@@ -1,0 +1,36 @@
+name: MV3C isolated OCI Docker import acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'mv3c/updater/oci_proxy_*.py'
+      - 'mv3c/updater/tests/test_oci_proxy_*.py'
+      - 'mv3c/updater/tests/oci_docker_load_smoke.py'
+      - '.github/workflows/mv3c-oci-import-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oci-docker-load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run isolated OCI archive offline tests
+        run: python3 -m unittest discover -s mv3c/updater/tests -p 'test_oci_proxy_*.py' -v
+      - name: Set up Docker 29 with containerd image store in disposable runner
+        uses: docker/setup-docker-action@v5
+        with:
+          version: v29.6.2
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - name: Verify compressed OCI archive Docker import (CI only)
+        run: |
+          docker info --format 'Driver={{json .DriverStatus}}'
+          python3 mv3c/updater/tests/oci_docker_load_smoke.py
