@@ -105,7 +105,7 @@ def check(repo: Path, version: str, sha: str) -> dict:
         if not prebuilt.is_file() or not registry.is_file():
             raise ValueError("Host checkout lacks the OCI-aware canonical updater")
         code = prebuilt.read_text(encoding="utf-8")
-        if 'os.environ.get("MV3C_OCI_LAYER_TRANSPORT", "") == "enabled"' not in code:
+        if 'oci_mode in ("enabled", "required")' not in code:
             raise ValueError("Host updater is not OCI aware")
         return {"passed": True, "single_updater": True}
 
