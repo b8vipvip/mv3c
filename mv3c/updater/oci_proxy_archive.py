@@ -149,7 +149,7 @@ def build_attested_oci_archive(stage: Path, target: Path, *,
             "digest": manifest["manifest_digest"],
             "size": len(raw_manifest),
             "platform": {"os": "linux", "architecture": "amd64"},
-            "annotations": {"org.opencontainers.image.ref.name": "sha-" + sha},
+            "annotations": {"org.opencontainers.image.ref.name": "mv3c-oci-verify:sha-" + sha},
         }],
     }
     layout_bytes = b'{"imageLayoutVersion":"1.0.0"}'
