@@ -1,0 +1,85 @@
+name: mv3c official GHCR proof acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Official Release containing GHCR digest proof (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify official Release and immutable GHCR image proof
+        id: proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          git fetch origin "refs/tags/$VERSION:refs/tags/$VERSION" \
+            "refs/tags/mv3c-image/$VERSION:refs/tags/mv3c-image/$VERSION"
+          release_sha="$(git rev-parse "refs/tags/$VERSION^{commit}")"
+          proof_sha="$(git rev-parse "refs/tags/mv3c-image/$VERSION^{commit}")"
+          test "$release_sha" = "$proof_sha"
+          test "$(git cat-file -t "refs/tags/mv3c-image/$VERSION")" = tag
+          git for-each-ref --format='%(contents)' "refs/tags/mv3c-image/$VERSION" > "$RUNNER_TEMP/mv3c-proof.txt"
+          RELEASE_SHA="$release_sha" python3 - <<'PY'
+          import os,re
+          path=os.path.join(os.environ["RUNNER_TEMP"],"mv3c-proof.txt")
+          lines=open(path,encoding="utf8").read().splitlines()
+          assert lines[0]=="MV3C_PREBUILT_IMAGE_V1"
+          entries={}
+          for line in lines[1:]:
+              if "=" in line:
+                  k,v=line.split("=",1)
+                  assert k not in entries, "Duplicate proof field"
+                  entries[k]=v
+          assert entries.get("release")==os.environ["VERSION"]
+          assert entries.get("sha")==os.environ["RELEASE_SHA"]
+          assert entries.get("registry")=="ghcr.io/b8vipvip/mv3c", "Official GHCR publisher not enabled for this version"
+          digest=entries.get("registry_digest","")
+          assert re.fullmatch(r"sha256:[0-9a-f]{64}",digest), "Missing attested GHCR digest"
+          assert re.fullmatch(r"sha256:[0-9a-f]{64}",entries.get("image_id","")), "Missing image identity"
+          with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf8") as f:
+              print("digest="+digest,file=f)
+              print("sha="+os.environ["RELEASE_SHA"],file=f)
+              print("config_id="+entries["image_id"],file=f)
+          print("Official immutable release proof contains bound GHCR digest")
+          PY
+      - name: Validate pinned registry manifest and runtime identity
+        env:
+          DIGEST: ${{ steps.proof.outputs.digest }}
+          SHA: ${{ steps.proof.outputs.sha }}
+          CONFIG_ID: ${{ steps.proof.outputs.config_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/b8vipvip/mv3c@$DIGEST"
+          docker pull --platform linux/amd64 "$image"
+          docker image inspect "$image" > "$RUNNER_TEMP/mv3c-oci-image.json"
+          python3 - <<'PY'
+          import json,os
+          from mv3c.updater.oci_registry import verify_registry_image
+          image=json.load(open(os.environ["RUNNER_TEMP"]+"/mv3c-oci-image.json",encoding="utf8"))[0]
+          verify_registry_image(image,os.environ["VERSION"],os.environ["SHA"],os.environ["CONFIG_ID"],os.environ["DIGEST"])
+          print("Pinned GHCR digest, image ID and runtime identity all verified")
+          PY
+          {
+            echo "### Official GHCR delivery acceptance: PASS"
+            echo "Version: $VERSION"
+            echo "Commit: $SHA"
+            echo "Pinned manifest digest: $DIGEST"
+            echo "Production updater and host were not touched."
+          } >> "$GITHUB_STEP_SUMMARY"
