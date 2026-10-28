@@ -443,6 +443,29 @@ def verified_local_candidate_id(repo: Path, sha: str, version: str,
         except (OSError, ValueError, subprocess.CalledProcessError,
                 subprocess.TimeoutExpired):
             pass
+        # A Docker-loaded OCI layout can preserve the exact manifest SHA
+        # without a RepoDigests entry. Accept it ONLY when the protected OCI
+        # tar still exists in the root-only cache, *every* blob is rehashed,
+        # and Docker's runtime/rootfs identity matches that protected content.
+        archive = VERIFIED / "oci-blob-cache" / ("oci-" + sha + ".tar")
+        if archive.exists() and not archive.is_symlink():
+            try:
+                from oci_proxy_import import (
+                    verify_oci_archive, _assert_identity,
+                )
+                manifest, config = verify_oci_archive(
+                    archive, proof, version, sha)
+                metadata_raw = subprocess.check_output(
+                    ["docker", "image", "inspect", "--format", "{{json .}}",
+                     "mv3c:sha-" + sha],
+                    cwd=repo, text=True, timeout=30)
+                metadata = json.loads(metadata_raw)
+                _assert_identity(metadata, manifest, config, proof, version, sha)
+                return True
+            except Exception as error:
+                raise PrebuiltError(
+                    "Cached proxy OCI candidate does not match signed Release"
+                ) from error
         raise PrebuiltError("Signed OCI manifest is missing from local image digest references")
     # Manifest digest requires its exact official archive; labels alone cannot
     # authorize an unrelated local image or weaken the CI-bound proof.
@@ -458,7 +481,24 @@ def import_prebuilt(repo: Path, sha: str, version: str, git, disk_free) -> str:
     # addressable Docker layers, so unchanged dependencies are not downloaded.
     # If GitHub Container Registry is inaccessible, retain the existing signed
     # full-archive fallback, with no second updater or trust authority.
+    proxy_mode = os.environ.get("MV3C_OCI_PROXY_TRANSPORT", "")
     oci_mode = os.environ.get("MV3C_OCI_LAYER_TRANSPORT", "")
+    if proxy_mode not in ("", "enabled", "required"):
+        raise PrebuiltError("Invalid proxy OCI transport mode")
+    if proxy_mode and oci_mode in ("enabled", "required"):
+        raise PrebuiltError(
+            "Only one OCI transport may be selected by the canonical updater")
+    if proxy_mode:
+        from oci_proxy_transport import (
+            OCIProxyTransportError, prepare_proxy_candidate,
+        )
+        try:
+            return prepare_proxy_candidate(repo, sha, version, proof, disk_free)
+        except OCIProxyTransportError as error:
+            if proxy_mode == "required":
+                raise PrebuiltError(str(error)) from error
+            print("Attested proxy OCI stage unavailable; "
+                  "falling back to signed full Release archive", flush=True)
     if oci_mode in ("enabled", "required"):
         from oci_registry import OCIProofError, pull_registry_candidate
         try:
