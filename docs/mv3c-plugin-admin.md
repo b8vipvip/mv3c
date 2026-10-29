@@ -37,25 +37,39 @@
 6. 测试仅验证协议探针，不代表真实 GitHub/Linear OAuth 和 MCP 多轮执行已成功。
 
 
-## GitHub 与 Gitee 的管理员配置流程
+## GitHub OAuth：管理员配置一次，用户仅授权自己的账号
 
-服务端唯一内置目录新增 `Gitee（码云）`，使用 Gitee 官方远程 Streamable HTTP MCP：
+新的 GitHub 插件不使用用户 PAT。它接入现有**唯一** MCP OAuth 流程：
+服务器发现工具、用户授权、令牌隔离、回调 CSRF/state 校验、撤销及工具调用
+均由 LibreChat/MV3C 的现有 MCP 系统实现，不增加自建工具执行器。
 
-- **Gitee URL:** `https://api.gitee.com/mcp`；PAT 创建：<https://gitee.com/profile/personal_access_tokens>。
-- **GitHub URL:** `https://api.githubcopilot.com/mcp/`；细粒度 PAT 创建：<https://github.com/settings/personal-access-tokens>。
-- 官方说明：<https://blog.gitee.com/2026/01/26/gitee-mcp-support-remote-access-no-local-deployment-ai-assistant-plug-and-play/>；<https://github.com/github/github-mcp-server/blob/main/docs/host-integration.md>。
+管理员在「插件管理 → GitHub 统一账号授权」中：
 
-**管理后台 → 插件管理 → 插件服务与商店配置 → GitHub/Gitee →「配置连接」** 会打开原有 MCPServerDialog，默认：
-1. Streamable HTTP + 上述官方 URL；
-2. 认证类型 **API Key**，来源 **用户自行提供（User）**；
-3. 标准 `Authorization: Bearer <user PAT>`（表单中只选 Bearer，不写入 token 到公共目录）；
-4. 手动确认目标服务器可信并提交，由原有 MCP 注册处理器保存。
+1. 从 [GitHub OAuth Apps](https://github.com/settings/developers) 创建**本站专属** OAuth App；
+2. 配置回调 URL：`https://chat.mv3.cn/api/mcp/github/oauth/callback`（以实际部署域名为准）；
+3. 在管理员后台设置 Client ID、Client Secret，并启用 GitHub OAuth；
+4. 保存后，统一的 GitHub MCP URL `https://api.githubcopilot.com/mcp/`、
+   OAuth 授权端点和令牌交换端点由服务端自动配置；
+5. Client Secret 通过现有 AES-256-GCM 密钥加密存储。公共设置、商店目录、
+   普通用户页面、审计记录均不返回明文或加密后的密钥。
 
-**区分三种状态**：已上架（商店可见）、已登记（MCP 服务器已经创建）、某用户实际连通（已授权、具备 MCP USE、密钥正确、工具发现成功）。前两者都不能代表第三者。管理员创建的服务器需要通过用户端「我的插件」的现有资源共享操作授予用户使用权；下架不影响已共享连接，也不负责全局强制禁用。
+用户只需在「插件 → 发现插件」点击「连接 GitHub」，由 GitHub 自身
+弹出登录和授权同意；无需访问 GitHub 的 PAT 管理页、复制个人 Token、
+安装 MCP Server 或填写 URL。工具授权身份按 MV3C 用户分开存储，不共享 PAT。
+普通用户不能经插件商店创建/修改服务器；高级 MCP 创建权限是另一条独立权限边界。
 
-**用户端**：用户登录后打开「插件 → 我的插件」，找到获得共享权限的 GitHub/Gitee，按 UI 提示输入**个人**访问令牌；再在聊天输入框选择 `@GitHub`/`@Gitee` 或 `+` 工具菜单。令牌权限应遵循最小化原则，尤其不应授予多余的删除或修改私有仓库的权限。真实 Chat2API Worker 工具调用是否成功仍需从插件执行日志及输出验证，不可仅凭模型的协议探针证明。
+**安全边界：**
 
-若服务器配置为管理员共享单个令牌，会导致所有获授权用户共享该令牌身份，不建议此默认方式。OAuth 需要独立供应商应用和 OAuth 参数，不在未知 Client ID / Secret 的情况下伪造一键登录。
+- 应用请求 `read:user repo` 权限。GitHub 的 `repo` 权限包含私有仓库
+  访问，请站点运营者严格评估需要的范围，并让用户在 GitHub 页面自行决定
+  是否同意；写操作仍应遵循原有工具批准与审计规则。
+- GitHub OAuth 应用必须由管理员自行创建。没有真实 Client ID 和 Secret
+  时不能伪造一键登录；未启用时用户端显示「等待管理员启用」。
+- Github Enterprise、自定义授权服务、跨租户策略需要单独适配。
+- 自动连接成功必须以**实际 GitHub OAuth 回调、MCP 工具发现及一次
+  用户授权下的真实调用**验收；本地单元测试不能证明外部授权已完成。
+- Gitee、Linear 等其他服务可以由管理员进行独立接入，但目前不为
+  未经 OAuth 验证的服务伪造一键账号授权按钮。
 
 ## 后台布局
 
