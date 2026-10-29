@@ -275,7 +275,9 @@ function runtimeConfig(doc, keyHex) {
   // the *existing* per-user MCP OAuth flow; no shared PAT or proxy execution.
   if (plugins.githubOAuthEnabled && plugins.githubOAuthConfigured) {
     const clientSecret = decryptSecret(doc.plugins.githubOAuthClientSecretCipher, keyHex);
-    config.mcpConfig = {
+    // AppService converts the supported mcpServers YAML field into its
+    // internal appConfig.mcpConfig used by the existing MCP registry.
+    config.mcpServers = {
       github: {
         type: 'streamable-http',
         url: 'https://api.githubcopilot.com/mcp/',
