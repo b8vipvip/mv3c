@@ -10,6 +10,9 @@ test('curated catalogue is single source of published state', () => {
   assert.deepEqual(allowedIds, ['github', 'gitee', 'linear-readonly', 'deepwiki']);
   assert.equal(catalog.find((item) => item.id === 'gitee').url, 'https://api.gitee.com/mcp');
   assert.equal(catalog.find((item) => item.id === 'gitee').auth, 'token');
+  assert.equal(catalog.find((item) => item.id === 'github').auth, 'oauth');
+  assert.equal(Object.hasOwn(catalog.find((item) => item.id === 'github'), 'credentialUrl'), false,
+    'the user must not be prompted to create or paste a personal access token');
   assert.equal(listCatalog(['github']).length, 3);
   assert.equal(listCatalog(['github'], true).find((item) => item.id === 'github').published, false);
   assert.equal(listCatalog().find((item) => item.id === 'github').published, true);
