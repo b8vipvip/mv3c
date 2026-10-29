@@ -150,19 +150,19 @@ test('operator GitHub OAuth config is the only GitHub MCP definition; no user PA
   assert.equal(JSON.stringify(settings).includes(encrypted), false);
   assert.equal(JSON.stringify(settings).includes('Cipher'), false);
   const config = core.runtimeConfig(doc, KEY);
-  assert.equal(config.mcpConfig.github.url, 'https://api.githubcopilot.com/mcp/');
-  assert.equal(config.mcpConfig.github.type, 'streamable-http');
-  assert.equal(config.mcpConfig.github.oauth.client_id, id);
-  assert.equal(config.mcpConfig.github.oauth.client_secret, secret);
-  assert.equal(config.mcpConfig.github.oauth.authorization_url,
+  assert.equal(config.mcpServers.github.url, 'https://api.githubcopilot.com/mcp/');
+  assert.equal(config.mcpServers.github.type, 'streamable-http');
+  assert.equal(config.mcpServers.github.oauth.client_id, id);
+  assert.equal(config.mcpServers.github.oauth.client_secret, secret);
+  assert.equal(config.mcpServers.github.oauth.authorization_url,
     'https://github.com/login/oauth/authorize');
-  assert.equal(config.mcpConfig.github.oauth.token_url,
+  assert.equal(config.mcpServers.github.oauth.token_url,
     'https://github.com/login/oauth/access_token');
   assert.equal(JSON.stringify(config).includes('personal-access-tokens'), false);
   assert.equal(core.runtimeConfig({ plugins: { ...doc.plugins,
-    githubOAuthEnabled: false } }, KEY).mcpConfig, undefined);
+    githubOAuthEnabled: false } }, KEY).mcpServers, undefined);
   assert.equal(core.runtimeConfig({ plugins: {
-    githubOAuthClientId: id, githubOAuthEnabled: true } }, KEY).mcpConfig, undefined);
+    githubOAuthClientId: id, githubOAuthEnabled: true } }, KEY).mcpServers, undefined);
 });
 
 test('GitHub OAuth operator fields fail closed on malformed credentials or unknown keys', () => {
