@@ -225,7 +225,7 @@ describe('Conversation context menu', () => {
       expect(handled).toBe(true);
       expect(event.defaultPrevented).toBe(false);
       expect(row).toBeInTheDocument();
-      expect(screen.queryByTestId('convo-options')).not.toHaveAttribute('data-open', 'true');
+      expect(screen.queryByTestId('convo-options')?.getAttribute('data-open')).not.toBe('true');
     },
   );
 
