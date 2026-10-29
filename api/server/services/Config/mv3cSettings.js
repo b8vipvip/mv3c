@@ -48,7 +48,10 @@ async function saveSettings(body, actor) {
     fields['guest.' + name] = value;
   }
   for (const [name, value] of Object.entries(patch.plugins ?? {})) {
-    fields['plugins.' + name] = value;
+    fields['plugins.' + (name === 'githubOAuthClientSecret'
+      ? 'githubOAuthClientSecretCipher' : name)] =
+      name === 'githubOAuthClientSecret'
+        ? encryptSecret(value, process.env.CREDS_KEY) : value;
   }
   if (!Object.keys(fields).length) throw new TypeError('No settings to update');
   fields.updatedAt = new Date();
