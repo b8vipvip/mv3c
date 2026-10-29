@@ -133,7 +133,14 @@ router.get('/store/catalog', requireJwtAuth, checkMCPUsePermissions, async (req,
     const settings = await require('~/server/services/Config/mv3cSettings').getPublicSettings();
     const { listCatalog } = require('../../../mv3c/pluginCatalog.cjs');
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({ items: listCatalog(settings.plugins.catalogHidden) });
+    return res.json({
+      items: listCatalog(settings.plugins.catalogHidden),
+      // Boolean-only operator-readiness hint. Never leak OAuth app keys.
+      managed: {
+        github: settings.plugins.githubOAuthEnabled === true &&
+          settings.plugins.githubOAuthConfigured === true,
+      },
+    });
   } catch (error) {
     logger.error('[mcp-store] Failed to load catalogue', { type: error?.name });
     return res.status(503).json({ error: 'Plugin catalogue is unavailable' });

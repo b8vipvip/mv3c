@@ -36,6 +36,26 @@ async function writeAudit(actor, fields) {
 }
 async function saveSettings(body, actor) {
   const patch = validatePatch(body);
+  // Do not turn on shared GitHub MCP unless the operator owns a complete
+  // OAuth application. Rotating its public Client ID requires a new secret
+  // to avoid silently mixing credentials from two different applications.
+  if (patch.plugins?.githubOAuthEnabled === true ||
+      patch.plugins?.githubOAuthClientId !== undefined) {
+    const previous = await readSettings();
+    const nextId = patch.plugins.githubOAuthClientId ??
+      previous?.plugins?.githubOAuthClientId;
+    const priorId = previous?.plugins?.githubOAuthClientId;
+    const hasSecret = Boolean(patch.plugins.githubOAuthClientSecret ||
+      previous?.plugins?.githubOAuthClientSecretCipher);
+    if (patch.plugins.githubOAuthEnabled === true && (!nextId || !hasSecret)) {
+      throw new TypeError('Configure the GitHub OAuth Client ID and secret before enabling');
+    }
+    if (nextId && nextId !== priorId &&
+        previous?.plugins?.githubOAuthClientSecretCipher &&
+        !patch.plugins.githubOAuthClientSecret) {
+      throw new TypeError('Changing GitHub OAuth Client ID also requires a new secret');
+    }
+  }
   const fields = {};
   for (const [name, value] of Object.entries(patch.site ?? {})) {
     fields['site.' + name] = value;
@@ -48,7 +68,10 @@ async function saveSettings(body, actor) {
     fields['guest.' + name] = value;
   }
   for (const [name, value] of Object.entries(patch.plugins ?? {})) {
-    fields['plugins.' + name] = value;
+    fields['plugins.' + (name === 'githubOAuthClientSecret'
+      ? 'githubOAuthClientSecretCipher' : name)] =
+      name === 'githubOAuthClientSecret'
+        ? encryptSecret(value, process.env.CREDS_KEY) : value;
   }
   if (!Object.keys(fields).length) throw new TypeError('No settings to update');
   fields.updatedAt = new Date();

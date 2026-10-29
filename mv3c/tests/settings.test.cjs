@@ -75,7 +75,8 @@ test('unconfigured provider is not exposed as a chat endpoint', () => {
 test('interactive MCP Apps require an explicit isolated HTTPS sandbox', () => {
   const safe = 'https://mcp-sandbox.example.net/api/mcp/sandbox';
   assert.deepEqual(core.publicSettings(null).plugins,
-    { appsEnabled: false, sandboxURL: '', catalogHidden: [] });
+    { appsEnabled: false, sandboxURL: '', catalogHidden: [],
+      githubOAuthEnabled: false, githubOAuthClientId: '', githubOAuthConfigured: false });
   for (const url of [
     'http://sandbox.example.net/api/mcp/sandbox',
     'https://sandbox.example.net/other',
@@ -122,5 +123,66 @@ test('bootstrap keys persist across restarts and are owner-only', () => {
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('operator GitHub OAuth config is the only GitHub MCP definition; no user PAT', () => {
+  const id = 'Ov23liExampleClient0001';
+  const secret = 'operator-app-secret-strong-test-value';
+  const encrypted = core.encryptSecret(secret, KEY);
+  assert.deepEqual(core.validatePatch({ plugins: {
+    githubOAuthClientId: id,
+    githubOAuthClientSecret: secret,
+    githubOAuthEnabled: true,
+  } }).plugins, {
+    githubOAuthClientId: id,
+    githubOAuthClientSecret: secret,
+    githubOAuthEnabled: true,
+  });
+  const doc = { plugins: {
+    githubOAuthClientId: id, githubOAuthClientSecretCipher: encrypted,
+    githubOAuthEnabled: true, appsEnabled: false,
+  } };
+  const settings = core.publicSettings(doc);
+  assert.equal(settings.plugins.githubOAuthConfigured, true);
+  assert.equal(settings.plugins.githubOAuthEnabled, true);
+  assert.equal(JSON.stringify(settings).includes(secret), false);
+  assert.equal(JSON.stringify(settings).includes(encrypted), false);
+  assert.equal(JSON.stringify(settings).includes('Cipher'), false);
+  const config = core.runtimeConfig(doc, KEY);
+  assert.equal(config.mcpServers.github.url, 'https://api.githubcopilot.com/mcp/');
+  assert.equal(config.mcpServers.github.type, 'streamable-http');
+  assert.equal(config.mcpServers.github.oauth.client_id, id);
+  assert.equal(config.mcpServers.github.oauth.client_secret, secret);
+  assert.equal(config.mcpServers.github.oauth.authorization_url,
+    'https://github.com/login/oauth/authorize');
+  assert.equal(config.mcpServers.github.oauth.token_url,
+    'https://github.com/login/oauth/access_token');
+  assert.equal(config.mcpServers.github.oauth.token_exchange_method, 'default_post');
+  assert.deepEqual(
+    config.mcpServers.github.oauth.token_endpoint_auth_methods_supported,
+    ['client_secret_post'],
+  );
+  assert.deepEqual(config.mcpServers.github.oauth.code_challenge_methods_supported, ['S256']);
+  const withOrigin = core.runtimeConfig({ ...doc,
+    site: { publicUrl: 'https://chat.mv3.cn' } }, KEY);
+  assert.equal(withOrigin.mcpServers.github.oauth.redirect_uri,
+    'https://chat.mv3.cn/api/mcp/github/oauth/callback');
+  assert.equal(JSON.stringify(config).includes('personal-access-tokens'), false);
+  assert.equal(core.runtimeConfig({ plugins: { ...doc.plugins,
+    githubOAuthEnabled: false } }, KEY).mcpServers, undefined);
+  assert.equal(core.runtimeConfig({ plugins: {
+    githubOAuthClientId: id, githubOAuthEnabled: true } }, KEY).mcpServers, undefined);
+});
+
+test('GitHub OAuth operator fields fail closed on malformed credentials or unknown keys', () => {
+  for (const credentials of [
+    { githubOAuthClientId: 'bad id' },
+    { githubOAuthClientSecret: 'tiny' },
+    { githubOAuthClientSecret: 'secret\nnew-line-not-allowed' },
+    { githubOAuthEnabled: 'true' },
+    { githubOAuthConfigured: true },
+  ]) {
+    assert.throws(() => core.validatePatch({ plugins: credentials }));
   }
 });

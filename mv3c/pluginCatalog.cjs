@@ -5,8 +5,7 @@ const catalog = Object.freeze([
     id: 'github', name: 'GitHub', category: '开发工具',
     description: '浏览仓库、议题与 Pull Request；授权账号决定访问范围。',
     url: 'https://api.githubcopilot.com/mcp/',
-    transport: 'streamable-http', auth: 'token',
-    credentialUrl: 'https://github.com/settings/personal-access-tokens',
+    transport: 'streamable-http', auth: 'oauth',
     website: 'https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server',
   }),
   Object.freeze({

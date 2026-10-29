@@ -17,10 +17,9 @@ import MCPServerCardSkeleton from './MCPServerCardSkeleton';
 import { useMCPRefresh } from '~/hooks/MCP/useMCPRefresh';
 import MCPAdminSettings from './MCPAdminSettings';
 import MCPServerDialog from './MCPServerDialog';
+import McpOAuthDialog from '~/components/MCP/McpOAuthDialog';
 import MCPServerList from './MCPServerList';
 import PluginDiscovery from './PluginDiscovery';
-import type { PluginPreset } from './catalog';
-import { initialMCPConfig } from './presetConfig';
 import store from '~/store';
 
 export default function MCPBuilderPanel() {
@@ -38,8 +37,10 @@ export default function MCPBuilderPanel() {
     }
   }, [panelVisible]);
   const { user } = useAuthContext();
-  const { availableMCPServers, isLoading, getServerStatusIconProps, getConfigDialogProps } =
-    useMCPServerManager({ observeToolAuthorization: panelVisible });
+  const {
+    availableMCPServers, isLoading, getServerStatusIconProps, getConfigDialogProps,
+    initializeServer, getOAuthUrl, isInitializing, connectionStatus,
+  } = useMCPServerManager({ observeToolAuthorization: panelVisible });
   useMCPRefresh({ enabled: panelVisible && !isLoading && availableMCPServers.length > 0 });
 
   const hasCreateAccess = useHasAccess({
@@ -48,8 +49,15 @@ export default function MCPBuilderPanel() {
   });
   const [showDialog, setShowDialog] = useState(false);
   const [activeView, setActiveView] = useState<'discover' | 'installed'>('discover');
-  const [installPreset, setInstallPreset] = useState<PluginPreset | null>(null);
-  const installInitial = useMemo(() => installPreset ? initialMCPConfig(installPreset) : null, [installPreset]);
+  const [pendingOAuthServer, setPendingOAuthServer] = useState<string | null>(null);
+  const handleConnect = async (serverName: string) => {
+    // Uses the existing per-user MCP OAuth flow. No client credentials or
+    // provider tokens travel through the marketplace component.
+    const result = await initializeServer(serverName, false);
+    if (result?.oauthRequired && result.oauthUrl) {
+      setPendingOAuthServer(serverName);
+    }
+  };
   const [searchQuery, setSearchQuery] = useState('');
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const configDialogProps = getConfigDialogProps();
@@ -78,7 +86,7 @@ export default function MCPBuilderPanel() {
         title="插件与连接"
         titleId={headingId}
         action={
-          hasCreateAccess && (
+          user?.role === SystemRoles.ADMIN && hasCreateAccess && (
             <MCPServerDialog
               open={showDialog}
               onOpenChange={setShowDialog}
@@ -136,8 +144,9 @@ export default function MCPBuilderPanel() {
         {activeView === 'discover' ? (
           <PluginDiscovery
             servers={availableMCPServers}
-            canInstall={hasCreateAccess}
-            onInstall={(preset) => setInstallPreset(preset)}
+            connected={(name) => connectionStatus?.[name]?.connectionState === 'connected'}
+            connecting={isInitializing}
+            onConnect={(name) => { void handleConnect(name); }}
           />
         ) : (
           <MCPServerList
@@ -148,10 +157,12 @@ export default function MCPBuilderPanel() {
         )}
       </PanelContent>
 
-      <MCPServerDialog
-        open={installPreset !== null}
-        onOpenChange={(next) => { if (!next) setInstallPreset(null); }}
-        initial={installInitial}
+      <McpOAuthDialog
+        open={pendingOAuthServer !== null &&
+          getOAuthUrl(pendingOAuthServer ?? '') != null}
+        onOpenChange={(open) => { if (!open) setPendingOAuthServer(null); }}
+        serverName={pendingOAuthServer ?? ''}
+        oauthUrl={getOAuthUrl(pendingOAuthServer ?? '') ?? ''}
       />
       {/* Config Dialog for custom user vars */}
       {configDialogProps && <MCPConfigDialog {...configDialogProps} />}
