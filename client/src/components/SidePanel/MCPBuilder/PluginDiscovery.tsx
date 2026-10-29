@@ -86,6 +86,9 @@ export default function PluginDiscovery({
       <div className="grid gap-2">
         {items.map((preset) => {
           const configuredServer = servers.find((server) =>
+            // The managed GitHub connector has a reserved operator-owned name.
+            // A user-created MCP server with the same URL must not impersonate it.
+            (preset.id !== 'github' || server.serverName === 'github') &&
             'url' in server.config &&
             server.config.url?.replace(/\/+$/, '') === preset.url.replace(/\/+$/, ''),
           );
