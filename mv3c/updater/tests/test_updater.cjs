@@ -54,6 +54,29 @@ test('admin update state never exposes secret keys and detects stale host agents
   assert.equal(formatted.latestVersion, '');
 });
 
+test('manual GitHub check request timestamp remains visible separately from stale results', () => {
+  const lastChecked = new Date('2026-10-28T05:44:07.000Z');
+  const manualRequested = new Date('2026-10-29T01:21:59.000Z');
+  const state = updates.format({
+    checkedAt: lastChecked,
+    checkRequestedAt: manualRequested,
+    currentVersion: 'v0.1.45',
+    latestVersion: 'v0.1.45',
+    updateAvailable: false,
+    status: 'success',
+    config: { autoEnabled: false, autoDeployEnabled: false },
+  });
+  assert.equal(state.latestVersion, 'v0.1.45', 'previous result stays historical');
+  assert.equal(state.checkRequestedAt, manualRequested);
+  assert.equal(state.checkedAt, lastChecked);
+  assert.ok(new Date(state.checkRequestedAt) > new Date(state.checkedAt),
+    'clients can distinguish queued manual checks from completed checks');
+  assert.equal(state.config.autoEnabled, false,
+    'manual checks must not enable unattended periodic checking');
+  assert.equal(state.config.autoDeployEnabled, false,
+    'manual checks must not queue deployments');
+});
+
 test('progress accepts only bounded stages and safe fields', () => {
   const jobId = '22222222-2222-4222-8222-222222222222';
   assert.deepEqual(updates.validateProgress({
