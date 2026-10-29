@@ -266,8 +266,17 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
                   target="_blank" rel="noopener noreferrer">服务商说明</a>
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <button type="button" className={secondary} onClick={() => { setDetailPlugin(plugin.id); setConfiguring(plugin); }}>
-                  配置连接
+                <button type="button" className={secondary} onClick={() => {
+                  setDetailPlugin(plugin.id);
+                  if (plugin.id === 'github') {
+                    document.getElementById('plugin-guide-heading')?.scrollIntoView({
+                      block: 'start', behavior: 'smooth',
+                    });
+                  } else {
+                    setConfiguring(plugin);
+                  }
+                }}>
+                  {plugin.id === 'github' ? '配置 OAuth 应用' : '配置连接'}
                 </button>
               <label className="flex items-center gap-2 text-sm">
                 <input
