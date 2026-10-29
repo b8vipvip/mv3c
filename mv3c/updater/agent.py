@@ -1357,19 +1357,12 @@ def execute(repo: Path, *, recovery_version: str | None = None) -> None:
                  attempted=target, verification="CI gate FAILED")
         return
 
-    if not job and state["config"].get("autoEnabled", True) and state["config"].get("autoDeployEnabled", False):
-        if target == state.get("blockedSha"):
-            report(repo, status="blocked",
-                   lastError="此提交上次部署失败，已暂停自动重试；可手动重试或等待新的 GitHub 提交")
-            return
-        bridge(repo, "queue-auto")
-        job = bridge(repo, "claim")
-        if job:
-            progress("checking", 8, "自动更新已通过 GitHub 版本检查", from_sha=old)
-            progress("fetching", 16, "GitHub 代码已拉取")
-            progress("ci", 26, "Git 发布证明与 SHA 已验证", target_sha=target)
+    # Checks can discover and report new Releases, but only an admin-created
+    # manual job may ever proceed to Docker image staging/deployment.
     if not job:
         return
+    if job.get("mode") != "manual":
+        raise UpdateError("Only administrator-initiated manual deployment is allowed")
 
     print("Deploying published mv3c Release", label, target, flush=True)
     # The same heartbeat thread may report transfer bytes through the existing
