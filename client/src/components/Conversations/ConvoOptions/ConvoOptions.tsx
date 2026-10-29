@@ -38,7 +38,6 @@ function ConvoOptions({
   isActiveConvo,
   isShiftHeld = false,
   isGenerating = false,
-  contextMenuPosition,
 }: {
   conversationId: string | null;
   title: string | null;
@@ -54,7 +53,6 @@ function ConvoOptions({
   isActiveConvo: boolean;
   isShiftHeld?: boolean;
   isGenerating?: boolean;
-  contextMenuPosition?: { x: number; y: number };
 }) {
   const localize = useLocalize();
   const isSmallScreen = useDrawerViewport();
@@ -210,9 +208,6 @@ function ConvoOptions({
          * `document.body` outside it.
          */
         portal={true}
-        getAnchorRect={
-          contextMenuPosition ? () => ({ ...contextMenuPosition, width: 0, height: 0 }) : undefined
-        }
         menuId={menuId}
         focusLoop={true}
         finalFocus={menuButtonRef}
@@ -275,7 +270,6 @@ export default memo(ConvoOptions, (prevProps, nextProps) => {
     prevProps.isPopoverActive === nextProps.isPopoverActive &&
     prevProps.isActiveConvo === nextProps.isActiveConvo &&
     prevProps.isShiftHeld === nextProps.isShiftHeld &&
-    prevProps.isGenerating === nextProps.isGenerating &&
-    prevProps.contextMenuPosition === nextProps.contextMenuPosition
+    prevProps.isGenerating === nextProps.isGenerating
   );
 });
