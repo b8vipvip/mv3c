@@ -98,7 +98,6 @@ function Conversation({
   const [titleInput, setTitleInput] = useState(title || '');
   const [renaming, setRenamingState] = useState(false);
   const [isPopoverActive, setIsPopoverActive] = useState(false);
-  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number }>();
   const [isHovered, setIsHovered] = useState(false);
   // Lazy-load ConvoOptions to avoid running heavy hooks for all conversations
   const [hasInteracted, setHasInteracted] = useState(false);
@@ -163,7 +162,6 @@ function Conversation({
   const handleRename = () => {
     if (!canRename) return;
     setIsPopoverActive(false);
-    setContextMenuPosition(undefined);
     setTitleInput(title as string);
     setRenaming(true);
   };
@@ -259,10 +257,9 @@ function Conversation({
   }, [conversationId, unpinMutation, showToast, localize]);
 
   const handlePopoverOpenChange = useCallback((open: boolean) => {
+    // Only the trailing ellipsis button controls the conversation actions.
+    // The row's contextmenu event is intentionally not intercepted.
     setIsPopoverActive(open);
-    if (!open) {
-      setContextMenuPosition(undefined);
-    }
   }, []);
 
   const handleNavigation = (ctrlOrMetaKey: boolean) => {
@@ -304,7 +301,6 @@ function Conversation({
     conversationId,
     isPopoverActive,
     isGenerating,
-    contextMenuPosition,
     onOpenChange: handlePopoverOpenChange,
     isShiftHeld: isActiveConvo && !isGenerating ? isShiftHeld : false,
   };
@@ -355,20 +351,6 @@ function Conversation({
       }}
       onPointerLeave={() => setIsHovered(false)}
       onPointerCancel={() => setIsHovered(false)}
-      onContextMenu={(event) => {
-        if (
-          renaming ||
-          !(event.target instanceof Node) ||
-          !event.currentTarget.contains(event.target)
-        ) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        setContextMenuPosition({ x: event.clientX, y: event.clientY });
-        setHasInteracted(true);
-        setIsPopoverActive(true);
-      }}
       onMouseEnter={handleMouseEnter}
       onFocus={handleMouseEnter}
       onClick={(e) => {
@@ -392,6 +374,7 @@ function Conversation({
         />
       ) : (
         <ConvoLink
+          conversationId={conversationId ?? null}
           isActiveConvo={isActiveConvo}
           isPopoverActive={isPopoverActive}
           isHovered={isHovered}
