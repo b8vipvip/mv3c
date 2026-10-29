@@ -163,6 +163,7 @@ test('operator GitHub OAuth config is the only GitHub MCP definition; no user PA
     config.mcpServers.github.oauth.token_endpoint_auth_methods_supported,
     ['client_secret_post'],
   );
+  assert.deepEqual(config.mcpServers.github.oauth.code_challenge_methods_supported, ['S256']);
   const withOrigin = core.runtimeConfig({ ...doc,
     site: { publicUrl: 'https://chat.mv3.cn' } }, KEY);
   assert.equal(withOrigin.mcpServers.github.oauth.redirect_uri,
