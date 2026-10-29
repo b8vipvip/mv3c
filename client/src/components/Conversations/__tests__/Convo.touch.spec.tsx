@@ -69,9 +69,21 @@ jest.mock('../ConvoOptions', () => ({
     mockCloseMenu = () => props.setIsPopoverActive(false);
     return (
       <div data-testid="convo-options" data-open={props.isPopoverActive}>
-        <button disabled={!props.canRename} onClick={props.renameHandler}>
-          {'Rename'}
+        <button
+          type="button"
+          aria-label="com_nav_convo_menu_options"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.setIsPopoverActive(true);
+          }}
+        >
+          {'More'}
         </button>
+        {props.isPopoverActive && (
+          <button disabled={!props.canRename} onClick={props.renameHandler}>
+            {'Rename'}
+          </button>
+        )}
       </div>
     );
   },
@@ -201,21 +213,34 @@ describe('Conversation context menu', () => {
     mockIsSmallScreen = false;
   });
 
-  it.each([false, true])('opens on right-click (generating: %s)', (isGenerating) => {
-    renderRow(isGenerating);
-    fireEvent.contextMenu(screen.getByTestId('convo-item'), { clientX: 120, clientY: 80 });
+  it.each([false, true])(
+    'leaves the browser context menu untouched on right-click (generating: %s)',
+    (isGenerating) => {
+      renderRow(isGenerating);
+      const row = screen.getByTestId('convo-item');
+      const title = screen.getByText('Mobile UI redesign');
+      const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      const handled = title.dispatchEvent(event);
+
+      expect(handled).toBe(true);
+      expect(event.defaultPrevented).toBe(false);
+      expect(row).toBeInTheDocument();
+      expect(screen.queryByTestId('convo-options')).not.toHaveAttribute('data-open', 'true');
+    },
+  );
+
+  it('opens the actions only after clicking the trailing ellipsis', () => {
+    renderRow();
+    const row = screen.getByTestId('convo-item');
+    fireEvent.mouseEnter(row);
+    const trigger = screen.getByRole('button', { name: 'com_nav_convo_menu_options' });
+    expect(trigger).toBeInTheDocument();
+    expect(screen.getByTestId('convo-options')).toHaveAttribute('data-open', 'false');
+
+    fireEvent.click(trigger);
     expect(screen.getByTestId('convo-options')).toHaveAttribute('data-open', 'true');
-    expect(mockConvoOptionsProps.at(-1)).toEqual(
-      expect.objectContaining({
-        isGenerating,
-        contextMenuPosition: { x: 120, y: 80 },
-      }),
-    );
     act(() => mockCloseMenu());
     expect(screen.getByTestId('convo-options')).toHaveAttribute('data-open', 'false');
-    expect(mockConvoOptionsProps.at(-1)).toEqual(
-      expect.objectContaining({ contextMenuPosition: undefined }),
-    );
   });
 
   it('offers a clickable running menu before hover', () => {
@@ -228,10 +253,16 @@ describe('Conversation context menu', () => {
 });
 
 describe('Conversation context menu on small screens', () => {
-  it('keeps the real trigger mounted after an externally opened menu closes', () => {
+  it('keeps the overflow menu reachable but never hijacks the browser context menu', () => {
     mockIsSmallScreen = true;
     renderRow(true);
-    fireEvent.contextMenu(screen.getByTestId('convo-item'), { clientX: 120, clientY: 80 });
+    const title = screen.getByText('Mobile UI redesign');
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    title.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByTestId('convo-options')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('convo-options-trigger'));
     expect(screen.getByTestId('convo-options')).toHaveAttribute('data-open', 'true');
     act(() => mockCloseMenu());
     expect(screen.getByTestId('convo-options')).toBeInTheDocument();
@@ -244,6 +275,7 @@ describe('Conversation title ownership rollout', () => {
     mockRename.mockClear();
     mockOwnershipEnabled = true;
     mockOwnershipVersion = 1;
+    mockIsSmallScreen = false;
   });
   afterEach(() => {
     mockOwnershipEnabled = true;
@@ -257,20 +289,23 @@ describe('Conversation title ownership rollout', () => {
     mockOwnershipEnabled = enabled;
     mockOwnershipVersion = version;
     renderRow(true);
-    fireEvent.contextMenu(screen.getByTestId('convo-item'));
+    fireEvent.mouseEnter(screen.getByTestId('convo-item'));
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_convo_menu_options' }));
     expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
   });
   it('also fences an unowned placeholder after a final-timing stream ends', () => {
     mockOwnershipEnabled = false;
     renderRow(false, { ...conversation, title: 'New Chat' });
-    fireEvent.contextMenu(screen.getByTestId('convo-item'));
+    fireEvent.mouseEnter(screen.getByTestId('convo-item'));
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_convo_menu_options' }));
     expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
   });
   it.each([false, true])(
     'claims an unchanged unowned title (generating %s)',
     async (generating) => {
       renderRow(generating, { ...conversation, title: 'New Chat' });
-      fireEvent.contextMenu(screen.getByTestId('convo-item'));
+      fireEvent.mouseEnter(screen.getByTestId('convo-item'));
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_convo_menu_options' }));
       fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
       await act(async () => fireEvent.click(screen.getByTestId('rename-form')));
       expect(mockRename).toHaveBeenCalledWith({ conversationId: 'convo-1', title: 'New Chat' });
@@ -278,7 +313,8 @@ describe('Conversation title ownership rollout', () => {
   );
   it('keeps unchanged owned titles as a no-op', async () => {
     renderRow(false, { ...conversation, titleSetByUser: true });
-    fireEvent.contextMenu(screen.getByTestId('convo-item'));
+    fireEvent.mouseEnter(screen.getByTestId('convo-item'));
+    fireEvent.click(screen.getByRole('button', { name: 'com_nav_convo_menu_options' }));
     fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
     await act(async () => fireEvent.click(screen.getByTestId('rename-form')));
     expect(mockRename).not.toHaveBeenCalled();
