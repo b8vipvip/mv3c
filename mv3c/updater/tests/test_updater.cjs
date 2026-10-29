@@ -12,8 +12,9 @@ test('update configuration accepts only fixed channels and intervals', () => {
   assert.throws(() => updates.validateConfig({ channel: '../../evil' }));
   assert.throws(() => updates.validateConfig({ channel: 'main' }));
   assert.equal(updates.DEFAULT_CONFIG.channel, 'release');
-  assert.equal(updates.DEFAULT_CONFIG.autoDeployEnabled, false);
-  assert.deepEqual(updates.validateConfig({ autoDeployEnabled: true }), { autoDeployEnabled: true });
+  assert.equal(Object.hasOwn(updates.DEFAULT_CONFIG, 'autoDeployEnabled'), false);
+  assert.throws(() => updates.validateConfig({ autoDeployEnabled: true }));
+  assert.throws(() => updates.validateConfig({ autoDeployEnabled: false }));
   assert.throws(() => updates.validateConfig({ autoDeployEnabled: 'true' }));
 });
 
@@ -47,8 +48,11 @@ test('admin update state never exposes secret keys and detects stale host agents
   assert.equal(formatted.currentSha, doc.currentSha);
   assert.equal(formatted.pendingJob.id, 'job1');
   assert.equal(formatted.config.autoEnabled, false);
-  assert.equal(formatted.config.autoDeployEnabled, false, 'legacy autoEnabled never opts in to building');
-  assert.equal(updates.format({ config: { autoDeployEnabled: true } }).config.autoDeployEnabled, true);
+  assert.equal(Object.hasOwn(formatted.config, 'autoDeployEnabled'), false,
+    'legacy auto deploy must never appear in the admin response');
+  assert.equal(Object.hasOwn(
+    updates.format({ config: { autoDeployEnabled: true } }).config, 'autoDeployEnabled'),
+    false, 'even persisted true is ignored');
   assert.equal(formatted.config.channel, 'release', 'legacy main policy is migrated on read');
   assert.equal(formatted.currentVersion, '');
   assert.equal(formatted.latestVersion, '');
@@ -87,4 +91,12 @@ test('diagnostic report keeps validated result, timestamps, verification and log
   assert.match(report, /Docker compose output/);
   assert.match(report, /3000/);
   assert.throws(() => updates.renderReport(null));
+});
+
+test('only explicit manual update jobs are admitted; no hidden automatic route', async () => {
+  const before = updates.queueJob('legacy-agent', 'auto');
+  await assert.rejects(before, /Only administrator-initiated manual deployment/);
+  await assert.rejects(updates.queueJob('legacy-agent', 'auto', {
+    targetVersion: 'v0.1.47', reuseOnly: true,
+  }), /Only administrator-initiated manual deployment/);
 });

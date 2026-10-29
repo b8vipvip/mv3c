@@ -8,7 +8,7 @@ const updates = require('../../api/server/services/Config/mv3cUpdater');
 
 async function main() {
   const command = process.argv[2];
-  if (!['state', 'claim', 'report', 'progress', 'complete', 'heartbeat', 'queue-auto'].includes(command)) {
+  if (!['state', 'claim', 'report', 'progress', 'complete', 'heartbeat'].includes(command)) {
     throw new Error('Unknown updater bridge command');
   }
   if (!process.env.MONGO_URI) throw new Error('MONGO_URI is required');
@@ -42,21 +42,6 @@ async function main() {
     case 'complete':
       result = await updates.completeJob(payload);
       break;
-    case 'queue-auto': {
-      const state = await updates.getState();
-      if (!state.config.autoEnabled || !state.config.autoDeployEnabled || !state.updateAvailable ||
-          state.pendingJob || state.activeJob) {
-        result = null;
-        break;
-      }
-      try {
-        result = await updates.queueJob('automatic-updater', 'auto');
-      } catch (error) {
-        if (error.status === 409) result = null;
-        else throw error;
-      }
-      break;
-    }
   }
   process.stdout.write(JSON.stringify(result) + '\n');
   await mongoose.disconnect();

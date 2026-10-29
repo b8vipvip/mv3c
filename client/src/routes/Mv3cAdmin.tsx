@@ -51,7 +51,7 @@ type RuntimeLogStats = {
   usedBytes: number; maxBytes: number; fileCount: number; ranges: LogRange[];
   capture: string;
 };
-type UpdateConfig = { autoEnabled: boolean; autoDeployEnabled: boolean; channel: 'release'; intervalMinutes: number };
+type UpdateConfig = { autoEnabled: boolean; channel: 'release'; intervalMinutes: number };
 type UpdateProgress = {
   stage: string; percent: number; message: string; updatedAt: string;
   steps: { stage: string; percent: number; message: string; at: string }[];
@@ -164,7 +164,7 @@ export default function Mv3cAdmin() {
   const [cachedReleaseVersion, setCachedReleaseVersion] = useState('');
   const [updateConfigTouched, setUpdateConfigTouched] = useState(false);
   const [updateConfig, setUpdateConfig] = useState<UpdateConfig>({
-    autoEnabled: true, autoDeployEnabled: false, channel: 'release', intervalMinutes: 10,
+    autoEnabled: true, channel: 'release', intervalMinutes: 10,
   });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -714,7 +714,7 @@ export default function Mv3cAdmin() {
             {tab === 'updates' && (
               <section className="space-y-6 rounded-xl border border-border-medium p-5">
                 <div>
-                  <h2 className="text-xl font-semibold">版本更新与自动部署</h2>
+                  <h2 className="text-xl font-semibold">版本检查与手动部署</h2>
                   <p className="mt-1 text-sm text-text-secondary">
                     代码拉取：与 chat2api 一致，依次尝试 GitHub SSH 443 → SSH 22 → HTTPS（均限时），宿主机不再查询 GitHub REST API。仅部署附有发布证明、包含两项 CI 成功记录并绑定正式版 SHA 的 GitHub Release；镜像由 GitHub Actions 预构建后上传至正式版 Release 下载资产，宿主机经 HTTPS 限速保护及断点续传取得镜像，再验证完整归档 SHA-256、镜像 ID 与正式版 SHA 后无构建部署。
                   </p>
@@ -869,20 +869,13 @@ export default function Mv3cAdmin() {
                       );
                     })()}
                     <div className="space-y-4 border-t border-border-medium pt-5">
-                      <h3 className="font-semibold">自动更新策略</h3>
+                      <h3 className="font-semibold">版本检查策略</h3>
                       <label className="flex items-center gap-2">
                         <input type="checkbox" checked={updateConfig.autoEnabled}
                           onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
                             ...c, autoEnabled: e.target.checked,
                           })); }} />
-                        自动检查 GitHub 正式版（只通知，不构建）
-                      </label>
-                      <label className="flex items-start gap-2">
-                        <input type="checkbox" checked={updateConfig.autoDeployEnabled}
-                          onChange={(e) => { setUpdateConfigTouched(true); setUpdateConfig((c) => ({
-                            ...c, autoDeployEnabled: e.target.checked,
-                          })); }} />
-                        <span>允许无人值守自动部署（需要已交付且验证的正式镜像，默认关闭；建议仅在维护窗口开启）</span>
+                        自动检查 GitHub 正式版（只通知，不自动部署）
                       </label>
                       <label className="block space-y-2">
                         <span className="block text-sm font-medium">更新通道</span>
