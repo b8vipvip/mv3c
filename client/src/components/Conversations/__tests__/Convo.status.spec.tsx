@@ -87,7 +87,7 @@ const renderRow = (props: { isGenerating?: boolean; convo?: TConversation } = {}
     </DndProvider>,
   );
 
-const rowButton = () => screen.getByRole('button', { name: /^com_ui_conversation_label/ });
+const rowLink = () => screen.getByRole('link', { name: /^com_ui_conversation_label/ });
 const unreadDot = (container: HTMLElement) =>
   container.querySelector('span[aria-hidden="true"].bg-status-info');
 
@@ -100,14 +100,14 @@ describe('Conversation row status', () => {
     renderRow({ isGenerating: true });
 
     const ring = screen.getByTestId('status-ring');
-    expect(rowButton()).toContainElement(ring);
-    expect(rowButton()).toHaveAccessibleName('com_ui_conversation_label, com_ui_generating');
+    expect(rowLink()).toContainElement(ring);
+    expect(rowLink()).toHaveAccessibleName('com_ui_conversation_label, com_ui_generating');
     /* The trailing slot used to hold the spinner in place of the menu, so a running chat
        could not be renamed or archived from the list. */
-    fireEvent.contextMenu(screen.getByTestId('convo-item'));
+    fireEvent.click(screen.getByTestId('convo-options-trigger'));
     expect(screen.getByTestId('convo-options')).toBeInTheDocument();
     expect(screen.getAllByTestId('status-ring')).toHaveLength(1);
-    expect(rowButton()).toContainElement(ring);
+    expect(rowLink()).toContainElement(ring);
   });
 
   it('sizes the ring in rem so it follows the avatar box at any UI scale', () => {
@@ -131,8 +131,8 @@ describe('Conversation row status', () => {
 
     const dot = unreadDot(container);
     expect(dot).not.toBeNull();
-    expect(rowButton()).toContainElement(dot as HTMLElement);
-    expect(rowButton()).toHaveAccessibleName('com_ui_conversation_label, com_ui_unread');
+    expect(rowLink()).toContainElement(dot as HTMLElement);
+    expect(rowLink()).toHaveAccessibleName('com_ui_conversation_label, com_ui_unread');
     expect(screen.getByText('Tool Approval UI').parentElement).toHaveClass('font-semibold');
   });
 
@@ -142,7 +142,7 @@ describe('Conversation row status', () => {
 
     expect(screen.getByTestId('status-ring')).toBeInTheDocument();
     expect(unreadDot(container)).toBeNull();
-    expect(rowButton()).toHaveAccessibleName('com_ui_conversation_label, com_ui_generating');
+    expect(rowLink()).toHaveAccessibleName('com_ui_conversation_label, com_ui_generating');
     expect(screen.getByText('Tool Approval UI').parentElement).not.toHaveClass('font-semibold');
   });
 
@@ -151,13 +151,13 @@ describe('Conversation row status', () => {
 
     expect(screen.queryByTestId('status-ring')).not.toBeInTheDocument();
     expect(unreadDot(container)).toBeNull();
-    expect(rowButton()).toHaveAccessibleName('com_ui_conversation_label');
+    expect(rowLink()).toHaveAccessibleName('com_ui_conversation_label');
   });
 
   it('names the project of a filed chat listed under Chats', () => {
     renderRow({ convo: { ...conversation, chatProjectId: 'project-1' } as TConversation });
 
     expect(screen.getByTestId('convo-project-badge')).toHaveAttribute('title', 'com_ui_in_project');
-    expect(rowButton()).toHaveAccessibleDescription('com_ui_in_project');
+    expect(rowLink()).toHaveAccessibleDescription('com_ui_in_project');
   });
 });

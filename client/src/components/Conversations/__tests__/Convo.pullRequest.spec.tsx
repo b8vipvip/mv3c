@@ -110,7 +110,7 @@ const renderRow = (props: { isGenerating?: boolean; convo?: TConversation } = {}
     </DndProvider>,
   );
 
-const rowButton = () => screen.getByRole('button', { name: /^com_ui_conversation_label/ });
+const rowLink = () => screen.getByRole('link', { name: /^com_ui_conversation_label/ });
 
 describe('Conversation row pull request', () => {
   beforeEach(() => {
@@ -122,11 +122,11 @@ describe('Conversation row pull request', () => {
     };
   });
 
-  it("keeps the title the conversation's own and puts the pull request beside it, outside the row button", () => {
+  it("keeps the title the conversation's own and puts the pull request beside it, outside the row link", () => {
     renderRow();
     expect(screen.getByText('Tool Approval UI')).toBeInTheDocument();
     const mark = screen.getByTestId('convo-pull-request');
-    expect(rowButton()).not.toContainElement(mark);
+    expect(rowLink()).not.toContainElement(mark);
     expect(screen.getByTestId('convo-item')).toContainElement(mark);
     expect(mark.parentElement?.parentElement).toBe(screen.getByTestId('convo-item'));
   });
@@ -144,7 +144,7 @@ describe('Conversation row pull request', () => {
   it("names the pull request in the row's description so a screen reader hears what the colors say", () => {
     renderRow();
     const labelId = String(mockMarkProps[0].labelId);
-    expect(rowButton().getAttribute('aria-describedby')).toContain(labelId);
+    expect(rowLink().getAttribute('aria-describedby')).toContain(labelId);
     expect(document.getElementById(labelId)).toBeInTheDocument();
   });
 
@@ -170,8 +170,8 @@ describe('Conversation row pull request', () => {
     mockMarkState.described = false;
     renderRow();
     expect(screen.queryByTestId('convo-pull-request')).not.toBeInTheDocument();
-    expect(rowButton().getAttribute('aria-describedby')).toBeNull();
-    const ids = (rowButton().getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
+    expect(rowLink().getAttribute('aria-describedby')).toBeNull();
+    const ids = (rowLink().getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean);
     expect(ids.every((id) => document.getElementById(id) != null)).toBe(true);
   });
 
@@ -184,7 +184,7 @@ describe('Conversation row pull request', () => {
     renderRow();
     expect(screen.queryByTestId('convo-pull-request')).not.toBeInTheDocument();
     expect(mockMarkProps).toHaveLength(0);
-    expect(rowButton().getAttribute('aria-describedby')).toBeNull();
+    expect(rowLink().getAttribute('aria-describedby')).toBeNull();
   });
 
   it.each([
@@ -197,7 +197,7 @@ describe('Conversation row pull request', () => {
     renderRow({ convo: convo as TConversation });
     expect(screen.queryByTestId('convo-pull-request')).not.toBeInTheDocument();
     expect(mockMarkProps).toHaveLength(0);
-    expect(rowButton().getAttribute('aria-describedby')).toBeNull();
+    expect(rowLink().getAttribute('aria-describedby')).toBeNull();
   });
 
   it('keeps asking for a row its replica did not stamp, since it cannot be told from an ordinary chat', () => {

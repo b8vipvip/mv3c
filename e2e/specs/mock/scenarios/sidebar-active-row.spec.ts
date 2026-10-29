@@ -17,7 +17,7 @@ const row = (page: Page, title: string) =>
 async function openRow(page: Page, id: string, title: string) {
   await openSidebar(page);
   await row(page, title)
-    .getByRole('button', { name: new RegExp(`^${title} conversation`) })
+    .getByRole('link', { name: new RegExp(`^${title} conversation`) })
     .dispatchEvent('click');
   await expect(page).toHaveURL(new RegExp(`/c/${id}$`));
 }

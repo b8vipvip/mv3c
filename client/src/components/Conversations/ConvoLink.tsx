@@ -4,6 +4,8 @@ import type { TranslationKeys } from '~/hooks/useLocalize';
 import { cn } from '~/utils';
 
 interface ConvoLinkProps {
+  /** Real navigation target enables the browser's native link context menu. */
+  conversationId: string | null;
   isActiveConvo: boolean;
   isPopoverActive: boolean;
   isHovered: boolean;
@@ -39,6 +41,7 @@ const observeMediaQuery = (query: MediaQueryList, onChange: () => void) => {
 };
 
 const ConvoLink: React.FC<ConvoLinkProps> = ({
+  conversationId,
   isActiveConvo,
   isPopoverActive,
   isHovered,
@@ -131,8 +134,16 @@ const ConvoLink: React.FC<ConvoLinkProps> = ({
   }, [isHovered, isSmallScreen, displayTitle]);
 
   return (
-    <button
-      type="button"
+    <a
+      href={conversationId ? `/c/${encodeURIComponent(conversationId)}` : undefined}
+      onClick={(event) => {
+        // The sidebar owns SPA navigation, including its ctrl/meta behavior.
+        // Only suppress native left-click navigation; leave middle-click and
+        // the browser's right-click Open Link actions fully native.
+        if (event.button === 0) {
+          event.preventDefault();
+        }
+      }}
       className={cn(
         'focus-visible:ring-text-primary flex w-full min-w-0 grow cursor-pointer items-center gap-2 self-stretch overflow-hidden rounded-lg px-2 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-inset',
         isActiveConvo || isPopoverActive ? 'bg-surface-nav-selected' : '',
@@ -175,7 +186,7 @@ const ConvoLink: React.FC<ConvoLinkProps> = ({
           {displayTitle}
         </span>
       </span>
-    </button>
+    </a>
   );
 };
 
