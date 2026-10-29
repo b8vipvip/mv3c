@@ -6,9 +6,7 @@ const mongoose = require('mongoose');
 const ID = 'global';
 const DEFAULT_CONFIG = Object.freeze({
   autoEnabled: true,
-  // Legacy autoEnabled now means periodic checking, never unattended building.
-  // Deployment requires an explicit new opt-in even on upgraded installations.
-  autoDeployEnabled: false,
+  // Only automatic GitHub release discovery is supported. Deployments are manual.
   channel: 'release',
   intervalMinutes: 10,
 });
@@ -33,11 +31,33 @@ async function initialize() {
       createdAt: new Date(),
     },
   }, { upsert: true });
+  // Retire legacy opt-in data, including previously saved true, so no later
+  // version can accidentally reactivate unattended deployment.
+  await collection().updateOne(
+    { _id: ID, 'config.autoDeployEnabled': { $exists: true } },
+    { $unset: { 'config.autoDeployEnabled': '' } },
+  );
+  // An old automatic job must not survive the migration and later be claimed
+  // as if an administrator had clicked Deploy. Do not touch active operations.
+  await collection().updateOne({
+    _id: ID, 'pendingJob.mode': 'auto', activeJob: { $exists: false },
+  }, {
+    $unset: { pendingJob: '' },
+    $set: {
+      status: 'idle',
+      lastError: '已取消旧版无人值守自动部署排队任务；后续部署仅可由管理员手动触发',
+    },
+  });
 }
 function format(doc) {
   // Previously saved main mode is migrated at read time; deployment is release-only.
-  const config = { ...DEFAULT_CONFIG, ...(doc?.config || {}),
-    autoDeployEnabled: doc?.config?.autoDeployEnabled === true, channel: 'release' };
+  // Explicit allow-list also hides any stale legacy field from old DB rows.
+  const config = {
+    autoEnabled: doc?.config?.autoEnabled !== false,
+    channel: 'release',
+    intervalMinutes: [5, 10, 15, 30, 60].includes(doc?.config?.intervalMinutes)
+      ? doc.config.intervalMinutes : DEFAULT_CONFIG.intervalMinutes,
+  };
   const heartbeat = doc?.agentHeartbeat ? new Date(doc.agentHeartbeat) : null;
   const agentOnline = heartbeat && Number.isFinite(heartbeat.getTime()) &&
     Date.now() - heartbeat.getTime() < 180000;
@@ -80,7 +100,6 @@ function validateConfig(body) {
   const result = {};
   for (const [key, value] of Object.entries(body)) {
     if (key === 'autoEnabled' && typeof value === 'boolean') result[key] = value;
-    else if (key === 'autoDeployEnabled' && typeof value === 'boolean') result[key] = value;
     else if (key === 'channel' && value === 'release') result[key] = value;
     else if (key === 'intervalMinutes' && [5, 10, 15, 30, 60].includes(value)) {
       result[key] = value;
@@ -106,7 +125,7 @@ async function requestCheck(actor) {
   return getState();
 }
 async function queueJob(actor, mode = 'manual', options = {}) {
-  if (!['manual', 'auto'].includes(mode)) throw new TypeError('Invalid update mode');
+  if (mode !== 'manual') throw new TypeError('Only administrator-initiated manual deployment is allowed');
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('Invalid deployment selection');
   }
@@ -115,7 +134,7 @@ async function queueJob(actor, mode = 'manual', options = {}) {
     throw new TypeError('Unknown deployment selection field');
   }
   const selected = options.targetVersion;
-  if (selected !== undefined && (!OFFICIAL_TAG.test(selected) || mode !== 'manual')) {
+  if (selected !== undefined && !OFFICIAL_TAG.test(selected)) {
     throw new TypeError('Pinned Release must be a valid official version in a manual job');
   }
   if (options.reuseOnly !== undefined && options.reuseOnly !== true) {
@@ -137,8 +156,6 @@ async function queueJob(actor, mode = 'manual', options = {}) {
     _id: ID,
     pendingJob: { $exists: false },
     activeJob: { $exists: false },
-    // Server-side admission gate; checking a stale UI flag is not sufficient.
-    ...(mode === 'auto' ? { 'config.autoDeployEnabled': true } : {}),
   }, {
     $set: { pendingJob: job, status: 'queued', lastError: '' },
   }, { returnDocument: 'after' });
@@ -152,7 +169,7 @@ async function queueJob(actor, mode = 'manual', options = {}) {
 async function claimJob() {
   await initialize();
   const result = await collection().findOneAndUpdate({
-    _id: ID, pendingJob: { $exists: true }, activeJob: { $exists: false },
+    _id: ID, 'pendingJob.mode': 'manual', activeJob: { $exists: false },
   }, [{
     $set: { activeJob: '$pendingJob', status: 'updating', lastAttemptAt: '$$NOW' },
   }, {
