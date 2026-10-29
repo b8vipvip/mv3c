@@ -304,7 +304,9 @@ router.put('/updates/settings', async (req, res) => {
 });
 router.post('/updates/check', async (req, res) => {
   try {
-    return res.json(await updater.requestCheck(actorId(req)));
+    // The host-only agent processes this asynchronously on its next systemd
+    // run; returning 200 falsely implies that a GitHub check has completed.
+    return res.status(202).json(await updater.requestCheck(actorId(req)));
   } catch (error) {
     return failure(res, error);
   }
