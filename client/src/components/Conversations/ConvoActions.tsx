@@ -17,7 +17,6 @@ export type ConvoActionsProps = {
   isShiftHeld?: boolean;
   isPopoverActive: boolean;
   isGenerating?: boolean;
-  contextMenuPosition?: { x: number; y: number };
   /** True once the pointer or focus has reached the row. */
   hasInteracted: boolean;
   retainView: () => void;
