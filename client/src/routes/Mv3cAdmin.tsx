@@ -79,6 +79,7 @@ type UpdateState = {
   latestUrl: string;
   updateAvailable: boolean;
   checkedAt: string | null;
+  checkRequestedAt: string | null;
   agentHeartbeat: string | null;
   lastAttemptAt: string | null;
   lastSuccessAt: string | null;
@@ -171,6 +172,12 @@ export default function Mv3cAdmin() {
   const [busy, setBusy] = useState(false);
   const [allowed, setAllowed] = useState(true);
   const [adminAuthExpired, setAdminAuthExpired] = useState(false);
+  // The host-only updater consumes checks asynchronously. A successful POST
+  // means 'queued', not 'GitHub checked'. Keep the previous result labeled
+  // as historical until the canonical updater reports checkedAt >= requested.
+  const updateCheckPending = Boolean(updates?.checkRequestedAt &&
+    (!updates.checkedAt ||
+      Date.parse(updates.checkRequestedAt) > Date.parse(updates.checkedAt)));
   useEffect(() => setAdminAuthExpired(false), [token]);
   const [testModels, setTestModels] = useState<string[] | null>(null);
   const [downloadingReport, setDownloadingReport] = useState<string | null>(null);
@@ -447,9 +454,9 @@ export default function Mv3cAdmin() {
 
   const requestUpdateCheck = () => run(async () => {
     if (!token) return;
-    await adminRequest<UpdateState>(token, '/updates/check', { method: 'POST' });
-    await loadUpdates();
-    setMessage('已请求检查 GitHub，新结果将在宿主机更新服务下一次运行后显示。');
+    const queued = await adminRequest<UpdateState>(token, '/updates/check', { method: 'POST' });
+    setUpdates(queued);
+    setMessage('检查请求已提交至唯一宿主机更新服务；此时展示的 GitHub 版本仍是上次检查结果。请留意下方待检查状态。');
   });
 
   const requestDeployment = () => {
@@ -746,7 +753,9 @@ export default function Mv3cAdmin() {
                         </p>
                       </div>
                       <div className="rounded-lg bg-surface-secondary p-4">
-                        <p className="text-xs text-text-secondary">GitHub 最新正式版</p>
+                        <p className="text-xs text-text-secondary">
+                          {updateCheckPending ? '上次 GitHub 检查结果（等待刷新）' : '上次检查的 GitHub 最新正式版'}
+                        </p>
                         <p className="mt-1 font-mono text-lg">
                           {updates.latestVersion || '尚未发布'}
                         </p>
@@ -765,10 +774,19 @@ export default function Mv3cAdmin() {
                           {updates.ciMessage}（等待下一次自动检查）
                         </p>
                       )}
-                      <p>状态：<strong>{updates.status === 'blocked' && updates.ciMessage
-                        ? '等待 CI 通过' : updateStatusLabel[updates.status] || updates.status}</strong></p>
-                      <p>新版本：<strong>{updates.updateAvailable ? '已发现' : '暂无或尚未检查'}</strong></p>
-                      <p>上次检查：{updates.checkedAt
+                      <p>状态：<strong>{updateCheckPending ? 'GitHub 检查已排队' :
+                        updates.status === 'blocked' && updates.ciMessage
+                          ? '等待 CI 通过' : updateStatusLabel[updates.status] || updates.status}</strong></p>
+                      {updateCheckPending && (
+                        <p role="status" className="text-amber-600">
+                          已提交检查请求（{new Date(updates.checkRequestedAt!).toLocaleString()}），
+                          等待宿主机更新器下一次运行。当前显示的版本和更新状态仍是上次检查记录，
+                          不是这次请求的实时结果；无需重复点击。
+                        </p>
+                      )}
+                      <p>新版本：<strong>{updateCheckPending ? '待检查，旧结果暂不代表最新' :
+                        updates.updateAvailable ? '已发现' : '暂无或尚未检查'}</strong></p>
+                      <p>上次完成检查：{updates.checkedAt
                         ? new Date(updates.checkedAt).toLocaleString() : '尚未检查'}</p>
                       <p>最近成功更新：{updates.lastSuccessAt
                         ? new Date(updates.lastSuccessAt).toLocaleString() : '暂无'}</p>
@@ -911,9 +929,10 @@ export default function Mv3cAdmin() {
                       </button>
                     </div>
                     <div className="flex flex-wrap gap-2 border-t border-border-medium pt-5">
-                      <button className={subtleButton} disabled={busy}
+                      <button className={subtleButton}
+                        disabled={busy || updateCheckPending}
                         onClick={() => void requestUpdateCheck()}>
-                        立即检查 GitHub
+                        {updateCheckPending ? '已提交，等待宿主机检查' : '立即检查 GitHub'}
                       </button>
                       <button className={buttonClass}
                         disabled={busy || !updates.agentOnline ||
