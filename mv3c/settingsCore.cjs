@@ -292,6 +292,7 @@ function runtimeConfig(doc, keyHex) {
           // Without this explicit mode the generic SDK may choose Basic Auth.
           token_exchange_method: 'default_post',
           token_endpoint_auth_methods_supported: ['client_secret_post'],
+          code_challenge_methods_supported: ['S256'],
           ...(site.publicUrl ? {
             redirect_uri: site.publicUrl + '/api/mcp/github/oauth/callback',
           } : {}),
