@@ -288,6 +288,13 @@ function runtimeConfig(doc, keyHex) {
           client_secret: clientSecret,
           authorization_url: 'https://github.com/login/oauth/authorize',
           token_url: 'https://github.com/login/oauth/access_token',
+          // GitHub exchanges codes with client credentials in POST form data.
+          // Without this explicit mode the generic SDK may choose Basic Auth.
+          token_exchange_method: 'default_post',
+          token_endpoint_auth_methods_supported: ['client_secret_post'],
+          ...(site.publicUrl ? {
+            redirect_uri: site.publicUrl + '/api/mcp/github/oauth/callback',
+          } : {}),
           scope: 'read:user repo',
         },
       },
