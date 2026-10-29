@@ -27,9 +27,11 @@ export default function PluginDiscovery({
   const [catalog, setCatalog] = useState<readonly PluginPreset[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState('');
+  const [managedGithubEnabled, setManagedGithubEnabled] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     setCatalog([]);
+    setManagedGithubEnabled(false);
     if (!token) { setCatalogLoading(false); return () => controller.abort(); }
     setCatalogLoading(true);
     fetch('/api/mcp/store/catalog', {
@@ -37,11 +39,22 @@ export default function PluginDiscovery({
       headers: { Authorization: 'Bearer ' + token },
     }).then(async (response) => {
       if (!response.ok) throw new Error('商店目录暂不可用');
-      const result = await response.json() as { items?: PluginPreset[] };
+      const result = await response.json() as {
+        items?: PluginPreset[];
+        managed?: { github?: boolean };
+      };
       if (!Array.isArray(result.items)) throw new Error('商店目录数据无效');
-      if (!controller.signal.aborted) { setCatalog(result.items); setCatalogError(''); }
+      if (!controller.signal.aborted) {
+        setCatalog(result.items);
+        setManagedGithubEnabled(result.managed?.github === true);
+        setCatalogError('');
+      }
     }).catch(() => {
-      if (!controller.signal.aborted) { setCatalogError('插件目录加载失败，请重试'); setCatalog([]); }
+      if (!controller.signal.aborted) {
+        setCatalogError('插件目录加载失败，请重试');
+        setCatalog([]);
+        setManagedGithubEnabled(false);
+      }
     }).finally(() => { if (!controller.signal.aborted) setCatalogLoading(false); });
     return () => controller.abort();
   }, [token]);
@@ -88,7 +101,8 @@ export default function PluginDiscovery({
           const configuredServer = servers.find((server) =>
             // The managed GitHub connector has a reserved operator-owned name.
             // A user-created MCP server with the same URL must not impersonate it.
-            (preset.id !== 'github' || server.serverName === 'github') &&
+            (preset.id !== 'github' ||
+              (managedGithubEnabled && server.serverName === 'github')) &&
             'url' in server.config &&
             server.config.url?.replace(/\/+$/, '') === preset.url.replace(/\/+$/, ''),
           );
