@@ -16,7 +16,10 @@ const DEFAULT_PROVIDER = Object.freeze({
 });
 const DEFAULT_GUEST = Object.freeze({ enabled: true, tokenLimit: 100000 });
 // Interactive MCP Apps are opt-in until a dedicated sandbox origin is deployed.
-const DEFAULT_PLUGINS = Object.freeze({ appsEnabled: false, sandboxURL: '', catalogHidden: [] });
+const DEFAULT_PLUGINS = Object.freeze({
+  appsEnabled: false, sandboxURL: '', catalogHidden: [],
+  githubOAuthEnabled: false, githubOAuthClientId: '', githubOAuthConfigured: false,
+});
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,127}$/;
 
 function assertPlainObject(value, name) {
@@ -159,6 +162,21 @@ function validatePatch(body) {
           throw new TypeError('MCP sandbox must use a dedicated HTTPS origin and /api/mcp/sandbox');
         }
         plugins.sandboxURL = u.href;
+      } else if (name === 'githubOAuthEnabled') {
+        if (typeof value !== 'boolean') throw new TypeError('plugins.githubOAuthEnabled must be boolean');
+        plugins.githubOAuthEnabled = value;
+      } else if (name === 'githubOAuthClientId') {
+        if (typeof value !== 'string' || (value !== '' &&
+            !/^[a-zA-Z0-9_-]{8,128}$/.test(value))) {
+          throw new TypeError('plugins.githubOAuthClientId must be a valid GitHub app Client ID');
+        }
+        plugins.githubOAuthClientId = value;
+      } else if (name === 'githubOAuthClientSecret') {
+        if (typeof value !== 'string' || (value !== '' &&
+            (value.length < 12 || value.length > 512 || /[\r\n\u0000-\u001f]/.test(value)))) {
+          throw new TypeError('Invalid GitHub OAuth client secret');
+        }
+        if (value) plugins.githubOAuthClientSecret = value;
       } else {
         throw new TypeError('Unknown plugins setting: ' + name);
       }
@@ -201,7 +219,20 @@ function publicSettings(doc, userCount = 1) {
     site: { ...site, registrationEnabled:
       doc?.site?.registrationEnabled ?? userCount === 0 },
     guest: { ...DEFAULT_GUEST, ...(doc?.guest ?? {}) },
-    plugins: { ...DEFAULT_PLUGINS, ...(doc?.plugins ?? {}) },
+    // Allowlist prevents encrypted OAuth credentials and future private keys
+    // from ever escaping through the admin/public settings response.
+    plugins: {
+      ...DEFAULT_PLUGINS,
+      appsEnabled: doc?.plugins?.appsEnabled === true,
+      sandboxURL: doc?.plugins?.sandboxURL || '',
+      catalogHidden: Array.isArray(doc?.plugins?.catalogHidden)
+        ? [...doc.plugins.catalogHidden] : [],
+      githubOAuthEnabled: doc?.plugins?.githubOAuthEnabled === true,
+      githubOAuthClientId: doc?.plugins?.githubOAuthClientId || '',
+      githubOAuthConfigured: Boolean(
+        doc?.plugins?.githubOAuthClientId && doc?.plugins?.githubOAuthClientSecretCipher
+      ),
+    },
     chat2api: {
       enabled: provider.enabled,
       baseURL: provider.baseURL,
@@ -238,6 +269,27 @@ function runtimeConfig(doc, keyHex) {
       config.mcpSettings = { apps: true };
       config.mcpAppSandbox = { url: plugins.sandboxURL, maxActiveViews: 3 };
     }
+  }
+  // The operator configures one GitHub OAuth application for the whole
+  // deployment. Each MV3C user then grants their own identity/scopes through
+  // the *existing* per-user MCP OAuth flow; no shared PAT or proxy execution.
+  if (plugins.githubOAuthEnabled && plugins.githubOAuthConfigured) {
+    const clientSecret = decryptSecret(doc.plugins.githubOAuthClientSecretCipher, keyHex);
+    config.mcpConfig = {
+      github: {
+        type: 'streamable-http',
+        url: 'https://api.githubcopilot.com/mcp/',
+        title: 'GitHub',
+        description: '连接 GitHub 账号后访问你授权的仓库、议题和 Pull Request',
+        oauth: {
+          client_id: plugins.githubOAuthClientId,
+          client_secret: clientSecret,
+          authorization_url: 'https://github.com/login/oauth/authorize',
+          token_url: 'https://github.com/login/oauth/access_token',
+          scope: 'read:user repo',
+        },
+      },
+    };
   }
   if (provider.enabled && provider.configured) {
     config.endpoints = { custom: [{
