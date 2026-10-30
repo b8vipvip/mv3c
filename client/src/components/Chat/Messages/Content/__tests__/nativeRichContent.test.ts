@@ -47,6 +47,8 @@ describe('native-rich v1 link and file handoff preservation', () => {
     expect(hasUnrepresentedNativeLinks(files)).toBe(true);
     expect(hasUnrepresentedNativeLinks('Some [source](https://example.com/report)')).toBe(true);
     expect(hasUnrepresentedNativeLinks('<https://example.com/reference>')).toBe(true);
+    expect(hasUnrepresentedNativeLinks('Download: https://example.com/report.zip')).toBe(true);
+    expect(hasUnrepresentedNativeLinks('Site www.example.com')).toBe(true);
   });
 
   it('still enables native image-only layout and unlinked rich text', () => {
