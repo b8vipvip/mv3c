@@ -21,6 +21,16 @@ async function recordModelNativeBinding(output, metadata) {
   await ensureIndex();
   return saveProviderBinding(collection(), output, metadata);
 }
+async function recordTransportNativeBinding({ user, conversationId, messageId, requestId }) {
+  await ensureIndex();
+  // Same strict schema as provider response metadata, but the nonce comes
+  // from our own trust-scoped OpenAI transport, never from a user or model text.
+  return saveProviderBinding(collection(), {
+    response_metadata: {
+      chat2api: { request_id: requestId, native_content: { version: 1 } },
+    },
+  }, { user_id: user, thread_id: conversationId, run_id: messageId });
+}
 async function getNativeMessage({ user, conversationId, messageId }) {
   const config = await buildRuntimeConfig();
   return readBoundSnapshot({
@@ -40,4 +50,4 @@ async function upstreamNativeEvents({ user, conversationId, messageId }) {
     redirect: 'error', signal: AbortSignal.timeout(900000),
   });
 }
-module.exports = { recordModelNativeBinding, getNativeMessage, upstreamNativeEvents };
+module.exports = { recordModelNativeBinding, recordTransportNativeBinding, getNativeMessage, upstreamNativeEvents };

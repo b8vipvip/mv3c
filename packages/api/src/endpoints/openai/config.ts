@@ -12,6 +12,7 @@ import { constructAzureResponsesURL } from '~/utils/azure';
 import { transformToOpenAIConfig } from './transform';
 import { createFetch } from '~/utils/generators';
 import { mergeHeaders } from '~/utils/headers';
+import { wrapChat2apiNativeFetch } from './nativeRichCapture';
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type FetchOptions = RequestInit & { dispatcher?: Dispatcher };
@@ -320,6 +321,22 @@ export function getOpenAIConfig(
         redirect: shouldProtectUserBaseURL ? 'error' : undefined,
       }) as unknown as Fetch;
     }
+  }
+
+  // Preserve the SDK transport, Undici dispatcher, proxy, timeout and normal
+  // SSE bytes. Only an operator-managed endpoint literally named chat2api
+  // receives an opaque request header for owner-scoped native sidecars.
+  if (endpoint === 'chat2api' && baseURL && !shouldProtectUserBaseURL) {
+    const original = configOptions.fetch;
+    const transport = (original ??
+      ((url: string | URL | Request, init?: RequestInit) =>
+        undiciFetch(url as string, {
+          ...(configOptions.fetchOptions as Parameters<typeof undiciFetch>[1]),
+          ...(init as Parameters<typeof undiciFetch>[1]),
+        }) as unknown as Promise<Response>)) as Fetch;
+    configOptions.fetch = wrapChat2apiNativeFetch(
+      transport as typeof fetch, baseURL,
+    ) as Fetch;
   }
 
   const result: t.OpenAIConfigResult = {
