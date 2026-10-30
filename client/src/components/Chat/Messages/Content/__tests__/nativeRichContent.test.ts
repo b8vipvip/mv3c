@@ -1,4 +1,4 @@
-import { isOwnedAsset, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage } from '../nativeRichContent';
+import { isOwnedAsset, isOwnedGeneratedFile, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage } from '../nativeRichContent';
 
 const asset='https://chat2api.example.com/api/media/med_123456789/secretABC12345678';
 const input = {
@@ -106,5 +106,41 @@ describe('safe fractional native CSS grid layout', () => {
         style: { display: 'grid', gridTemplateColumns: value } } };
       expect(validateNativeContent(rich)).toBeNull();
     }
+  });
+});
+
+describe('verified native file cards preserve canonical download targets', () => {
+  const pending = 'https://files.example.com/api/generated-files/pending/pgen_' +
+    'a'.repeat(32) + '/' + 'B'.repeat(24);
+  const file = { filename: 'plan.xlsx', url: pending, bytes: 2048, status: 'processing' as const };
+  const rich = { ...input, files: [file] };
+  const canonical = 'Project plan: [📎 plan.xlsx](' + pending + ')';
+  it('permits one exact owned file card without sacrificing native image layout', () => {
+    expect(isOwnedGeneratedFile(pending)).toBe(true);
+    expect(validateNativeContent(rich)).toEqual(rich);
+    expect(hasUnrepresentedNativeLinks(canonical, rich)).toBe(false);
+    expect(hasUnrepresentedNativeLinks(canonical, input)).toBe(true);
+  });
+  it('does not discard any ordinary external links or unrelated file references', () => {
+    expect(hasUnrepresentedNativeLinks(canonical + ' [docs](https://example.com)', rich)).toBe(true);
+    expect(hasUnrepresentedNativeLinks(canonical.replace('plan.xlsx', 'unmatched.xlsx'), rich)).toBe(true);
+    expect(hasUnrepresentedNativeLinks(canonical + ' ' + pending, rich)).toBe(true);
+  });
+  it('refuses untrusted, duplicated and malformed file descriptors', () => {
+    expect(isOwnedGeneratedFile('https://evil.example/file.zip')).toBe(false);
+    expect(isOwnedGeneratedFile('javascript:alert(1)')).toBe(false);
+    expect(validateNativeContent({ ...input, files: [{ ...file, url: 'blob:secret' }] })).toBeNull();
+    expect(validateNativeContent({ ...input, files: [file, file] })).toBeNull();
+    expect(validateNativeContent({ ...input, files: [{ ...file, status: 'unverified' }] })).toBeNull();
+    expect(validateNativeContent({ ...input, files: [{ ...file, onClick: 'alert(1)' }] })).toBeNull();
+    expect(validateNativeContent({ ...input, files: [{ ...file, bytes: 25000000 }] })).toBeNull();
+  });
+  it('replaces a same-revision snapshot when a file becomes available', () => {
+    const early = validateNativeContent({ ...input, files: [] });
+    const ready = validateNativeContent(rich);
+    expect(early).not.toBeNull();
+    expect(ready).not.toBeNull();
+    expect(shouldApplyNativeSnapshot(early, ready as NonNullable<typeof ready>)).toBe(true);
+    expect(shouldApplyNativeSnapshot(ready, ready as NonNullable<typeof ready>)).toBe(false);
   });
 });
