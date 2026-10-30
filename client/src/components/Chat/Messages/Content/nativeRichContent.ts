@@ -112,5 +112,9 @@ export function hasUnrepresentedNativeLinks(text: string): boolean {
   if (typeof text !== 'string' || !text) return false;
   if (/\/api\/generated-files\/[A-Za-z0-9_-]{6,}/.test(text)) return true;
   const markdownLink = /(^|[^!])\[[^\]\n]{1,256}\]\(\s*<?(?:https?:\/\/|\/|sandbox:)[^\s)>]{1,2048}>?\s*\)/m;
-  return markdownLink.test(text) || /<https?:\/\/[^\s<>]{1,2048}>/.test(text);
+  // GFM autolinks bare URLs. Strip Markdown images first so an image-only
+  // response still benefits from native image grouping and full-size preview.
+  const withoutImages = text.replace(/!\[[^\]\n]{0,256}\]\(\s*<?[^)\n]{1,2048}>?\s*\)/g, '');
+  return markdownLink.test(text) ||
+    /(?:https?:\/\/[^\s<>)]{1,2048}|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,})/.test(withoutImages);
 }
