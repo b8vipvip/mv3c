@@ -4,6 +4,8 @@ import type { PluggableList } from 'unified';
 import type { ElementType } from 'react';
 import type { MarkdownSplitter } from './splitMarkdown';
 import { isSafeRasterImageDataUrl } from './inlineImageUrl';
+import { groupImageBlocks } from './imageGallery';
+import ImagePreview from './Image';
 import { ArtifactProvider, CodeBlockProvider } from '~/Providers';
 import { createMarkdownSplitter } from './splitMarkdown';
 import { createFadePlugin } from './animate';
@@ -190,24 +192,48 @@ const MarkdownBlocks = memo(function MarkdownBlocks({
       hasChanged || changing ? toBlockEntries(content, splitMarkdown) : toWholeMessage(content),
     [content, hasChanged, changing, splitMarkdown],
   );
+  // Original ChatGPT can put multiple pictures in a single gallery row.
+  // Only inspect rich replies with image markers; no extra parse on text
+  // messages, and no grouping of images interrupted by prose.
+  const segments = useMemo(() => {
+    if (!content.includes('![')) {
+      return groupImageBlocks(blocks.map((block) => ({ key: block.key, raw: block.raw, value: block })));
+    }
+    const candidates = hasChanged || changing ? blocks : toBlockEntries(content, splitMarkdown);
+    const grouped = groupImageBlocks(candidates.map((block) => ({
+      key: block.key, raw: block.raw, value: block,
+    })));
+    return grouped.some((segment) => segment.type === 'gallery')
+      ? grouped
+      : groupImageBlocks(blocks.map((block) => ({ key: block.key, raw: block.raw, value: block })));
+  }, [blocks, content, hasChanged, changing, splitMarkdown]);
 
   return (
     <>
-      {blocks.map((block) => (
+      {segments.map((segment) => segment.type === 'gallery' ? (
+        <div key={segment.key} data-testid="chat2api-inline-image-gallery"
+          className="my-3 flex max-w-full flex-wrap items-start gap-2">
+          {segment.images.map((image, index) => (
+            <ImagePreview key={image.src + '-' + index}
+              imagePath={image.src} altText={image.alt}
+              className="!mt-0 !w-auto !max-w-none !shadow-none"
+              compactGallery />
+          ))}
+        </div>
+      ) : (
         <MarkdownBlock
-          key={block.key}
-          content={block.raw}
-          codeBaseIndex={block.codeBaseIndex}
-          artifactBaseIndex={block.artifactBaseIndex}
-          mermaidBaseIndex={block.mermaidBaseIndex}
+          key={segment.block.key}
+          content={segment.block.value.raw}
+          codeBaseIndex={segment.block.value.codeBaseIndex}
+          artifactBaseIndex={segment.block.value.artifactBaseIndex}
+          mermaidBaseIndex={segment.block.value.mermaidBaseIndex}
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
           components={components}
           animate={animate}
           hydrated={hydrated}
         />
-      ))}
-    </>
+      ))}    </>
   );
 });
 MarkdownBlocks.displayName = 'MarkdownBlocks';
