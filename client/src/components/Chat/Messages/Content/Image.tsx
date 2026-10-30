@@ -120,7 +120,7 @@ const Image = ({
         className={cn(
           'border-border-light text-text-secondary-alt relative mt-1 cursor-pointer overflow-hidden rounded-lg border transition-shadow',
           compactGallery
-            ? 'h-40 max-h-[40vw] w-auto max-w-[min(32vw,11rem)] shadow-sm'
+            ? 'h-44 w-36 max-h-[48vw] max-w-[32vw] shadow-sm'
             : 'w-full max-w-lg shadow-md',
           'focus-visible:ring-text-primary focus-visible:ring-offset-surface-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2',
           className,

@@ -216,7 +216,7 @@ const MarkdownBlocks = memo(function MarkdownBlocks({
           {segment.images.map((image, index) => (
             <ImagePreview key={image.src + '-' + index}
               imagePath={image.src} altText={image.alt}
-              className="!mt-0 !w-auto !max-w-none !shadow-none"
+              className="!mt-0 !shadow-none"
               compactGallery />
           ))}
         </div>
@@ -233,7 +233,8 @@ const MarkdownBlocks = memo(function MarkdownBlocks({
           animate={animate}
           hydrated={hydrated}
         />
-      ))}    </>
+      ))}
+    </>
   );
 });
 MarkdownBlocks.displayName = 'MarkdownBlocks';
