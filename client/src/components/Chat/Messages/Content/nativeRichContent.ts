@@ -154,9 +154,12 @@ export function hasUnrepresentedNativeLinks(text: string, native?: unknown): boo
   const owned = validateNativeContent(native)?.files ?? [];
   const used = new Set<string>();
   const remaining = text.replace(
-    /\[📎 ([^\]\n]{1,180})\]\((https:\/\/[^\s)]+)\)/g,
+    /\[📎 ([^\]\n]{1,180})\]\((https?:\/\/[^\s)]+)\)/g,
     (match, label: string, url: string) => {
-      const file = owned.find(f => f.url === url &&
+      // The backend may safely promote an HTTP same-host archive URL to
+      // the provider's validated HTTPS origin; preserve the exact file match.
+      const file = owned.find(f => (f.url === url ||
+        (url.startsWith('http://') && f.url === 'https://' + url.slice(7))) &&
         f.filename.replace(/[\[\]]/g, '') === label);
       if (!file || used.has(url)) return match;
       used.add(url);
