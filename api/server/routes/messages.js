@@ -34,6 +34,7 @@ const {
   createToolCallPartHandler,
   rejectToolCallPreviewWrites,
   withMessageToolCallPreviews,
+  GenerationJobManager,
 } = require('@librechat/api');
 const subagentThreadTaskStore = require('~/server/services/Endpoints/agents/subagentThreadStore');
 const { getAppConfig } = require('~/server/services/Config');
@@ -101,9 +102,18 @@ async function authorizeNativeMessage(req, res, next) {
       db.getMessages({ user, conversationId, messageId }, CLIENT_MESSAGE_SELECT),
     ]);
     const message = Array.isArray(messages) ? messages[0] : messages;
-    if (!conversation || !message || message.isCreatedByUser === true ||
-        message.messageId !== messageId || message.conversationId !== conversationId) {
-      return res.status(404).end();
+    const storedOwned = Boolean(conversation && message &&
+      message.isCreatedByUser !== true && message.messageId === messageId &&
+      message.conversationId === conversationId);
+    if (!storedOwned) {
+      // The reply is not yet persisted during an active generation. Existing
+      // GenerationJobManager owner+tenant checks are the sole alternate proof;
+      // bind only the exact server-preallocated assistant response ID.
+      const activeOwned = await canReadActiveJobConversation(req, conversationId,
+        { activeJobMessageRead: true });
+      if (!activeOwned) return res.status(404).end();
+      const job = await GenerationJobManager.getJob(conversationId);
+      if (job?.metadata?.responseMessageId !== messageId) return res.status(404).end();
     }
     res.locals.nativeMessage = { user, conversationId, messageId };
     return next();
