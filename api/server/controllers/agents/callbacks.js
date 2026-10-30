@@ -42,6 +42,7 @@ const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
 const { preflightCodeOutputBatch } = require('~/server/services/Files/Code/preflight');
 const { saveBase64Image } = require('~/server/services/Files/process');
+const { recordModelNativeBinding } = require('~/server/services/Config/mv3cNativeRich');
 
 function isHostFileAuthoringArtifact(artifact) {
   return artifact?.[HOST_FILE_AUTHORING_ARTIFACT_KEY] === true;
@@ -137,6 +138,15 @@ class ModelEndHandler {
     let errorMessage;
     try {
       const agentContext = graph.getAgentContext(metadata);
+      // Non-owning asynchronous presentation evidence; model text, tools, user
+      // input and LangGraph run metadata alone never grant access. Some provider
+      // adapters discard custom response_metadata: in that case this is a no-op.
+      if (metadata?.hide_sequential_outputs !== true &&
+          data?.output?.response_metadata?.chat2api?.native_content?.version === 1) {
+        void recordModelNativeBinding(data.output, metadata).catch((error) => {
+          logger.warn('[NativeRich] Provider binding unavailable', error?.name);
+        });
+      }
       const refusalInfo = getModelRefusalInfo(data?.output);
       if (refusalInfo) {
         errorMessage = JSON.stringify({

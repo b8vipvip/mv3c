@@ -16,6 +16,7 @@ import { useLocalize } from '~/hooks';
 import Container from './Container';
 import Markdown from './Markdown';
 import NativeRichContent from './NativeRichContent';
+import useNativeRichMessage from './useNativeRichMessage';
 import { isInternalMediaHandoff } from './internalMediaHandoff';
 import { cn } from '~/utils';
 
@@ -104,9 +105,14 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
     [showCursor, isSubmitting, smoothStreaming, isCreatedByUser],
   );
 
+  const liveNative = useNativeRichMessage(
+    message?.conversationId, message?.messageId,
+    isSubmitting && isLatestMessage,
+    !isCreatedByUser && message?.endpoint === 'chat2api',
+  );
   // This field must be provided by a trusted server-side per-user binding.
   // Never fetch the upstream sidecar from the browser with a site-wide API Key.
-  const nativeRich = (message as (typeof message & {
+  const nativeRich = liveNative ?? (message as (typeof message & {
     nativeContent?: unknown; metadata?: { nativeContent?: unknown };
   }) | undefined)?.nativeContent ??
     (message as (typeof message & {

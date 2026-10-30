@@ -48,6 +48,7 @@ const {
   prepareMessageRequestValidation,
 } = require('~/server/middleware');
 const db = require('~/models');
+const nativeRich = require('~/server/services/Config/mv3cNativeRich');
 
 const retentionStore = { stampForcedRetention: db.stampForcedRetention };
 
@@ -81,6 +82,109 @@ const storedMessageMutationMiddleware = [
 ];
 
 router.use(requireJwtAuth);
+
+/**
+ * Native rich is a capability of an already stored assistant message. Never
+ * accept request IDs from browser params/headers; use a server-only, model-
+ * response-derived binding and the existing conversation/message ownership.
+ */
+async function authorizeNativeMessage(req, res, next) {
+  try {
+    const { conversationId, messageId } = req.params;
+    const user = req.user?.id;
+    if (!user || !conversationId || !messageId ||
+        conversationId.length > 150 || messageId.length > 150) {
+      return res.status(404).end();
+    }
+    const [conversation, messages] = await Promise.all([
+      db.getConvoOwnership(user, conversationId),
+      db.getMessages({ user, conversationId, messageId }, CLIENT_MESSAGE_SELECT),
+    ]);
+    const message = Array.isArray(messages) ? messages[0] : messages;
+    if (!conversation || !message || message.isCreatedByUser === true ||
+        message.messageId !== messageId || message.conversationId !== conversationId) {
+      return res.status(404).end();
+    }
+    res.locals.nativeMessage = { user, conversationId, messageId };
+    return next();
+  } catch (error) {
+    logger.warn('[NativeRich] Owner validation failed', error?.name);
+    return res.status(404).end();
+  }
+}
+
+router.get('/:conversationId/:messageId/native-content', authorizeNativeMessage, async (req, res) => {
+  try {
+    const native = await nativeRich.getNativeMessage(res.locals.nativeMessage);
+    if (!native) return res.status(404).end();
+    return res.set({
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    }).json(native);
+  } catch (error) {
+    logger.warn('[NativeRich] Snapshot temporarily unavailable', error?.name);
+    return res.status(502).json({ error: 'Native presentation temporarily unavailable' });
+  }
+});
+
+router.get('/:conversationId/:messageId/native-content/events', authorizeNativeMessage, async (req, res) => {
+  let upstream;
+  try {
+    upstream = await nativeRich.upstreamNativeEvents(res.locals.nativeMessage);
+    if (!upstream || !upstream.ok || !upstream.body) {
+      return res.status(upstream?.status === 404 || !upstream ? 404 : 502).end();
+    }
+  } catch (error) {
+    logger.warn('[NativeRich] Stream unavailable', error?.name);
+    return res.status(502).end();
+  }
+  res.set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.flushHeaders();
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let closed = false;
+  req.on('close', () => { closed = true; void reader.cancel().catch(() => {}); });
+  try {
+    while (!closed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      if (buffered.length > 100000) break; // no unbounded upstream frames
+      let end;
+      while ((end = buffered.indexOf('\n\n')) >= 0) {
+        const frame = buffered.slice(0, end);
+        buffered = buffered.slice(end + 2);
+        const name = frame.match(/^event: (native\.snapshot|native\.end)$/m)?.[1];
+        const data = frame.match(/^data: (.*)$/m)?.[1];
+        if (name === 'native.end') {
+          res.write('event: native.end\ndata: {}\n\n');
+          closed = true;
+          break;
+        }
+        if (name !== 'native.snapshot' || !data || data.length > 98000) continue;
+        try {
+          const payload = JSON.parse(data);
+          if (payload.version !== 1 || !payload.root || !Array.isArray(payload.assets) ||
+              !Number.isSafeInteger(payload.revision)) continue;
+          res.write('event: native.snapshot\ndata: ' + JSON.stringify(payload) + '\n\n');
+        } catch (_) { /* discard malformed native frame */ }
+      }
+    }
+  } catch (error) {
+    logger.warn('[NativeRich] Upstream stream ended', error?.name);
+  } finally {
+    try { await reader.cancel(); } catch (_) {}
+    if (!res.writableEnded) res.end();
+  }
+});
+
+
 router.post(
   '/:conversationId/owner-text',
   createPrivateTextView({
