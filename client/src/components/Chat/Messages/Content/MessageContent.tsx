@@ -16,6 +16,7 @@ import { useLocalize } from '~/hooks';
 import Container from './Container';
 import Markdown from './Markdown';
 import NativeRichContent from './NativeRichContent';
+import { hasUnrepresentedNativeLinks } from './nativeRichContent';
 import useNativeRichMessage from './useNativeRichMessage';
 import { isInternalMediaHandoff } from './internalMediaHandoff';
 import { cn } from '~/utils';
@@ -125,7 +126,9 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
   const content = useMemo(() => {
     if (!isCreatedByUser) {
       const markdown = <Markdown content={text} isLatestMessage={isLatestMessage} />;
-      return nativeRich != null
+      // v1 does not carry link hrefs or generated-file download actions.
+      // Keep the canonical Markdown whenever switching would hide them.
+      return nativeRich != null && !hasUnrepresentedNativeLinks(text)
         ? <NativeRichContent data={nativeRich} fallback={markdown} />
         : markdown;
     }

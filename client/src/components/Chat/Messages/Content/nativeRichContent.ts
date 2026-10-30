@@ -97,3 +97,24 @@ export function shouldApplyNativeSnapshot(
   if (next.assets.length !== previous.assets.length) return true;
   return next.assets.some((asset, index) => asset !== previous.assets[index]);
 }
+
+/**
+ * Native-rich v1 serializes visual text/images but intentionally omits <a>
+ * targets and file-card actions. Never replace the canonical Markdown while
+ * it contains an actionable link: that would silently hide verified download
+ * URLs (XLSX/PPTX/ZIP), citations or ordinary hyperlinks.
+ *
+ * Markdown images are excluded: their native img+MediaArchive mapping already
+ * has a safe click/preview path. A future explicit native link/file schema
+ * can lift this conservative fallback.
+ */
+export function hasUnrepresentedNativeLinks(text: string): boolean {
+  if (typeof text !== 'string' || !text) return false;
+  if (/\/api\/generated-files\/[A-Za-z0-9_-]{6,}/.test(text)) return true;
+  const markdownLink = /(^|[^!])\[[^\]\n]{1,256}\]\(\s*<?(?:https?:\/\/|\/|sandbox:)[^\s)>]{1,2048}>?\s*\)/m;
+  // GFM autolinks bare URLs. Strip Markdown images first so an image-only
+  // response still benefits from native image grouping and full-size preview.
+  const withoutImages = text.replace(/!\[[^\]\n]{0,256}\]\(\s*<?[^)\n]{1,2048}>?\s*\)/g, '');
+  return markdownLink.test(text) ||
+    /(?:https?:\/\/[^\s<>)]{1,2048}|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,})/.test(withoutImages);
+}
