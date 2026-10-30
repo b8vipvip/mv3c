@@ -49,7 +49,19 @@ type MessageRenderProps = {
  * because `buildTree` creates new message objects on every streaming update for ALL messages,
  * even when only the latest message's text changed.
  */
+function nativeRichRevision(msg?: TMessage): number {
+  const record = msg as (TMessage & { nativeContent?: { revision?: number } }) | undefined;
+  const payload = record?.nativeContent ??
+    (msg?.metadata?.nativeContent as { revision?: number } | undefined);
+  return typeof payload?.revision === 'number' ? payload.revision : 0;
+}
+
 function areMessageRenderPropsEqual(prev: MessageRenderProps, next: MessageRenderProps): boolean {
+  // Native snapshots replace the visual tree by monotonic revision while
+  // canonical message text may remain unchanged during the same SSE turn.
+  if (nativeRichRevision(prev.message) !== nativeRichRevision(next.message)) {
+    return false;
+  }
   if (prev.isSubmitting !== next.isSubmitting) {
     return false;
   }
