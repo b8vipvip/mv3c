@@ -120,9 +120,18 @@ export function shouldApplyNativeSnapshot(
 ): boolean {
   if (!previous) return true;
   if (next.revision !== previous.revision) return next.revision > previous.revision;
+  // The same DOM revision may gain media/file readiness, but cannot lose
+  // already verified assets or regress a completed archive to "processing".
+  // An out-of-order initial GET must not undo a later SSE ready event.
+  if (next.assets.length < previous.assets.length) return false;
   if (next.assets.length !== previous.assets.length) return true;
   if (next.assets.some((asset, index) => asset !== previous.assets[index])) return true;
   const oldFiles = previous.files ?? [], newFiles = next.files ?? [];
+  if (newFiles.length < oldFiles.length) return false;
+  if (oldFiles.some(oldFile =>
+    oldFile.status !== 'processing' &&
+    newFiles.some(newFile =>
+      newFile.url === oldFile.url && newFile.status === 'processing'))) return false;
   if (oldFiles.length !== newFiles.length) return true;
   return newFiles.some((file, index) =>
     file.url !== oldFiles[index].url || file.status !== oldFiles[index].status);
