@@ -132,14 +132,20 @@ router.get('/store/catalog', requireJwtAuth, checkMCPUsePermissions, async (req,
   try {
     const settings = await require('~/server/services/Config/mv3cSettings').getPublicSettings();
     const { listCatalog } = require('../../../mv3c/pluginCatalog.cjs');
+    // A legacy per-user server named 'github' can shadow the operator config
+    // in the MCP registry. Never advertise an untrusted user-tier server as
+    // the one-click managed connection, even when its URL matches GitHub's.
+    let managedGithub = false;
+    if (settings.plugins.githubOAuthReady === true) {
+      const config = (await resolveAllMcpConfigs(req.user.id, req.user))?.github;
+      managedGithub = config?.source === 'config' &&
+        config?.url === 'https://api.githubcopilot.com/mcp/' &&
+        config?.oauth != null && typeof config.oauth === 'object';
+    }
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
       items: listCatalog(settings.plugins.catalogHidden),
-      // Boolean-only operator-readiness hint. Never leak OAuth app keys.
-      managed: {
-        github: settings.plugins.githubOAuthEnabled === true &&
-          settings.plugins.githubOAuthConfigured === true,
-      },
+      managed: { github: managedGithub },
     });
   } catch (error) {
     logger.error('[mcp-store] Failed to load catalogue', { type: error?.name });

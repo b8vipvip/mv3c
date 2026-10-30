@@ -10,7 +10,14 @@
 - Linear 只读（https://mcp.linear.app/mcp/readonly）
 - DeepWiki（https://mcp.deepwiki.com/mcp）
 
-“添加插件”**并不会自动授权或连接**，而是打开预填了公开信息的原始 MCPServerDialog。使用者要自行确认服务器地址、信任、凭证和 OAuth 连接。创建、权限检查、撤销、删除和工具发现与旧 MCP 通道一致。未授予 MCPSERVER.CREATE 时按钮不可用。
+插件目录和 MCP 端点由服务端/管理员统一配置。GitHub 商城卡片仅在管理员设置了
+GitHub OAuth App、真实 HTTPS 站点回调地址，并成功发布官方配置来源的 MCP 服务器后
+显示「连接 GitHub」。普通用户不需要 MCPServerDialog、创建权限、PAT、MCP 地址、
+Client ID 或 Client Secret；点击按钮后只需在 GitHub 完成自己账号的授权同意。
+授权和执行仍经原有 MCP 引擎，**不能把商城上架误判为用户已连接**。
+
+若历史用户级连接与管理员的 `github` 同名，商城必须拒绝将其识别为托管插件。
+Gitee 等尚未完成管理员 OAuth 接入的服务不应向普通用户展示 PAT 自助连接按钮。
 
 ## 对话调用
 
@@ -46,8 +53,10 @@
 
 ## 最低验收流程
 
-1. 无 MCP 创建权限用户打开商店：只能查看，不能安装。
-2. 管理员添加 DeepWiki，确认真实 URL，查看已安装列表并连接。切换聊天 `+` 或 `@` 条目，确认所选工具进入 ephemeral agent。
+1. 不具备 MCP 创建权限的普通用户打开商店：GitHub 由管理员配置，
+   用户只点击「连接 GitHub」，不得看到 PAT/服务器地址/客户端密钥输入框。
+2. 管理员未配置 OAuth、未保存公开 HTTPS 回调地址或存在同名用户级 MCP 时，
+   GitHub 不得被标记为可一键连接；配置完毕后核对 `+`/`@` 工具入口。
 3. OAuth 服务必须在服务商授权后才进入已连接状态；撤销后不能继续调用。
 4. 在管理员后台点击工具协议检查，检查第一步及结果回传分别是否通过（可能因 chat2api/Worker 版本不兼容而失败）。
 5. 为有副作用的工具配置人工批准，测试拒绝、批准、异常、超时、审计日志。

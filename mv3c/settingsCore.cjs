@@ -19,6 +19,7 @@ const DEFAULT_GUEST = Object.freeze({ enabled: true, tokenLimit: 100000 });
 const DEFAULT_PLUGINS = Object.freeze({
   appsEnabled: false, sandboxURL: '', catalogHidden: [],
   githubOAuthEnabled: false, githubOAuthClientId: '', githubOAuthConfigured: false,
+  githubOAuthReady: false,
 });
 const MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/+-]{0,127}$/;
 
@@ -232,6 +233,16 @@ function publicSettings(doc, userCount = 1) {
       githubOAuthConfigured: Boolean(
         doc?.plugins?.githubOAuthClientId && doc?.plugins?.githubOAuthClientSecretCipher
       ),
+      // A configured OAuth app is not usable until a stable HTTPS callback
+      // origin has been established by the operator. Do not infer from
+      // untrusted Host / Forwarded request headers or browser window.origin.
+      githubOAuthReady: Boolean(
+        doc?.plugins?.githubOAuthEnabled === true &&
+        doc?.plugins?.githubOAuthClientId &&
+        doc?.plugins?.githubOAuthClientSecretCipher &&
+        typeof site.publicUrl === 'string' &&
+        /^https:\/\/[^/?#]+$/.test(site.publicUrl)
+      ),
     },
     chat2api: {
       enabled: provider.enabled,
@@ -273,7 +284,7 @@ function runtimeConfig(doc, keyHex) {
   // The operator configures one GitHub OAuth application for the whole
   // deployment. Each MV3C user then grants their own identity/scopes through
   // the *existing* per-user MCP OAuth flow; no shared PAT or proxy execution.
-  if (plugins.githubOAuthEnabled && plugins.githubOAuthConfigured) {
+  if (plugins.githubOAuthReady) {
     const clientSecret = decryptSecret(doc.plugins.githubOAuthClientSecretCipher, keyHex);
     // AppService converts the supported mcpServers YAML field into its
     // internal appConfig.mcpConfig used by the existing MCP registry.
@@ -293,9 +304,7 @@ function runtimeConfig(doc, keyHex) {
           token_exchange_method: 'default_post',
           token_endpoint_auth_methods_supported: ['client_secret_post'],
           code_challenge_methods_supported: ['S256'],
-          ...(site.publicUrl ? {
-            redirect_uri: site.publicUrl + '/api/mcp/github/oauth/callback',
-          } : {}),
+          redirect_uri: site.publicUrl + '/api/mcp/github/oauth/callback',
           scope: 'read:user repo',
         },
       },

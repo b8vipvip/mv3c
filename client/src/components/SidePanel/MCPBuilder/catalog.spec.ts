@@ -1,4 +1,4 @@
-import { filterPluginCatalog, findInstalledPreset } from './catalog';
+import { filterPluginCatalog, findInstalledPreset, findConfiguredPluginServer } from './catalog';
 import type { PluginPreset } from './catalog';
 
 // Search/filter fixtures only. The actual catalogue is owned by the server.
@@ -36,5 +36,40 @@ describe('mv3c plugin marketplace catalog', () => {
     const preset = pluginCatalog[0];
     expect(findInstalledPreset(preset, [{ config: { url: preset.url.slice(0, -1) } }])).toBe(true);
     expect(findInstalledPreset(preset, [{ config: { url: 'https://other.example/mcp' } }])).toBe(false);
+  });
+});
+
+describe('operator managed GitHub OAuth binding', () => {
+  const preset = pluginCatalog[0];
+  const oauthServer = {
+    serverName: 'github',
+    config: { url: preset.url, source: 'config', oauth: { client_id: 'server-provisioned' } },
+  };
+  const impostor = {
+    serverName: 'user-personal-pat',
+    config: { url: preset.url, apiKey: { source: 'user' } },
+  };
+
+  it('requires the server-side readiness flag, fixed name and OAuth config', () => {
+    expect(findConfiguredPluginServer(preset, [oauthServer], false)).toBeUndefined();
+    expect(findConfiguredPluginServer(preset, [impostor], true)).toBeUndefined();
+    expect(findConfiguredPluginServer(preset, [{
+      serverName: 'github', config: {
+        source: 'user', url: preset.url, oauth: { client_id: 'attacker-app' },
+      },
+    }], true)).toBeUndefined();
+    expect(findConfiguredPluginServer(preset, [{
+      serverName: 'github', config: { url: preset.url, apiKey: { source: 'user' } },
+    }], true)).toBeUndefined();
+    expect(findConfiguredPluginServer(preset, [impostor, oauthServer], true)).toEqual(oauthServer);
+  });
+
+  it('does not advertise a PAT-only preset as an account-connect flow', () => {
+    const gitee: PluginPreset = {
+      ...preset, id: 'gitee', auth: 'token',
+    };
+    expect(findConfiguredPluginServer(gitee, [{
+      serverName: 'gitee', config: { url: gitee.url, apiKey: { source: 'user' } },
+    }], true)).toBeUndefined();
   });
 });

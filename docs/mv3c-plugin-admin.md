@@ -45,12 +45,14 @@
 
 管理员在「插件管理 → GitHub 统一账号授权」中：
 
-1. 从 [GitHub OAuth Apps](https://github.com/settings/developers) 创建**本站专属** OAuth App；
-2. 配置回调 URL：`https://chat.mv3.cn/api/mcp/github/oauth/callback`（以实际部署域名为准）；
-3. 在管理员后台设置 Client ID、Client Secret，并启用 GitHub OAuth；
-4. 保存后，统一的 GitHub MCP URL `https://api.githubcopilot.com/mcp/`、
+1. 先在后台「站点与注册」保存网站公开 HTTPS 地址，如 `https://chat.mv3.cn`。
+   若未配置公开 HTTPS Origin，GitHub 托管连接将保持不可用（fail closed）。
+2. 从 [GitHub OAuth Apps](https://github.com/settings/developers) 创建**本站专属** OAuth App；
+3. 配置回调 URL：`https://chat.mv3.cn/api/mcp/github/oauth/callback`（必须与保存的站点公开域名一致；不依据浏览器 Host 猜测）；
+4. 在管理员后台设置 Client ID、Client Secret，并启用 GitHub OAuth；
+5. 保存后，统一的 GitHub MCP URL `https://api.githubcopilot.com/mcp/`、
    OAuth 授权端点和令牌交换端点由服务端自动配置；
-5. Client Secret 通过现有 AES-256-GCM 密钥加密存储。公共设置、商店目录、
+6. Client Secret 通过现有 AES-256-GCM 密钥加密存储。公共设置、商店目录、
    普通用户页面、审计记录均不返回明文或加密后的密钥。
 
 用户只需在「插件 → 发现插件」点击「连接 GitHub」，由 GitHub 自身
@@ -65,6 +67,9 @@
   是否同意；写操作仍应遵循原有工具批准与审计规则。
 - GitHub OAuth 应用必须由管理员自行创建。没有真实 Client ID 和 Secret
   时不能伪造一键登录；未启用时用户端显示「等待管理员启用」。
+- 商城中「连接 GitHub」只有在真实 MCP 配置的来源为管理员 config 层、
+  官方服务器 URL/名称匹配且 OAuth 实际启用时才允许出现；名称相同、
+  URL 相同的历史用户级 PAT/OAuth 服务器均不能冒充托管插件。
 - Github Enterprise、自定义授权服务、跨租户策略需要单独适配。
 - 自动连接成功必须以**实际 GitHub OAuth 回调、MCP 工具发现及一次
   用户授权下的真实调用**验收；本地单元测试不能证明外部授权已完成。

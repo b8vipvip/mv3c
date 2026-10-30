@@ -3,7 +3,7 @@ import { Button } from '@librechat/client';
 import { ExternalLink, PlugZap, CheckCircle2, Search } from 'lucide-react';
 import type { MCPServerDefinition } from '~/hooks';
 import { useAuthContext } from '~/hooks';
-import { filterPluginCatalog } from './catalog';
+import { filterPluginCatalog, findConfiguredPluginServer } from './catalog';
 import type { PluginPreset } from './catalog';
 
 interface PluginDiscoveryProps {
@@ -98,13 +98,8 @@ export default function PluginDiscovery({
       )}
       <div className="grid gap-2">
         {items.map((preset) => {
-          const configuredServer = servers.find((server) =>
-            // The managed GitHub connector has a reserved operator-owned name.
-            // A user-created MCP server with the same URL must not impersonate it.
-            (preset.id !== 'github' ||
-              (managedGithubEnabled && server.serverName === 'github')) &&
-            'url' in server.config &&
-            server.config.url?.replace(/\/+$/, '') === preset.url.replace(/\/+$/, ''),
+          const configuredServer = findConfiguredPluginServer(
+            preset, servers, managedGithubEnabled,
           );
           const isConnected = configuredServer ? connected(configuredServer.serverName) : false;
           return (
@@ -147,7 +142,8 @@ export default function PluginDiscovery({
                   </Button>
                 ) : (
                   <span className="text-text-secondary text-xs">
-                    {preset.id === 'github' ? '等待管理员启用 GitHub OAuth' : '管理员尚未配置'}
+                    {preset.id === 'github' ? '等待管理员完成 GitHub OAuth 配置' :
+                      preset.auth === 'token' ? '等待管理员提供账号授权方式' : '管理员尚未配置'}
                   </span>
                 )}
               </div>
