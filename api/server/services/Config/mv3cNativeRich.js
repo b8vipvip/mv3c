@@ -10,8 +10,12 @@ function collection() {
 }
 async function ensureIndex() {
   if (!indexReady) {
-    indexReady = collection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })
-      .catch(() => { indexReady = undefined; });
+    indexReady = Promise.all([
+      collection().createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      collection().createIndex(
+        { user: 1, conversationId: 1, messageId: 1 }, { unique: true },
+      ),
+    ]).catch(() => { indexReady = undefined; });
   }
   return indexReady;
 }
