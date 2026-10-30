@@ -50,6 +50,24 @@ describe('Image', () => {
     jest.clearAllMocks();
   });
 
+  describe('native layout (chat2api snapshot)', () => {
+    it('does not force the legacy fixed 144x176px gallery tile', () => {
+      render(<Image {...defaultProps} compactGallery nativeLayout />);
+      const button = screen.getByRole('button');
+      const img = screen.getByRole('img');
+      expect(button.className).toContain('w-full');
+      expect(button.className).not.toContain('h-44');
+      expect(button.className).not.toContain('w-36');
+      expect(img.className).toContain('h-auto');
+      expect(img.className).toContain('object-contain');
+    });
+    it('respects native image cover fit without changing ordinary gallery mode', () => {
+      render(<Image {...defaultProps} nativeLayout nativeObjectFit="cover" />);
+      expect(screen.getByRole('img').className).toContain('object-cover');
+      expect(screen.getByRole('button').className).not.toContain('w-36');
+    });
+  });
+
   describe('rendering without dimensions', () => {
     it('renders with max-h-[45vh] height constraint', () => {
       render(<Image {...defaultProps} />);

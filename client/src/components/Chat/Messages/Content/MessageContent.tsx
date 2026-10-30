@@ -108,7 +108,10 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
   const liveNative = useNativeRichMessage(
     message?.conversationId, message?.messageId,
     isSubmitting && isLatestMessage,
-    !isCreatedByUser && message?.endpoint === 'chat2api',
+    // Normal ephemeral agents carry endpoint='agents' even when their model
+    // transport is the managed chat2api endpoint. The server-side owner check
+    // and binding still prevent non-chat2api messages from exposing content.
+    !isCreatedByUser && (message?.endpoint === 'chat2api' || message?.endpoint === 'agents'),
   );
   // This field must be provided by a trusted server-side per-user binding.
   // Never fetch the upstream sidecar from the browser with a site-wide API Key.
