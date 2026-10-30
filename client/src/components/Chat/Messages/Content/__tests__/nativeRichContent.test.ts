@@ -1,4 +1,4 @@
-import { isOwnedAsset, isOwnedGeneratedFile, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage } from '../nativeRichContent';
+import { isOwnedAsset, isOwnedGeneratedFile, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage, nativeMessageScopeKey, canRetryNativePendingFile } from '../nativeRichContent';
 
 const asset='https://chat2api.example.com/api/media/med_123456789/secretABC12345678';
 const input = {
@@ -173,5 +173,43 @@ describe('post-terminal verified file archive state', () => {
     const canonical = '[📎 report.zip](' + url + ')';
     expect(hasUnrepresentedNativeLinks(canonical, doc)).toBe(false);
     expect(hasUnrepresentedNativeLinks(canonical + ' https://other.example.com/unsafe', doc)).toBe(true);
+  });
+});
+
+describe('message-scoped native readiness lifecycle', () => {
+  const pendingURL = 'https://files.example.com/api/generated-files/pending/pgen_' +
+    'd'.repeat(32) + '/' + 'E'.repeat(24);
+  const pending = { filename: 'scene.zip', url: pendingURL, bytes: 100, status: 'processing' as const };
+  const ready = { ...pending, status: 'ready' as const };
+  const failed = { ...pending, status: 'failed' as const };
+
+  it('never uses a different conversation, message or login snapshot', () => {
+    const original = nativeMessageScopeKey('token-A', 'chat-1', 'message-1');
+    expect(nativeMessageScopeKey('token-A', 'chat-1', 'message-1')).toBe(original);
+    expect(nativeMessageScopeKey('token-A', 'chat-2', 'message-1')).not.toBe(original);
+    expect(nativeMessageScopeKey('token-A', 'chat-1', 'message-2')).not.toBe(original);
+    expect(nativeMessageScopeKey('token-B', 'chat-1', 'message-1')).not.toBe(original);
+  });
+
+  it('starts its 8-minute budget when the first file actually becomes pending', () => {
+    const requestStart = 100000;
+    const firstFile = requestStart + 14 * 60 * 1000;
+    expect(canRetryNativePendingFile(null, requestStart)).toBe(false);
+    expect(canRetryNativePendingFile(firstFile, firstFile + 1)).toBe(true);
+    expect(canRetryNativePendingFile(firstFile, firstFile + 7 * 60 * 1000)).toBe(true);
+    expect(canRetryNativePendingFile(firstFile, firstFile + 8 * 60 * 1000)).toBe(false);
+    expect(canRetryNativePendingFile(firstFile, firstFile - 1)).toBe(false);
+  });
+
+  it('never allows older same-revision GET to hide later verified ready/failed files', () => {
+    const running = validateNativeContent({ ...input, files: [pending] })!;
+    const settled = validateNativeContent({ ...input, files: [ready] })!;
+    const failedDoc = validateNativeContent({ ...input, files: [failed] })!;
+    expect(shouldApplyNativeSnapshot(running, settled)).toBe(true);
+    expect(shouldApplyNativeSnapshot(running, failedDoc)).toBe(true);
+    expect(shouldApplyNativeSnapshot(settled, running)).toBe(false);
+    expect(shouldApplyNativeSnapshot(failedDoc, running)).toBe(false);
+    expect(shouldApplyNativeSnapshot(settled, { ...running, files: [] })).toBe(false);
+    expect(shouldApplyNativeSnapshot(settled, { ...running, assets: [] })).toBe(false);
   });
 });
