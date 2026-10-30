@@ -118,3 +118,33 @@ export function hasUnrepresentedNativeLinks(text: string): boolean {
   return markdownLink.test(text) ||
     /(?:https?:\/\/[^\s<>)]{1,2048}|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,})/.test(withoutImages);
 }
+
+
+/**
+ * The native sidecar is presentational, not a replacement authority. Older
+ * Workers may produce schema-valid partial layouts after hitting the v1
+ * node/character budget. A substantially longer canonical answer wins.
+ * Markdown table punctuation, math syntax and code fences explain some
+ * length differences, so use a conservative threshold.
+ */
+export function hasNativeTextCoverage(data: unknown, canonical: string): boolean {
+  if (!canonical || canonical.length < 700) return true;
+  const doc = validateNativeContent(data);
+  if (!doc) return false;
+  const canonicalText = canonical
+    .replace(/!\[[^\]\n]{0,256}\]\([^)\n]{1,2048}\)/g, '')
+    .replace(/\[([^\]\n]{1,256})\]\([^)\n]{1,2048}\)/g, '$1')
+    .replace(/[#*_~>|\\{}[\]]/g, ' ')
+    .replace(/\x60/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (canonicalText.length < 600) return true;
+  let nativeText = '';
+  const visit = (node: NativeNode): void => {
+    if (node.text) nativeText += node.text + ' ';
+    node.children?.forEach(visit);
+  };
+  visit(doc.root);
+  const renderedLength = nativeText.replace(/\s+/g, ' ').trim().length;
+  return renderedLength >= canonicalText.length * 0.65;
+}
