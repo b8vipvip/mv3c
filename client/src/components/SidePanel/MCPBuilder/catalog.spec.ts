@@ -43,7 +43,7 @@ describe('operator managed GitHub OAuth binding', () => {
   const preset = pluginCatalog[0];
   const oauthServer = {
     serverName: 'github',
-    config: { url: preset.url, oauth: { client_id: 'server-provisioned' } },
+    config: { url: preset.url, source: 'config', oauth: { client_id: 'server-provisioned' } },
   };
   const impostor = {
     serverName: 'user-personal-pat',
@@ -53,6 +53,11 @@ describe('operator managed GitHub OAuth binding', () => {
   it('requires the server-side readiness flag, fixed name and OAuth config', () => {
     expect(findConfiguredPluginServer(preset, [oauthServer], false)).toBeUndefined();
     expect(findConfiguredPluginServer(preset, [impostor], true)).toBeUndefined();
+    expect(findConfiguredPluginServer(preset, [{
+      serverName: 'github', config: {
+        source: 'user', url: preset.url, oauth: { client_id: 'attacker-app' },
+      },
+    }], true)).toBeUndefined();
     expect(findConfiguredPluginServer(preset, [{
       serverName: 'github', config: { url: preset.url, apiKey: { source: 'user' } },
     }], true)).toBeUndefined();
