@@ -85,3 +85,15 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
     version: 1, revision: doc.revision, root, assets: doc.assets as string[],
   } : null;
 }
+
+/** Archive readiness may change after the last DOM revision. A same-revision
+ * verified asset update is observable without accepting stale content. */
+export function shouldApplyNativeSnapshot(
+  previous: NativeDocument | null,
+  next: NativeDocument,
+): boolean {
+  if (!previous) return true;
+  if (next.revision !== previous.revision) return next.revision > previous.revision;
+  if (next.assets.length !== previous.assets.length) return true;
+  return next.assets.some((asset, index) => asset !== previous.assets[index]);
+}
