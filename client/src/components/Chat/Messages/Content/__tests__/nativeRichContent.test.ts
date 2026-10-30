@@ -27,6 +27,18 @@ describe('safe native ChatGPT rich renderer contract',()=>{
  });
 });
 
+describe('large but bounded native layout', () => {
+  it('accepts 720 individually accounted safe nodes and rejects truncation above 1200', () => {
+    const sections = Array.from({ length: 12 }, (_, group) => ({ tag: 'div',
+      children: Array.from({ length: 60 }, (_, i) => ({ tag: 'p', text: `paragraph ${group}-${i}` })) }));
+    const rich = { version: 1, revision: 20, assets: [],
+      root: { tag: 'div', children: sections } };
+    expect(validateNativeContent(rich)).not.toBeNull();
+    const overBudget = { ...rich, root: { tag: 'div', children: [...sections, ...sections] } };
+    expect(validateNativeContent(overBudget)).toBeNull();
+  });
+});
+
 describe('native snapshot readiness after latest DOM revision', () => {
   it('updates assets without asking the Worker for a new DOM version', () => {
     const prev = validateNativeContent(input);
