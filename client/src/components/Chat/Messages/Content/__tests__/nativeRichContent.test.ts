@@ -144,3 +144,34 @@ describe('verified native file cards preserve canonical download targets', () =>
     expect(shouldApplyNativeSnapshot(ready, ready as NonNullable<typeof ready>)).toBe(false);
   });
 });
+
+describe('post-terminal verified file archive state', () => {
+  const url = 'https://files.example.com/api/generated-files/pending/pgen_' +
+    'b'.repeat(32) + '/' + 'C'.repeat(24);
+  const file = { filename: 'report.zip', url, bytes: 4096 };
+  it('accepts strict processing, ready and failed states, and rejects arbitrary status', () => {
+    for (const status of ['processing', 'ready', 'failed']) {
+      const value = validateNativeContent({ ...input, files: [{ ...file, status }] });
+      expect(value?.files?.[0].status).toBe(status);
+    }
+    expect(validateNativeContent({ ...input,
+      files: [{ ...file, status: 'uploaded' }] })).toBeNull();
+  });
+  it('replaces a same-revision snapshot as the durable archive settles', () => {
+    const processing = validateNativeContent({ ...input,
+      files: [{ ...file, status: 'processing' }] });
+    const ready = validateNativeContent({ ...input,
+      files: [{ ...file, status: 'ready' }] });
+    const failed = validateNativeContent({ ...input,
+      files: [{ ...file, status: 'failed' }] });
+    expect(shouldApplyNativeSnapshot(processing, ready!)).toBe(true);
+    expect(shouldApplyNativeSnapshot(processing, failed!)).toBe(true);
+    expect(shouldApplyNativeSnapshot(ready, ready!)).toBe(false);
+  });
+  it('never requires trusting an unrepresented external file link', () => {
+    const doc = { ...input, files: [{ ...file, status: 'ready' }] };
+    const canonical = '[📎 report.zip](' + url + ')';
+    expect(hasUnrepresentedNativeLinks(canonical, doc)).toBe(false);
+    expect(hasUnrepresentedNativeLinks(canonical + ' https://other.example.com/unsafe', doc)).toBe(true);
+  });
+});

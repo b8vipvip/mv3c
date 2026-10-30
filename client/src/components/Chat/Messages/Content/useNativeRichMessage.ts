@@ -32,7 +32,23 @@ export default function useNativeRichMessage(
     let finished = false;
     let stream: SSE | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let fileRetry: ReturnType<typeof setTimeout> | undefined;
+    let fileAttempts = 0;
+    let hasProcessingFile = false;
     let attempts = 0;
+    // The OpenAI request can be terminal long before an async file reaches
+    // the durable archive. Poll *only* while this mounted message contains a
+    // processing file, with an absolute bound so historical pages do not
+    // create unbounded background requests.
+    const fileRetryDeadline = Date.now() + 8 * 60 * 1000;
+    const scheduleFileRead = () => {
+      if (disposed || !hasProcessingFile || fileRetry || Date.now() >= fileRetryDeadline) return;
+      const delay = Math.min(15000, Math.round(2500 * Math.pow(1.4, Math.min(6, fileAttempts++))));
+      fileRetry = setTimeout(() => {
+        fileRetry = undefined;
+        if (!disposed) void read();
+      }, delay);
+    };
     // Worker admission, long-form generation and media archival can exceed
     // two minutes. Only an active turn retries; never run background polling.
     const retryDeadline = Date.now() + 16 * 60 * 1000;
@@ -40,13 +56,24 @@ export default function useNativeRichMessage(
       const safe = validateNativeContent(payload);
       if (!safe || disposed) return;
       setResult(previous => shouldApplyNativeSnapshot(previous, safe) ? safe : previous);
+      hasProcessingFile = safe.files?.some(file => file.status === 'processing') === true;
+      if (hasProcessingFile) {
+        scheduleFileRead();
+      } else if (fileRetry) {
+        clearTimeout(fileRetry);
+        fileRetry = undefined;
+        fileAttempts = 0;
+      }
       attempts = 0;
     };
     const read = async () => {
       try {
         const response = await fetch(url, { headers, cache: 'no-store', redirect: 'error' });
         if (!disposed && response.ok) accept(await response.json());
-      } catch { /* a missing optional sidecar never replaces Markdown */ }
+      } catch {
+        // A single failed poll must not leave a processing card frozen.
+        if (hasProcessingFile) scheduleFileRead();
+      }
     };
     void read();
     if (!active) return () => { disposed = true; };
@@ -80,6 +107,7 @@ export default function useNativeRichMessage(
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
+      if (fileRetry) clearTimeout(fileRetry);
       stream?.close();
     };
   }, [conversationId, messageId, active, enabled, isAuthenticated, token]);
