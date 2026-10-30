@@ -15,6 +15,7 @@ import Thinking from './Parts/Thinking';
 import { useLocalize } from '~/hooks';
 import Container from './Container';
 import Markdown from './Markdown';
+import NativeRichContent from './NativeRichContent';
 import { isInternalMediaHandoff } from './internalMediaHandoff';
 import { cn } from '~/utils';
 
@@ -103,15 +104,27 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
     [showCursor, isSubmitting, smoothStreaming, isCreatedByUser],
   );
 
+  // This field must be provided by a trusted server-side per-user binding.
+  // Never fetch the upstream sidecar from the browser with a site-wide API Key.
+  const nativeRich = (message as (typeof message & {
+    nativeContent?: unknown; metadata?: { nativeContent?: unknown };
+  }) | undefined)?.nativeContent ??
+    (message as (typeof message & {
+      metadata?: { nativeContent?: unknown };
+    }) | undefined)?.metadata?.nativeContent;
+
   const content = useMemo(() => {
     if (!isCreatedByUser) {
-      return <Markdown content={text} isLatestMessage={isLatestMessage} />;
+      const markdown = <Markdown content={text} isLatestMessage={isLatestMessage} />;
+      return nativeRich != null
+        ? <NativeRichContent data={nativeRich} fallback={markdown} />
+        : markdown;
     }
     if (enableUserMsgMarkdown) {
       return <MarkdownLite content={text} />;
     }
     return <>{text}</>;
-  }, [isCreatedByUser, enableUserMsgMarkdown, text, isLatestMessage]);
+  }, [isCreatedByUser, enableUserMsgMarkdown, text, isLatestMessage, nativeRich]);
 
   if (!isCreatedByUser && isInternalMediaHandoff(text)) {
     return (
