@@ -25,7 +25,7 @@ export default function useNativeRichMessage(
   // React may reuse a message component when the conversation or account
   // changes. Never render an old message's sidecar for the new identity even
   // for the single render before useEffect cleanup executes.
-  const scope = nativeMessageScopeKey(token, conversationId, messageId);
+  const scope = nativeMessageScopeKey(token ?? undefined, conversationId, messageId);
   const [result, setResult] = useState<{ scope: string; value: NativeDocument } | null>(null);
 
   useEffect(() => {
