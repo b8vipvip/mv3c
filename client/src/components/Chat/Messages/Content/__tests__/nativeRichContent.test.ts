@@ -1,4 +1,4 @@
-import { isOwnedAsset, validateNativeContent } from '../nativeRichContent';
+import { isOwnedAsset, validateNativeContent, shouldApplyNativeSnapshot } from '../nativeRichContent';
 
 const asset='https://chat2api.example.com/api/media/med_123456789/secretABC12345678';
 const input = {
@@ -25,4 +25,18 @@ describe('safe native ChatGPT rich renderer contract',()=>{
   expect(validateNativeContent({...input,assets:['https://evil.com/abc.png']})).toBeNull();
   expect(validateNativeContent({...input,assets:[asset,asset]})).toBeNull();
  });
+});
+
+describe('native snapshot readiness after latest DOM revision', () => {
+  it('updates assets without asking the Worker for a new DOM version', () => {
+    const prev = validateNativeContent(input);
+    expect(prev).not.toBeNull();
+    const next = { ...(prev as NonNullable<typeof prev>), assets: [
+      'https://chat2api.example.com/api/media/med_987654321/readyTOKEN12345678',
+    ] };
+    expect(shouldApplyNativeSnapshot(prev, next)).toBe(true);
+    expect(shouldApplyNativeSnapshot(next, next)).toBe(false);
+    expect(shouldApplyNativeSnapshot(next, { ...next, revision: 1 })).toBe(false);
+    expect(shouldApplyNativeSnapshot(null, next)).toBe(true);
+  });
 });

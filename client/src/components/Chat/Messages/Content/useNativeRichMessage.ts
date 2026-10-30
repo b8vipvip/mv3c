@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { SSE } from 'sse.js';
 import { apiBaseUrl } from 'librechat-data-provider';
 import { useOptionalAuthContext } from '~/hooks/AuthContext';
-import { validateNativeContent } from './nativeRichContent';
+import { validateNativeContent, shouldApplyNativeSnapshot } from './nativeRichContent';
 import type { NativeDocument } from './nativeRichContent';
 
 /**
@@ -33,10 +33,14 @@ export default function useNativeRichMessage(
     let stream: SSE | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
+    // Worker admission, long-form generation and media archival can exceed
+    // two minutes. Only an active turn retries; never run background polling.
+    const retryDeadline = Date.now() + 16 * 60 * 1000;
     const accept = (payload: unknown) => {
       const safe = validateNativeContent(payload);
       if (!safe || disposed) return;
-      setResult(previous => previous && previous.revision >= safe.revision ? previous : safe);
+      setResult(previous => shouldApplyNativeSnapshot(previous, safe) ? safe : previous);
+      attempts = 0;
     };
     const read = async () => {
       try {
@@ -65,8 +69,9 @@ export default function useNativeRichMessage(
         if (stream === next) stream = undefined;
         // The provider metadata binding might not exist until its first
         // authenticated model response. Retry only during an active turn.
-        if (!disposed && !finished && attempts++ < 60) {
-          retry = setTimeout(connect, 2000);
+        if (!disposed && !finished && Date.now() < retryDeadline) {
+          const intervalMs = Math.min(15000, Math.round(2000 * Math.pow(1.4, attempts++)));
+          retry = setTimeout(connect, intervalMs);
         }
       });
       next.stream();
