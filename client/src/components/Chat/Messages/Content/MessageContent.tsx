@@ -1,4 +1,5 @@
 import { memo, Suspense, useMemo } from 'react';
+import useNativeRenderDiagnostics from './useNativeRenderDiagnostics';
 import { Alert, DelayedRender } from '@librechat/client';
 import { EmptyText, CollapsibleText } from '@librechat/chat/components';
 import { Constants, parseThinkingContent } from 'librechat-data-provider';
@@ -16,7 +17,7 @@ import { useLocalize } from '~/hooks';
 import Container from './Container';
 import Markdown from './Markdown';
 import NativeRichContent from './NativeRichContent';
-import { hasNativeTextCoverage, hasUnrepresentedNativeLinks } from './nativeRichContent';
+import { validateNativeContent, hasNativeTextCoverage, hasUnrepresentedNativeLinks } from './nativeRichContent';
 import useNativeRichMessage from './useNativeRichMessage';
 import { isInternalMediaHandoff } from './internalMediaHandoff';
 import { cn } from '~/utils';
@@ -123,13 +124,33 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
       metadata?: { nativeContent?: unknown };
     }) | undefined)?.metadata?.nativeContent;
 
+  const nativeDecision = useMemo(() => {
+    if (nativeRich == null) return { mode: 'markdown', reason: 'missing_sidecar' };
+    if (!validateNativeContent(nativeRich)) return { mode: 'markdown', reason: 'invalid_schema' };
+    if (hasUnrepresentedNativeLinks(text, nativeRich))
+      return { mode: 'markdown', reason: 'unrepresented_links' };
+    if (!hasNativeTextCoverage(nativeRich, text))
+      return { mode: 'markdown', reason: 'text_coverage' };
+    return { mode: 'native', reason: 'native_rendered' };
+  }, [nativeRich, text]);
+  const nativeDiagnosticRef = useNativeRenderDiagnostics({
+    conversationId: message?.conversationId,
+    messageId: message?.messageId,
+    enabled: !isCreatedByUser && !isSubmitting &&
+      (message?.endpoint === 'chat2api' || message?.endpoint === 'agents'),
+    mode: nativeDecision.mode,
+    reason: nativeDecision.reason,
+    canonicalChars: text.length,
+    nativeAssets: validateNativeContent(nativeRich)?.assets.length ?? 0,
+    nativeFiles: validateNativeContent(nativeRich)?.files?.length ?? 0,
+    nativeRevision: validateNativeContent(nativeRich)?.revision ?? 0,
+  });
   const content = useMemo(() => {
     if (!isCreatedByUser) {
       const markdown = <Markdown content={text} isLatestMessage={isLatestMessage} />;
       // v1 does not carry link hrefs or generated-file download actions.
       // Keep the canonical Markdown whenever switching would hide them.
-      return nativeRich != null && !hasUnrepresentedNativeLinks(text, nativeRich)
-        && hasNativeTextCoverage(nativeRich, text)
+      return nativeDecision.mode === 'native'
         ? <NativeRichContent data={nativeRich} fallback={markdown} />
         : markdown;
     }
@@ -137,7 +158,7 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
       return <MarkdownLite content={text} />;
     }
     return <>{text}</>;
-  }, [isCreatedByUser, enableUserMsgMarkdown, text, isLatestMessage, nativeRich]);
+  }, [isCreatedByUser, enableUserMsgMarkdown, text, isLatestMessage, nativeRich, nativeDecision.mode]);
 
   if (!isCreatedByUser && isInternalMediaHandoff(text)) {
     return (
@@ -151,6 +172,7 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
     <Container message={message}>
       <CollapsibleText enabled={isCreatedByUser && collapseLongUserMessages}>
         <div
+          ref={nativeDiagnosticRef}
           className={cn(
             'markdown prose message-content light w-full break-words',
             isSubmitting && 'submitting',
