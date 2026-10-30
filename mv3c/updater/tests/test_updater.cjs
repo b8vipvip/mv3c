@@ -100,3 +100,19 @@ test('only explicit manual update jobs are admitted; no hidden automatic route',
     targetVersion: 'v0.1.47', reuseOnly: true,
   }), /Only administrator-initiated manual deployment/);
 });
+
+test('old and new host updater progress stages remain interoperable', () => {
+  const jobId = '448267d9-9ea0-436a-a52d-cdd82a392a3a';
+  for (const stage of ['checking', 'fetching', 'strategy', 'ci']) {
+    assert.deepEqual(updates.validateProgress({
+      jobId, stage, percent: stage === 'strategy' ? 23 : 16,
+      message: 'GPTAuto strategy and GitHub Release verification',
+    }), {
+      stage, percent: stage === 'strategy' ? 23 : 16,
+      message: 'GPTAuto strategy and GitHub Release verification',
+    });
+  }
+  assert.throws(() => updates.validateProgress({
+    jobId, stage: 'fake_deploy', percent: 23, message: 'untrusted',
+  }), /Invalid update progress/);
+});
