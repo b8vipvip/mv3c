@@ -1316,6 +1316,30 @@ def execute(repo: Path, *, recovery_version: str | None = None) -> None:
         target, label = target_for_channel(repo, "release", pinned_version)
         if not is_descendant(repo, old, target):
             raise UpdateError("Target commit is not a fast-forward descendant of deployed version")
+        # GPTAuto is the shared, read-only decision authority. mv3c's official
+        # Release image proof remains mandatory for *all* runtime deployments;
+        # source-only overlays would invalidate the immutable image attestation.
+        smart_cli = repo / ".github/gptauto/smart_update.py"
+        if smart_cli.is_file():
+            check = subprocess.run(
+                [sys.executable, str(smart_cli), "--repo", "mv3c",
+                 "--worktree", str(repo), "--from-sha", old,
+                 "--target-sha", target],
+                capture_output=True, text=True, timeout=35, check=False,
+            )
+            if check.returncode != 0:
+                raise UpdateError("GPTAuto smart strategy verification failed: " +
+                                  check.stdout[:240] + check.stderr[:180])
+            plan = json.loads(check.stdout)
+            if plan.get("target_sha") != target or plan.get("from_sha") != old:
+                raise UpdateError("GPTAuto plan is not bound to the selected Release SHA")
+            print("GPTAuto smart update mode=" + str(plan["mode"]) +
+                  "; mv3c production continues to require verified prebuilt Release image",
+                  flush=True)
+            progress("strategy", 23, "GPTAuto 已分析变更；验证官方预构建镜像来源")
+        else:
+            print("GPTAuto classifier is not yet installed; using proven official "
+                  "Release image-only deployment", flush=True)
         available = target != old
         progress("ci", 26, "校验 Git 发布记录中绑定 SHA 的两项 CI 证明", target_sha=target)
         good, reason = True, ""  # CI was verified by the fetched post-Release Git proof.
