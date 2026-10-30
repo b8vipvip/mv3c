@@ -1,7 +1,7 @@
 'use strict';
 const mongoose = require('mongoose');
 const { buildRuntimeConfig } = require('./mv3cSettings');
-const { saveProviderBinding, readBoundSnapshot, nativeEndpoint } = require('../../../../mv3c/nativeRichBridge.cjs');
+const { saveProviderBinding, readBoundSnapshot, nativeEndpoint, normalizeBoundNativeSnapshot } = require('../../../../mv3c/nativeRichBridge.cjs');
 const COLLECTION = 'mv3c_native_rich_bindings';
 let indexReady;
 function collection() {
@@ -60,4 +60,8 @@ async function upstreamNativeEvents({ user, conversationId, messageId }) {
     redirect: 'error', signal: AbortSignal.timeout(900000),
   });
 }
-module.exports = { recordModelNativeBinding, recordTransportNativeBinding, getNativeMessage, getNativeRequestId, upstreamNativeEvents };
+async function nativeSnapshotNormalizer() {
+  const config = await buildRuntimeConfig();
+  return payload => normalizeBoundNativeSnapshot(payload, config);
+}
+module.exports = { recordModelNativeBinding, recordTransportNativeBinding, getNativeMessage, getNativeRequestId, upstreamNativeEvents, nativeSnapshotNormalizer };

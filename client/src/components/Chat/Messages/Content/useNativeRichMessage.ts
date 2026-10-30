@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SSE } from 'sse.js';
 import { apiBaseUrl } from 'librechat-data-provider';
 import { useOptionalAuthContext } from '~/hooks/AuthContext';
 import {
   validateNativeContent, shouldApplyNativeSnapshot, nativeMessageScopeKey,
-  canRetryNativePendingFile,
+  canRetryNativePendingFile, canRetryPostTerminalNativeBinding,
 } from './nativeRichContent';
 import type { NativeDocument } from './nativeRichContent';
 
@@ -27,6 +27,7 @@ export default function useNativeRichMessage(
   // for the single render before useEffect cleanup executes.
   const scope = nativeMessageScopeKey(token ?? undefined, conversationId, messageId);
   const [result, setResult] = useState<{ scope: string; value: NativeDocument } | null>(null);
+  const recentlyActiveScope = useRef<string | null>(null);
 
   useEffect(() => {
     setResult(null);
@@ -43,6 +44,15 @@ export default function useNativeRichMessage(
     let fileAttempts = 0;
     let hasProcessingFile = false;
     let firstProcessingAt: number | null = null;
+    // A late provider binding may briefly 404 just after the last SSE frame.
+    // Retry only the one message that was active in this mounted component,
+    // never poll arbitrary historical chats.
+    const justFinished = !active && recentlyActiveScope.current === scope;
+    if (active) recentlyActiveScope.current = scope;
+    else if (justFinished) recentlyActiveScope.current = null;
+    const postFinishStartedAt = justFinished ? Date.now() : null;
+    let postFinishAttempts = 0;
+    let postFinishRetry: ReturnType<typeof setTimeout> | undefined;
     let latestSnapshot: NativeDocument | null = null;
     let attempts = 0;
     // The OpenAI request can be terminal long before an async file reaches
@@ -81,20 +91,34 @@ export default function useNativeRichMessage(
       }
       attempts = 0;
     };
+    const schedulePostFinishRead = () => {
+      if (disposed || active || postFinishRetry || latestSnapshot ||
+          !canRetryPostTerminalNativeBinding(postFinishStartedAt, Date.now(), postFinishAttempts)) return;
+      const delay = Math.min(12000, Math.round(1800 * Math.pow(1.55, postFinishAttempts++)));
+      postFinishRetry = setTimeout(() => {
+        postFinishRetry = undefined;
+        if (!disposed) void read();
+      }, delay);
+    };
     const read = async () => {
       try {
         const response = await fetch(url, { headers, cache: 'no-store', redirect: 'error' });
-        if (!disposed && response.ok) accept(await response.json());
-        else if (!disposed && hasProcessingFile) scheduleFileRead();
+        if (!disposed && response.ok) {
+          accept(await response.json());
+          if (!latestSnapshot) schedulePostFinishRead();
+        } else if (!disposed && hasProcessingFile) scheduleFileRead();
+        else if (!disposed && response.status === 404) schedulePostFinishRead();
       } catch {
         // A single failed poll must not leave a processing card frozen.
         if (hasProcessingFile) scheduleFileRead();
+        else schedulePostFinishRead();
       }
     };
     void read();
     if (!active) return () => {
       disposed = true;
       if (fileRetry) clearTimeout(fileRetry);
+      if (postFinishRetry) clearTimeout(postFinishRetry);
     };
     const connect = () => {
       if (disposed || finished) return;
@@ -127,6 +151,7 @@ export default function useNativeRichMessage(
       disposed = true;
       if (retry) clearTimeout(retry);
       if (fileRetry) clearTimeout(fileRetry);
+      if (postFinishRetry) clearTimeout(postFinishRetry);
       stream?.close();
     };
   }, [conversationId, messageId, active, enabled, isAuthenticated, token]);

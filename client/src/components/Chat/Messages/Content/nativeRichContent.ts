@@ -59,7 +59,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
   }
   let count = 0, total = 0, images = 0;
   const check = (input: unknown, depth: number): NativeNode | null => {
-    if (!input || typeof input !== 'object' || depth > 14 || ++count > 420) return null;
+    if (!input || typeof input !== 'object' || depth > 14 || ++count > 1200) return null;
     const n = input as Record<string, unknown>;
     if (typeof n.tag !== 'string' || !tags.has(n.tag) ||
         Object.keys(n).some(k => !['tag','text','children','style','media_index'].includes(k))) return null;
@@ -71,7 +71,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
       node.media_index = images++;
     } else if ('media_index' in n) return null;
     if ('text' in n) {
-      if (typeof n.text !== 'string' || (total += n.text.length) > 48000) return null;
+      if (typeof n.text !== 'string' || (total += n.text.length) > 96000) return null;
       node.text = n.text;
     }
     if (n.style != null) {
@@ -154,9 +154,12 @@ export function hasUnrepresentedNativeLinks(text: string, native?: unknown): boo
   const owned = validateNativeContent(native)?.files ?? [];
   const used = new Set<string>();
   const remaining = text.replace(
-    /\[📎 ([^\]\n]{1,180})\]\((https:\/\/[^\s)]+)\)/g,
+    /\[📎 ([^\]\n]{1,180})\]\((https?:\/\/[^\s)]+)\)/g,
     (match, label: string, url: string) => {
-      const file = owned.find(f => f.url === url &&
+      // The backend may safely promote an HTTP same-host archive URL to
+      // the provider's validated HTTPS origin; preserve the exact file match.
+      const file = owned.find(f => (f.url === url ||
+        (url.startsWith('http://') && f.url === 'https://' + url.slice(7))) &&
         f.filename.replace(/[\[\]]/g, '') === label);
       if (!file || used.has(url)) return match;
       used.add(url);
@@ -219,4 +222,15 @@ export function canRetryNativePendingFile(
 ): boolean {
   return firstProcessingAt !== null &&
     now >= firstProcessingAt && now - firstProcessingAt < 8 * 60 * 1000;
+}
+
+/** A request may be terminal before a delayed authenticated native binding is
+ * persisted. Retry a previously active message only for a hard 45s/7-poll
+ * window; historical messages never automatically retry a missing binding. */
+export function canRetryPostTerminalNativeBinding(
+  startedAt: number | null, now: number, attempts: number,
+): boolean {
+  return startedAt !== null && now >= startedAt &&
+    now - startedAt < 45_000 && Number.isInteger(attempts) &&
+    attempts >= 0 && attempts < 7;
 }

@@ -1,4 +1,4 @@
-import { isOwnedAsset, isOwnedGeneratedFile, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage, nativeMessageScopeKey, canRetryNativePendingFile } from '../nativeRichContent';
+import { isOwnedAsset, isOwnedGeneratedFile, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage, nativeMessageScopeKey, canRetryNativePendingFile, canRetryPostTerminalNativeBinding } from '../nativeRichContent';
 
 const asset='https://chat2api.example.com/api/media/med_123456789/secretABC12345678';
 const input = {
@@ -25,6 +25,18 @@ describe('safe native ChatGPT rich renderer contract',()=>{
   expect(validateNativeContent({...input,assets:['https://evil.com/abc.png']})).toBeNull();
   expect(validateNativeContent({...input,assets:[asset,asset]})).toBeNull();
  });
+});
+
+describe('large but bounded native layout', () => {
+  it('accepts 720 individually accounted safe nodes and rejects truncation above 1200', () => {
+    const sections = Array.from({ length: 12 }, (_, group) => ({ tag: 'div',
+      children: Array.from({ length: 60 }, (_, i) => ({ tag: 'p', text: `paragraph ${group}-${i}` })) }));
+    const rich = { version: 1, revision: 20, assets: [],
+      root: { tag: 'div', children: sections } };
+    expect(validateNativeContent(rich)).not.toBeNull();
+    const overBudget = { ...rich, root: { tag: 'div', children: [...sections, ...sections] } };
+    expect(validateNativeContent(overBudget)).toBeNull();
+  });
 });
 
 describe('native snapshot readiness after latest DOM revision', () => {
@@ -121,6 +133,11 @@ describe('verified native file cards preserve canonical download targets', () =>
     expect(hasUnrepresentedNativeLinks(canonical, rich)).toBe(false);
     expect(hasUnrepresentedNativeLinks(canonical, input)).toBe(true);
   });
+  it('keeps a verified same-host HTTP archive link represented by the HTTPS file card', () => {
+    const legacy = pending.replace('https://', 'http://');
+    expect(hasUnrepresentedNativeLinks('[📎 plan.xlsx](' + legacy + ')', rich)).toBe(false);
+    expect(hasUnrepresentedNativeLinks('[📎 plan.xlsx](http://evil.example.com/api/generated-files/unknown/token)', rich)).toBe(true);
+  });
   it('does not discard any ordinary external links or unrelated file references', () => {
     expect(hasUnrepresentedNativeLinks(canonical + ' [docs](https://example.com)', rich)).toBe(true);
     expect(hasUnrepresentedNativeLinks(canonical.replace('plan.xlsx', 'unmatched.xlsx'), rich)).toBe(true);
@@ -211,5 +228,15 @@ describe('message-scoped native readiness lifecycle', () => {
     expect(shouldApplyNativeSnapshot(failedDoc, running)).toBe(false);
     expect(shouldApplyNativeSnapshot(settled, { ...running, files: [] })).toBe(false);
     expect(shouldApplyNativeSnapshot(settled, { ...running, assets: [] })).toBe(false);
+  });
+});
+
+describe('bounded post-completion native binding recovery', () => {
+  it('never polls historical messages or after the short deterministic budget', () => {
+    expect(canRetryPostTerminalNativeBinding(null, 100, 0)).toBe(false);
+    expect(canRetryPostTerminalNativeBinding(100, 200, 0)).toBe(true);
+    expect(canRetryPostTerminalNativeBinding(100, 45100, 1)).toBe(false);
+    expect(canRetryPostTerminalNativeBinding(100, 201, 7)).toBe(false);
+    expect(canRetryPostTerminalNativeBinding(100, 99, 0)).toBe(false);
   });
 });
