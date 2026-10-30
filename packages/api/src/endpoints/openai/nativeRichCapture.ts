@@ -20,7 +20,12 @@ export function wrapChat2apiNativeFetch(
   const base = new URL(trustedBaseURL);
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const scope = scopes.getStore();
-    if (!scope || !init || init.method?.toUpperCase() !== 'POST') {
+    // The Fetch standard permits either fetch(url, { method: 'POST', ... })
+    // or fetch(new Request(url, { method: 'POST', ... })) with no second
+    // argument. The latter must retain the same native request correlation.
+    const originalRequest = input instanceof Request ? input : null;
+    const method = init?.method ?? originalRequest?.method;
+    if (!scope || method?.toUpperCase() !== 'POST') {
       return transport(input, init);
     }
     let url: URL;
@@ -34,8 +39,10 @@ export function wrapChat2apiNativeFetch(
       return transport(input, init);
     }
     const requestId = 'req_' + randomUUID().replace(/-/g, '');
-    const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
+    const headers = new Headers(init?.headers ?? originalRequest?.headers);
     headers.set('x-chat2api-request-id', requestId);
+    // For Request inputs, supplying only a header override preserves the
+    // original method, streamed body, signal, credentials and dispatcher.
     const response = await transport(input, { ...init, headers });
     // Response headers are only observed after the upstream accepts the exact
     // request. Binding is async/non-owning and never delays the body stream.
