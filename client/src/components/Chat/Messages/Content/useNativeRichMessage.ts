@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { SSE } from 'sse.js';
 import { apiBaseUrl } from 'librechat-data-provider';
 import { useOptionalAuthContext } from '~/hooks/AuthContext';
-import { validateNativeContent, shouldApplyNativeSnapshot } from './nativeRichContent';
+import {
+  validateNativeContent, shouldApplyNativeSnapshot, nativeMessageScopeKey,
+  canRetryNativePendingFile,
+} from './nativeRichContent';
 import type { NativeDocument } from './nativeRichContent';
 
 /**
@@ -19,7 +22,11 @@ export default function useNativeRichMessage(
   const auth = useOptionalAuthContext();
   const token = auth?.token;
   const isAuthenticated = auth?.isAuthenticated === true;
-  const [result, setResult] = useState<NativeDocument | null>(null);
+  // React may reuse a message component when the conversation or account
+  // changes. Never render an old message's sidecar for the new identity even
+  // for the single render before useEffect cleanup executes.
+  const scope = nativeMessageScopeKey(token ?? undefined, conversationId, messageId);
+  const [result, setResult] = useState<{ scope: string; value: NativeDocument } | null>(null);
 
   useEffect(() => {
     setResult(null);
@@ -35,14 +42,17 @@ export default function useNativeRichMessage(
     let fileRetry: ReturnType<typeof setTimeout> | undefined;
     let fileAttempts = 0;
     let hasProcessingFile = false;
+    let firstProcessingAt: number | null = null;
+    let latestSnapshot: NativeDocument | null = null;
     let attempts = 0;
     // The OpenAI request can be terminal long before an async file reaches
     // the durable archive. Poll *only* while this mounted message contains a
     // processing file, with an absolute bound so historical pages do not
     // create unbounded background requests.
-    const fileRetryDeadline = Date.now() + 8 * 60 * 1000;
     const scheduleFileRead = () => {
-      if (disposed || !hasProcessingFile || fileRetry || Date.now() >= fileRetryDeadline) return;
+      if (firstProcessingAt === null) firstProcessingAt = Date.now();
+      if (disposed || !hasProcessingFile || fileRetry ||
+          !canRetryNativePendingFile(firstProcessingAt, Date.now())) return;
       const delay = Math.min(15000, Math.round(2500 * Math.pow(1.4, Math.min(6, fileAttempts++))));
       fileRetry = setTimeout(() => {
         fileRetry = undefined;
@@ -55,7 +65,11 @@ export default function useNativeRichMessage(
     const accept = (payload: unknown) => {
       const safe = validateNativeContent(payload);
       if (!safe || disposed) return;
-      setResult(previous => shouldApplyNativeSnapshot(previous, safe) ? safe : previous);
+      // Do not allow a late initial GET or an out-of-order SSE frame to
+      // override a more recent same-revision ready/failed file state.
+      if (!shouldApplyNativeSnapshot(latestSnapshot, safe)) return;
+      latestSnapshot = safe;
+      setResult({ scope, value: safe });
       hasProcessingFile = safe.files?.some(file => file.status === 'processing') === true;
       if (hasProcessingFile) {
         scheduleFileRead();
@@ -63,6 +77,7 @@ export default function useNativeRichMessage(
         clearTimeout(fileRetry);
         fileRetry = undefined;
         fileAttempts = 0;
+        firstProcessingAt = null;
       }
       attempts = 0;
     };
@@ -70,13 +85,17 @@ export default function useNativeRichMessage(
       try {
         const response = await fetch(url, { headers, cache: 'no-store', redirect: 'error' });
         if (!disposed && response.ok) accept(await response.json());
+        else if (!disposed && hasProcessingFile) scheduleFileRead();
       } catch {
         // A single failed poll must not leave a processing card frozen.
         if (hasProcessingFile) scheduleFileRead();
       }
     };
     void read();
-    if (!active) return () => { disposed = true; };
+    if (!active) return () => {
+      disposed = true;
+      if (fileRetry) clearTimeout(fileRetry);
+    };
     const connect = () => {
       if (disposed || finished) return;
       const next = new SSE(url + '/events', { method: 'GET', headers });
@@ -111,5 +130,5 @@ export default function useNativeRichMessage(
       stream?.close();
     };
   }, [conversationId, messageId, active, enabled, isAuthenticated, token]);
-  return result;
+  return enabled && isAuthenticated && result?.scope === scope ? result.value : null;
 }

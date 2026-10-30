@@ -120,9 +120,18 @@ export function shouldApplyNativeSnapshot(
 ): boolean {
   if (!previous) return true;
   if (next.revision !== previous.revision) return next.revision > previous.revision;
+  // The same DOM revision may gain media/file readiness, but cannot lose
+  // already verified assets or regress a completed archive to "processing".
+  // An out-of-order initial GET must not undo a later SSE ready event.
+  const oldFiles = previous.files ?? [], newFiles = next.files ?? [];
+  if (newFiles.length < oldFiles.length) return false;
+  if (oldFiles.some(oldFile =>
+    oldFile.status !== 'processing' &&
+    newFiles.some(newFile =>
+      newFile.url === oldFile.url && newFile.status === 'processing'))) return false;
+  if (next.assets.length < previous.assets.length) return false;
   if (next.assets.length !== previous.assets.length) return true;
   if (next.assets.some((asset, index) => asset !== previous.assets[index])) return true;
-  const oldFiles = previous.files ?? [], newFiles = next.files ?? [];
   if (oldFiles.length !== newFiles.length) return true;
   return newFiles.some((file, index) =>
     file.url !== oldFiles[index].url || file.status !== oldFiles[index].status);
@@ -192,4 +201,22 @@ export function hasNativeTextCoverage(data: unknown, canonical: string): boolean
   visit(doc.root);
   const renderedLength = nativeText.replace(/\s+/g, ' ').trim().length;
   return renderedLength >= canonicalText.length * 0.65;
+}
+
+
+/** A per-mounted-message presentation key. Changing account, chat or message
+ * invalidates a previously cached native document before effects re-run. */
+export function nativeMessageScopeKey(
+  token?: string, conversationId?: string, messageId?: string,
+): string {
+  return JSON.stringify([token ?? null, conversationId ?? null, messageId ?? null]);
+}
+
+/** The retry budget starts at the first *observed* pending file, not at the
+ * beginning of a potentially 900-second upstream generation. */
+export function canRetryNativePendingFile(
+  firstProcessingAt: number | null, now: number,
+): boolean {
+  return firstProcessingAt !== null &&
+    now >= firstProcessingAt && now - firstProcessingAt < 8 * 60 * 1000;
 }
