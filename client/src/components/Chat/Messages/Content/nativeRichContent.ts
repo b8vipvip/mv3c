@@ -6,7 +6,7 @@ export type NativeNode = {
   children?: NativeNode[];
   style?: Record<string, string>;
 };
-export type NativeFile = { filename: string; url: string; bytes: number; status: 'processing' | 'ready' };
+export type NativeFile = { filename: string; url: string; bytes: number; status: 'processing' | 'ready' | 'failed' };
 export type NativeDocument = {
   version: 1; revision: number; root: NativeNode; assets: string[]; files?: NativeFile[];
 };
@@ -52,7 +52,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
         !isOwnedGeneratedFile(f.url) ||
         typeof f.bytes !== 'number' || !Number.isSafeInteger(f.bytes) ||
         f.bytes < 0 || f.bytes > 24 * 1024 * 1024 ||
-        !['processing', 'ready'].includes(String(f.status)) ||
+        !['processing', 'ready', 'failed'].includes(String(f.status)) ||
         files.some(existing => existing.url === f.url)) return null;
     files.push({ filename: f.filename, url: f.url, bytes: f.bytes,
       status: f.status as NativeFile['status'] });
