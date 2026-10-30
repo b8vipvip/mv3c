@@ -107,7 +107,7 @@ export default function MCPBuilderPanel() {
   return (
     <div role="region" aria-labelledby={headingId}
       className="flex h-full w-full flex-col overflow-hidden pt-2">
-      <PanelHeader title="我的插件" titleId={headingId}
+      <PanelHeader title="插件与连接" titleId={headingId}
         action={
           <Button type="button" size="sm" variant="outline"
             onClick={() => setAddOpen(true)} aria-label="添加插件">
@@ -116,6 +116,9 @@ export default function MCPBuilderPanel() {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        {!loading && myPlugins.length > 0 && (
+          <h3 className="text-text-secondary px-1 pt-2 text-xs font-semibold">我的插件</h3>
+        )}
         {error && <p role="alert" className="text-text-destructive py-2 text-xs">{error}</p>}
         {loading && <p role="status" className="text-text-secondary py-3 text-sm">正在加载…</p>}
         {!loading && myPlugins.map((item) => {
@@ -139,7 +142,7 @@ export default function MCPBuilderPanel() {
                   <Button type="button" size="sm" variant="outline"
                     disabled={isInitializing(serverName) || busyId !== null}
                     onClick={() => { void connect(serverName); }}>
-                    {isInitializing(serverName) ? '连接中…' : '连接账号'}
+                    {isInitializing(serverName) ? '连接中…' : item.auth === 'oauth' ? '连接账号' : '连接'}
                   </Button>
                 )}
                 <Button type="button" size="sm" variant="outline"
