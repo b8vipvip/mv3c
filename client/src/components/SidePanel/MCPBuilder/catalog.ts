@@ -59,7 +59,7 @@ export function findConfiguredPluginServer<T extends { serverName: string; confi
       // Never make a one-click connection depend on that hidden field.
       // If the URL is visible (e.g. admin), still reject any mismatch.
       return server.serverName === 'github' &&
-        config.source === 'config' &&
+        (config.source === 'config' || config.source === 'yaml') &&
         config.oauth !== null && typeof config.oauth === 'object' &&
         (config.url === undefined ||
           (typeof config.url === 'string' &&
