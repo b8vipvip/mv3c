@@ -159,7 +159,7 @@ router.get('/:conversationId/:messageId/native-content/events', authorizeNativeM
   const decoder = new TextDecoder();
   let buffered = '';
   let closed = false;
-  req.on('close', () => { closed = true; void reader.cancel().catch(() => {}); });
+  res.on('close', () => { closed = true; void reader.cancel().catch(() => {}); });
   try {
     while (!closed) {
       const { done, value } = await reader.read();
