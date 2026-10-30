@@ -50,6 +50,13 @@ async function saveSettings(body, actor) {
     if (patch.plugins.githubOAuthEnabled === true && (!nextId || !hasSecret)) {
       throw new TypeError('Configure the GitHub OAuth Client ID and secret before enabling');
     }
+    const callbackOrigin = patch.site?.publicUrl ?? previous?.site?.publicUrl;
+    if (patch.plugins.githubOAuthEnabled === true &&
+        (typeof callbackOrigin !== 'string' ||
+         !/^https:\/\/[^/?#]+$/.test(callbackOrigin))) {
+      throw new TypeError(
+        'Configure the public HTTPS site URL before enabling GitHub OAuth');
+    }
     if (nextId && nextId !== priorId &&
         previous?.plugins?.githubOAuthClientSecretCipher &&
         !patch.plugins.githubOAuthClientSecret) {
