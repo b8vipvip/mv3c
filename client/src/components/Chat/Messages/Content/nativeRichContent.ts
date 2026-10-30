@@ -59,7 +59,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
   }
   let count = 0, total = 0, images = 0;
   const check = (input: unknown, depth: number): NativeNode | null => {
-    if (!input || typeof input !== 'object' || depth > 14 || ++count > 420) return null;
+    if (!input || typeof input !== 'object' || depth > 14 || ++count > 1200) return null;
     const n = input as Record<string, unknown>;
     if (typeof n.tag !== 'string' || !tags.has(n.tag) ||
         Object.keys(n).some(k => !['tag','text','children','style','media_index'].includes(k))) return null;
@@ -71,7 +71,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
       node.media_index = images++;
     } else if ('media_index' in n) return null;
     if ('text' in n) {
-      if (typeof n.text !== 'string' || (total += n.text.length) > 48000) return null;
+      if (typeof n.text !== 'string' || (total += n.text.length) > 96000) return null;
       node.text = n.text;
     }
     if (n.style != null) {
