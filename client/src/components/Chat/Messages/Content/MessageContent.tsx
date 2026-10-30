@@ -128,7 +128,7 @@ export const DisplayMessage = ({ text, isCreatedByUser, message, showCursor }: T
       const markdown = <Markdown content={text} isLatestMessage={isLatestMessage} />;
       // v1 does not carry link hrefs or generated-file download actions.
       // Keep the canonical Markdown whenever switching would hide them.
-      return nativeRich != null && !hasUnrepresentedNativeLinks(text)
+      return nativeRich != null && !hasUnrepresentedNativeLinks(text, nativeRich)
         && hasNativeTextCoverage(nativeRich, text)
         ? <NativeRichContent data={nativeRich} fallback={markdown} />
         : markdown;

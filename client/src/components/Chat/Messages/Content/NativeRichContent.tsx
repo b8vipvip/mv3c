@@ -40,6 +40,31 @@ export default function NativeRichContent({
   return (
     <div data-testid="mv3c-native-rich-content" className="w-full min-w-0 max-w-full overflow-x-auto">
       <NativeElement node={doc.root} doc={doc} />
+      {doc.files?.length ? (
+        <div data-testid="mv3c-native-files" className="mt-3 flex flex-wrap gap-3">
+          {doc.files.map(file => (
+            <a
+              key={file.url}
+              href={file.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              referrerPolicy="no-referrer"
+              className="flex max-w-full min-w-0 items-center gap-3 rounded-xl border border-border-medium px-4 py-3 no-underline hover:bg-surface-secondary"
+            >
+              <span aria-hidden="true">📎</span>
+              <span className="min-w-0 break-all text-sm">
+                <span className="font-medium">{file.filename}</span>
+                <span className="block text-xs text-text-secondary">
+                  {file.status === 'processing'
+                    ? '正在转存 · 如尚未完成请稍后重试'
+                    : '下载文件'}
+                  {file.bytes ? ' · ' + Math.ceil(file.bytes / 1024) + ' KB' : ''}
+                </span>
+              </span>
+            </a>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

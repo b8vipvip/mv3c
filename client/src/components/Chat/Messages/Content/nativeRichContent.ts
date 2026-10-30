@@ -6,7 +6,10 @@ export type NativeNode = {
   children?: NativeNode[];
   style?: Record<string, string>;
 };
-export type NativeDocument = { version: 1; revision: number; root: NativeNode; assets: string[] };
+export type NativeFile = { filename: string; url: string; bytes: number; status: 'processing' | 'ready' };
+export type NativeDocument = {
+  version: 1; revision: number; root: NativeNode; assets: string[]; files?: NativeFile[];
+};
 const tags = new Set('div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' '));
 const enums: Record<string, string[]> = {
   display: ['block','inline','inline-block','flex','inline-flex','grid'],
@@ -25,6 +28,10 @@ export const isOwnedAsset = (url: unknown): url is string =>
   typeof url === 'string' &&
   /^https:\/\/[^/?#]+(?::[0-9]{1,5})?\/api\/media\/[a-zA-Z0-9_-]{6,100}\/[a-zA-Z0-9_-]{8,150}$/.test(url);
 
+export const isOwnedGeneratedFile = (url: unknown): url is string =>
+  typeof url === 'string' &&
+  /^https:\/\/[^/?#]+(?::[0-9]{1,5})?\/api\/generated-files\/(?:pending\/pgen_[a-f0-9]{32}\/[a-zA-Z0-9_-]{16,150}|[a-zA-Z0-9_-]{6,100}\/[a-zA-Z0-9_-]{8,150})$/.test(url);
+
 export function validateNativeContent(data: unknown): NativeDocument | null {
   if (!data || typeof data !== 'object') return null;
   const doc = data as Record<string, unknown>;
@@ -32,6 +39,24 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
       !Number.isSafeInteger(doc.revision) || doc.revision < 1 ||
       !Array.isArray(doc.assets) || doc.assets.length > 40 ||
       !doc.assets.every(isOwnedAsset)) return null;
+  // File descriptors come exclusively from the owned, post-archive
+  // chat2api response. Unknown or malicious fields fail closed.
+  if ('files' in doc && (!Array.isArray(doc.files) || doc.files.length > 10)) return null;
+  const files: NativeFile[] = [];
+  for (const item of (doc.files as unknown[] | undefined) ?? []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const f = item as Record<string, unknown>;
+    if (Object.keys(f).some(key => !['filename', 'url', 'bytes', 'status'].includes(key)) ||
+        typeof f.filename !== 'string' || f.filename.length < 1 ||
+        f.filename.length > 180 || /[\x00-\x1f\x7f]/.test(f.filename) ||
+        !isOwnedGeneratedFile(f.url) ||
+        typeof f.bytes !== 'number' || !Number.isSafeInteger(f.bytes) ||
+        f.bytes < 0 || f.bytes > 24 * 1024 * 1024 ||
+        !['processing', 'ready'].includes(String(f.status)) ||
+        files.some(existing => existing.url === f.url)) return null;
+    files.push({ filename: f.filename, url: f.url, bytes: f.bytes,
+      status: f.status as NativeFile['status'] });
+  }
   let count = 0, total = 0, images = 0;
   const check = (input: unknown, depth: number): NativeNode | null => {
     if (!input || typeof input !== 'object' || depth > 14 || ++count > 420) return null;
@@ -83,6 +108,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
   // fall back to canonical Markdown rather than show the wrong picture.
   return root && images === doc.assets.length ? {
     version: 1, revision: doc.revision, root, assets: doc.assets as string[],
+    ...(files.length || 'files' in doc ? { files } : {}),
   } : null;
 }
 
@@ -95,7 +121,11 @@ export function shouldApplyNativeSnapshot(
   if (!previous) return true;
   if (next.revision !== previous.revision) return next.revision > previous.revision;
   if (next.assets.length !== previous.assets.length) return true;
-  return next.assets.some((asset, index) => asset !== previous.assets[index]);
+  if (next.assets.some((asset, index) => asset !== previous.assets[index])) return true;
+  const oldFiles = previous.files ?? [], newFiles = next.files ?? [];
+  if (oldFiles.length !== newFiles.length) return true;
+  return newFiles.some((file, index) =>
+    file.url !== oldFiles[index].url || file.status !== oldFiles[index].status);
 }
 
 /**
@@ -108,14 +138,29 @@ export function shouldApplyNativeSnapshot(
  * has a safe click/preview path. A future explicit native link/file schema
  * can lift this conservative fallback.
  */
-export function hasUnrepresentedNativeLinks(text: string): boolean {
+export function hasUnrepresentedNativeLinks(text: string, native?: unknown): boolean {
   if (typeof text !== 'string' || !text) return false;
-  if (/\/api\/generated-files\/[A-Za-z0-9_-]{6,}/.test(text)) return true;
+  // Only remove links that exactly match *both* canonical Markdown and the
+  // server-authenticated native file manifest. Never trust URL-shaped text.
+  const owned = validateNativeContent(native)?.files ?? [];
+  const used = new Set<string>();
+  const remaining = text.replace(
+    /\[📎 ([^\]\n]{1,180})\]\((https:\/\/[^\s)]+)\)/g,
+    (match, label: string, url: string) => {
+      const file = owned.find(f => f.url === url &&
+        f.filename.replace(/[\[\]]/g, '') === label);
+      if (!file || used.has(url)) return match;
+      used.add(url);
+      return '';
+    },
+  );
+  if (used.size !== owned.length ||
+      /\/api\/generated-files\/[A-Za-z0-9_-]{6,}/.test(remaining)) return true;
   const markdownLink = /(^|[^!])\[[^\]\n]{1,256}\]\(\s*<?(?:https?:\/\/|\/|sandbox:)[^\s)>]{1,2048}>?\s*\)/m;
   // GFM autolinks bare URLs. Strip Markdown images first so an image-only
   // response still benefits from native image grouping and full-size preview.
-  const withoutImages = text.replace(/!\[[^\]\n]{0,256}\]\(\s*<?[^)\n]{1,2048}>?\s*\)/g, '');
-  return markdownLink.test(text) ||
+  const withoutImages = remaining.replace(/!\[[^\]\n]{0,256}\]\(\s*<?[^)\n]{1,2048}>?\s*\)/g, '');
+  return markdownLink.test(remaining) ||
     /(?:https?:\/\/[^\s<>)]{1,2048}|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,})/.test(withoutImages);
 }
 
