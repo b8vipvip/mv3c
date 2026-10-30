@@ -372,11 +372,20 @@ const getMCPServersList = async (req, res) => {
       return res.status(401).json({ message: 'Unauthorized' });
     }
 
-    const serverConfigs = await resolveAllMcpConfigs(userId, req.user);
-    const canEditByServer = await computeCanEditByServer(req, serverConfigs, {
+    const allConfigs = await resolveAllMcpConfigs(userId, req.user);
+    const [installedIds, settings] = await Promise.all([
+      getInstalledIds(userId), getPublicSettings(),
+    ]);
+    const managedEntries = configuredCatalogEntries(
+      allConfigs, [], settings.plugins.githubOAuthReady, true,
+    );
+    const visibleConfigs = filterUninstalledCatalogServers(
+      allConfigs, installedIds, managedEntries,
+    );
+    const canEditByServer = await computeCanEditByServer(req, visibleConfigs, {
       skipCapabilityWithoutDbIds: true,
     });
-    return res.json(redactAllServerSecrets(serverConfigs, { canEditByServer }));
+    return res.json(redactAllServerSecrets(visibleConfigs, { canEditByServer }));
   } catch (error) {
     logger.error('[getMCPServersList]', error);
     res.status(500).json({ error: error.message });

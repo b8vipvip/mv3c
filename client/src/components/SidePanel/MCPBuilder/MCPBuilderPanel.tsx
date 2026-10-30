@@ -86,6 +86,7 @@ export default function MCPBuilderPanel() {
       // Newly added/removed plugin tools are published only after the next
       // per-user catalogue refresh, never from the operator's global list.
       await Promise.all([
+        queryClient.invalidateQueries([QueryKeys.mcpServers]),
         queryClient.invalidateQueries([QueryKeys.mcpTools]),
         queryClient.invalidateQueries([QueryKeys.mcpConnectionStatus]),
       ]);
