@@ -35,6 +35,12 @@ async function recordTransportNativeBinding({ user, conversationId, messageId, r
     },
   }, { user_id: user, thread_id: conversationId, run_id: messageId });
 }
+async function getNativeRequestId({ user, conversationId, messageId }) {
+  const row = await collection().findOne({
+    user, conversationId, messageId, expiresAt: { $gt: new Date() },
+  }, { projection: { requestId: 1 } });
+  return /^req_[A-Za-z0-9_-]{6,100}$/.test(row?.requestId || '') ? row.requestId : null;
+}
 async function getNativeMessage({ user, conversationId, messageId }) {
   const config = await buildRuntimeConfig();
   return readBoundSnapshot({
@@ -54,4 +60,4 @@ async function upstreamNativeEvents({ user, conversationId, messageId }) {
     redirect: 'error', signal: AbortSignal.timeout(900000),
   });
 }
-module.exports = { recordModelNativeBinding, recordTransportNativeBinding, getNativeMessage, upstreamNativeEvents };
+module.exports = { recordModelNativeBinding, recordTransportNativeBinding, getNativeMessage, getNativeRequestId, upstreamNativeEvents };
