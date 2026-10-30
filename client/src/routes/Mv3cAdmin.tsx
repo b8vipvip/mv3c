@@ -1123,7 +1123,7 @@ export default function Mv3cAdmin() {
                 <div>
                   <h2 className="text-xl font-semibold">服务端运行日志</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    保存应用运行信息、警告、错误及 API 请求摘要，不包含请求或回复正文。
+                    保存应用运行信息、警告、错误、API 请求摘要，以及用户端原生富媒体渲染诊断（[mv3c-client-native]，包括回退原因、结构计数及图片加载结果）。不包含请求或回复正文、网页源码或图片 URL。
                     日志轮转时优先淘汰最早记录，受容量限制的历史不能恢复。
                   </p>
                 </div>
