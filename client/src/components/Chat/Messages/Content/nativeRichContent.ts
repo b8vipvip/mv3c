@@ -110,7 +110,7 @@ export function shouldApplyNativeSnapshot(
  */
 export function hasUnrepresentedNativeLinks(text: string): boolean {
   if (typeof text !== 'string' || !text) return false;
-  if (/\\/api\\/generated-files\\/[A-Za-z0-9_-]{6,}/.test(text)) return true;
-  const markdownLink = /(^|[^!])\\[[^\\]\\n]{1,256}\\]\\(\\s*<?(?:https?:\\/\\/|\\/|sandbox:)[^\\s)>]{1,2048}>?\\s*\\)/m;
-  return markdownLink.test(text) || /<https?:\\/\\/[^\\s<>]{1,2048}>/.test(text);
+  if (/\/api\/generated-files\/[A-Za-z0-9_-]{6,}/.test(text)) return true;
+  const markdownLink = /(^|[^!])\[[^\]\n]{1,256}\]\(\s*<?(?:https?:\/\/|\/|sandbox:)[^\s)>]{1,2048}>?\s*\)/m;
+  return markdownLink.test(text) || /<https?:\/\/[^\s<>]{1,2048}>/.test(text);
 }
