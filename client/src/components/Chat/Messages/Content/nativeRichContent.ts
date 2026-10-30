@@ -202,3 +202,21 @@ export function hasNativeTextCoverage(data: unknown, canonical: string): boolean
   const renderedLength = nativeText.replace(/\s+/g, ' ').trim().length;
   return renderedLength >= canonicalText.length * 0.65;
 }
+
+
+/** A per-mounted-message presentation key. Changing account, chat or message
+ * invalidates a previously cached native document before effects re-run. */
+export function nativeMessageScopeKey(
+  token?: string, conversationId?: string, messageId?: string,
+): string {
+  return JSON.stringify([token ?? null, conversationId ?? null, messageId ?? null]);
+}
+
+/** The retry budget starts at the first *observed* pending file, not at the
+ * beginning of a potentially 900-second upstream generation. */
+export function canRetryNativePendingFile(
+  firstProcessingAt: number | null, now: number,
+): boolean {
+  return firstProcessingAt !== null &&
+    now >= firstProcessingAt && now - firstProcessingAt < 8 * 60 * 1000;
+}
