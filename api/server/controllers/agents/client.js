@@ -1037,11 +1037,12 @@ class AgentClient extends BaseClient {
         },
       });
     };
-    const endpoint = this.options?.agent?.endpoint ?? this.options?.endpoint;
+    const managedChat2api =
+      this.options?.agent?.endpoint === 'chat2api' || this.options?.endpoint === 'chat2api';
     const user = this.user ?? this.options?.req?.user?.id;
     const conversationId = this.conversationId ?? opts.conversationId;
     const messageId = opts.responseMessageId ?? this.responseMessageId;
-    if (endpoint !== 'chat2api' || !user || !conversationId || !messageId) {
+    if (!managedChat2api || !user || !conversationId || !messageId) {
       return invoke();
     }
     // AsyncLocalStorage scopes the exact concurrent model transport. The
