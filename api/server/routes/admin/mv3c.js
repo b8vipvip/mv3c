@@ -87,6 +87,7 @@ async function readPluginOverview() {
   ]);
   return {
     policy: settingsValue.plugins,
+    sitePublicUrl: settingsValue.site.publicUrl || '',
     catalogue: listCatalog(settingsValue.plugins.catalogHidden, true),
     registrations: registrations.map(summarizeServer),
     // Counts are registration hints only; neither OAuth connection nor sharing
