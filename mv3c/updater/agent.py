@@ -1336,7 +1336,11 @@ def execute(repo: Path, *, recovery_version: str | None = None) -> None:
             print("GPTAuto smart update mode=" + str(plan["mode"]) +
                   "; mv3c production continues to require verified prebuilt Release image",
                   flush=True)
-            progress("strategy", 23, "GPTAuto 已分析变更；验证官方预构建镜像来源")
+            # Upgrade compatibility: the already-running older mv3c bridge
+            # accepts "fetching" but rejects the newer "strategy" stage.
+            # The message retains the strategy distinction without inventing
+            # a new protocol enum before the old container can be replaced.
+            progress("fetching", 23, "GPTAuto 已分析变更；验证官方预构建镜像来源")
         else:
             print("GPTAuto classifier is not yet installed; using proven official "
                   "Release image-only deployment", flush=True)

@@ -14,7 +14,7 @@ const SHA = /^[0-9a-f]{40}$/i;
 const JOB_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OFFICIAL_TAG = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/;
 const STAGE_SET = new Set([
-  'queued', 'checking', 'fetching', 'ci', 'backup', 'merging',
+  'queued', 'checking', 'fetching', 'strategy', 'ci', 'backup', 'merging',
   'building', 'restarting', 'verifying', 'rollback', 'complete',
 ]);
 
