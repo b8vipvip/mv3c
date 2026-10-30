@@ -17,9 +17,13 @@ function configuredCatalogEntries(configs, hiddenIds = [], githubOAuthReady = fa
       if (!config || !['config', 'yaml'].includes(config.source) ||
           normalized(config.url) !== normalized(entry.url)) return false;
       if (entry.id === 'github') {
+        // Bootstrap-loaded operator MCP servers have source='yaml', while
+        // configurations inspected lazily after an admin edit are 'config'.
+        // Both are trusted operator tiers (the outer gate already rejected
+        // 'user'/'plugin'), and the exact canonical GitHub endpoint/name and
+        // server-side OAuth readiness must still match.
         return githubOAuthReady === true && serverName === 'github' &&
-          config.source === 'config' && config.oauth != null &&
-          typeof config.oauth === 'object';
+          config.oauth != null && typeof config.oauth === 'object';
       }
       if (entry.auth === 'oauth') return config.oauth != null || config.requiresOAuth === true;
       if (entry.auth === 'token') {
