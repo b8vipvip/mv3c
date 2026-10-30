@@ -135,10 +135,11 @@ router.get('/store/catalog', requireJwtAuth, checkMCPUsePermissions, async (req,
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
       items: listCatalog(settings.plugins.catalogHidden),
-      // Boolean-only operator-readiness hint. Never leak OAuth app keys.
+      // Readiness is computed from the encrypted app credentials and a
+      // configured HTTPS OAuth callback. Never expose secrets or infer from
+      // an untrusted request Host header.
       managed: {
-        github: settings.plugins.githubOAuthEnabled === true &&
-          settings.plugins.githubOAuthConfigured === true,
+        github: settings.plugins.githubOAuthReady === true,
       },
     });
   } catch (error) {
