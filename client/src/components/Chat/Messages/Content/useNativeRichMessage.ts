@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { SSE } from 'sse.js';
 import { apiBaseUrl } from 'librechat-data-provider';
 import { useOptionalAuthContext } from '~/hooks/AuthContext';
-import { validateNativeContent, shouldApplyNativeSnapshot } from './nativeRichContent';
+import {
+  validateNativeContent, shouldApplyNativeSnapshot, nativeMessageScopeKey,
+  canRetryNativePendingFile,
+} from './nativeRichContent';
 import type { NativeDocument } from './nativeRichContent';
 
 /**
@@ -22,7 +25,7 @@ export default function useNativeRichMessage(
   // React may reuse a message component when the conversation or account
   // changes. Never render an old message's sidecar for the new identity even
   // for the single render before useEffect cleanup executes.
-  const scope = JSON.stringify([token ?? null, conversationId ?? null, messageId ?? null]);
+  const scope = nativeMessageScopeKey(token, conversationId, messageId);
   const [result, setResult] = useState<{ scope: string; value: NativeDocument } | null>(null);
 
   useEffect(() => {
@@ -49,7 +52,7 @@ export default function useNativeRichMessage(
     const scheduleFileRead = () => {
       if (firstProcessingAt === null) firstProcessingAt = Date.now();
       if (disposed || !hasProcessingFile || fileRetry ||
-          Date.now() - firstProcessingAt >= 8 * 60 * 1000) return;
+          !canRetryNativePendingFile(firstProcessingAt, Date.now())) return;
       const delay = Math.min(15000, Math.round(2500 * Math.pow(1.4, Math.min(6, fileAttempts++))));
       fileRetry = setTimeout(() => {
         fileRetry = undefined;
