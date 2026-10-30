@@ -1,4 +1,4 @@
-import { isOwnedAsset, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks } from '../nativeRichContent';
+import { isOwnedAsset, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage } from '../nativeRichContent';
 
 const asset='https://chat2api.example.com/api/media/med_123456789/secretABC12345678';
 const input = {
@@ -60,5 +60,33 @@ describe('native-rich v1 link and file handoff preservation', () => {
   it('does not allow a malicious or incomplete link to bypass conservative fallback', () => {
     expect(hasUnrepresentedNativeLinks('[📎 report.zip](/api/generated-files/file_12345678/token)')).toBe(true);
     expect(hasUnrepresentedNativeLinks('[docs](sandbox:/mnt/data/notes.pdf)')).toBe(true);
+  });
+});
+
+describe('canonical Markdown completeness guard for native-rich v1', () => {
+  it('rejects a schema-valid partial native snapshot with missing long-answer tail', () => {
+    const full = 'Chapter One: ' + 'full long content. '.repeat(450);
+    const partial = {
+      version: 1, revision: 4, assets: [],
+      root: { tag: 'div', children: [{ tag: 'p', text: 'Chapter One: full long content.' }] },
+    };
+    expect(validateNativeContent(partial)).not.toBeNull();
+    expect(hasNativeTextCoverage(partial, full)).toBe(false);
+  });
+
+  it('accepts a sufficiently complete rich reply and short answers', () => {
+    const answer = 'The detailed explanation. '.repeat(130);
+    const native = { version: 1, revision: 8, assets: [],
+      root: { tag: 'div', children: [{ tag: 'p', text: answer }] } };
+    expect(hasNativeTextCoverage(native, answer)).toBe(true);
+    expect(hasNativeTextCoverage(native, 'short reply')).toBe(true);
+  });
+
+  it('continues to prefer the canonical answer when older Workers omit half the text', () => {
+    const complete = 'Long answer paragraph. '.repeat(180);
+    const incomplete = { version: 1, revision: 9, assets: [],
+      root: { tag: 'p', text: 'Long answer paragraph. '.repeat(70) } };
+    expect(hasNativeTextCoverage(incomplete, complete)).toBe(false);
+    expect(hasNativeTextCoverage({}, complete)).toBe(false);
   });
 });
