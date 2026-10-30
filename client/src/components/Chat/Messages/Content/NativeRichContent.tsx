@@ -10,16 +10,23 @@ function NativeElement({ node, doc }: { node: NativeNode; doc: NativeDocument })
   if (node.tag === 'img') {
     const url = doc.assets[node.media_index ?? -1];
     // Asset source has already passed the exact owned-media URL check.
-    return <ImagePreview imagePath={url} altText="生成图片"
-      compactGallery className="!mt-0 !shadow-none" />;
+    return (
+      <div style={node.style as React.CSSProperties | undefined} className="min-w-0 max-w-full overflow-hidden">
+        <ImagePreview imagePath={url} altText="生成图片"
+          nativeLayout nativeObjectFit={node.style?.objectFit === 'cover' ? 'cover' : 'contain'} />
+      </div>
+    );
   }
-  return React.createElement(
-    node.tag,
-    { style: node.style as React.CSSProperties | undefined,
-      className: 'min-w-0 max-w-full' },
-    node.text,
-    children,
-  );
+  // React void elements cannot receive any children arguments; preserve
+  // valid native <br>/<hr> instead of throwing and losing the whole reply.
+  const props = {
+    style: node.style as React.CSSProperties | undefined,
+    className: 'min-w-0 max-w-full',
+  };
+  if (node.tag === 'br' || node.tag === 'hr') {
+    return React.createElement(node.tag, props);
+  }
+  return React.createElement(node.tag, props, node.text, ...(children ?? []));
 }
 /** Read-only element renderer. Does not use dangerouslySetInnerHTML, iframe
  * scripts, runtime CSS injection, or execute any event handlers from source.

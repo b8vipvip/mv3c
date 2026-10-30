@@ -34,6 +34,8 @@ const Image = ({
   width,
   height,
   compactGallery = false,
+  nativeLayout = false,
+  nativeObjectFit = 'contain',
 }: {
   imagePath: string;
   altText: string;
@@ -49,6 +51,9 @@ const Image = ({
   width?: number;
   height?: number;
   compactGallery?: boolean;
+  /** Native DOM layout owns sizing; never force a 144x176px gallery tile. */
+  nativeLayout?: boolean;
+  nativeObjectFit?: 'contain' | 'cover';
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -110,7 +115,7 @@ const Image = ({
   const showSkeleton = hasDimensions && !paintedUrls.has(absoluteImageUrl);
 
   return (
-    <div className={compactGallery ? 'min-w-0 shrink-0' : alignRight ? 'ml-auto' : undefined}>
+    <div className={nativeLayout ? 'min-w-0 w-full max-w-full' : compactGallery ? 'min-w-0 shrink-0' : alignRight ? 'ml-auto' : undefined}>
       <button
         ref={triggerRef}
         type="button"
@@ -119,7 +124,9 @@ const Image = ({
         onClick={() => setIsOpen(true)}
         className={cn(
           'border-border-light text-text-secondary-alt relative mt-1 cursor-pointer overflow-hidden rounded-lg border transition-shadow',
-          compactGallery
+          nativeLayout
+            ? 'mt-0 block w-full max-w-full shadow-none'
+            : compactGallery
             ? 'h-44 w-36 max-h-[48vw] max-w-[32vw] shadow-sm'
             : 'w-full max-w-lg shadow-md',
           'focus-visible:ring-text-primary focus-visible:ring-offset-surface-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2',
@@ -134,7 +141,11 @@ const Image = ({
           onLoad={() => paintedUrls.add(absoluteImageUrl)}
           className={cn(
             'relative block text-transparent',
-            compactGallery
+            nativeLayout
+              ? nativeObjectFit === 'cover'
+                ? 'size-full object-cover'
+                : 'block h-auto w-full max-w-full object-contain'
+              : compactGallery
               ? 'size-full object-cover'
               : hasDimensions
               ? 'size-full object-contain'
