@@ -195,6 +195,41 @@ router.get('/:conversationId/:messageId/native-content/events', authorizeNativeM
 });
 
 
+// Client-side *presentation* evidence, not a reply or terminal-state authority.
+// The same owner check as native-content forbids cross-tenant log injection.
+// No HTML, prompts, Markdown, URLs, secrets or browser identifiers are accepted.
+router.post('/:conversationId/:messageId/native-diagnostics', authorizeNativeMessage, async (req, res) => {
+  const body = req.body;
+  const reasons = new Set(['native_rendered', 'missing_sidecar', 'invalid_schema',
+    'unrepresented_links', 'text_coverage', 'markdown_fallback']);
+  const modes = new Set(['native', 'markdown']);
+  const numeric = ['canonicalChars','renderedChars','headings','tables',
+    'codeBlocks','images','imagesLoaded','imagesFailed','mixedContentImages',
+    'nativeAssets','nativeFiles','nativeRevision'];
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      Object.keys(body).some(key => !['mode','reason',...numeric].includes(key)) ||
+      !modes.has(body.mode) || !reasons.has(body.reason) ||
+      numeric.some(key => !Number.isInteger(body[key]) || body[key] < 0 || body[key] > 1000000) ||
+      Buffer.byteLength(JSON.stringify(body)) > 1500) {
+    return res.status(400).json({ error: 'Invalid native render metrics' });
+  }
+  try {
+    const requestId = await nativeRich.getNativeRequestId(res.locals.nativeMessage);
+    const record = {
+      at: new Date().toISOString(),
+      requestId: requestId || 'unbound',
+      conversationId: res.locals.nativeMessage.conversationId,
+      messageId: res.locals.nativeMessage.messageId,
+      ...Object.fromEntries(['mode','reason',...numeric].map(k => [k, body[k]])),
+    };
+    logger.info('[mv3c-client-native] ' + JSON.stringify(record));
+    return res.status(202).json({ accepted: true });
+  } catch (error) {
+    logger.warn('[mv3c-client-native] diagnostic unavailable', error?.name);
+    return res.status(503).json({ error: 'Native diagnostic unavailable' });
+  }
+});
+
 router.post(
   '/:conversationId/owner-text',
   createPrivateTextView({
