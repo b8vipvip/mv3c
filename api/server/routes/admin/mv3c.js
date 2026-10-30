@@ -305,7 +305,8 @@ router.put('/updates/settings', async (req, res) => {
 });
 router.post('/updates/check', async (req, res) => {
   try {
-    return res.json(await updater.requestCheck(actorId(req)));
+    // Checks run asynchronously in the sole host updater; a request is only queued here.
+    return res.status(202).json(await updater.requestCheck(actorId(req)));
   } catch (error) {
     return failure(res, error);
   }
