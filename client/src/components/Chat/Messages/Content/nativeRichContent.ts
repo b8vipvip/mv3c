@@ -20,7 +20,7 @@ const enums: Record<string, string[]> = {
 const lengths = new Set(['gap','padding','marginTop','marginBottom','width','maxWidth','height','borderRadius','fontSize','lineHeight']);
 const len = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
 const colors = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
-const cols = /^(?:\d{1,3}(?:px|%)|minmax\(\d{1,3}px,\s*1fr\)|1fr)(?:\s+(?:\d{1,3}(?:px|%)|minmax\(\d{1,3}px,\s*1fr\)|1fr)){0,5}$/;
+const cols = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
 export const isOwnedAsset = (url: unknown): url is string =>
   typeof url === 'string' &&
   /^https:\/\/[^/?#]+(?::[0-9]{1,5})?\/api\/media\/[a-zA-Z0-9_-]{6,100}\/[a-zA-Z0-9_-]{8,150}$/.test(url);
