@@ -208,6 +208,7 @@ const {
   markCompactionOutcome,
   resolvePersistableCodeEnvironmentDecision,
   getChatProjectContextKey,
+  withNativeRichScope,
 } = require('@librechat/api');
 const {
   Run,
@@ -251,6 +252,7 @@ const { getAccessibleMCPServers } = require('~/server/services/MCP');
 const BaseClient = require('~/app/clients/BaseClient');
 const { getMCPManager } = require('~/config');
 const db = require('~/models');
+const { recordTransportNativeBinding } = require('~/server/services/Config/mv3cNativeRich');
 
 const loadAgent = (params) =>
   loadAgentFn(params, {
@@ -1018,21 +1020,40 @@ class AgentClient extends BaseClient {
    * @param {Record<string, unknown>} [opts]
    */
   async sendMessage(message, opts = {}) {
-    const subagentTasks = this.options?.subagentTasks;
-    const store = subagentTasks?.store;
-    if (typeof store?.registerParentPersistence !== 'function') {
-      return super.sendMessage(message, opts);
+    const invoke = () => {
+      const subagentTasks = this.options?.subagentTasks;
+      const store = subagentTasks?.store;
+      if (typeof store?.registerParentPersistence !== 'function') {
+        return super.sendMessage(message, opts);
+      }
+      const getReqData = opts.getReqData;
+      return super.sendMessage(message, {
+        ...opts,
+        getReqData: (data = {}) => {
+          getReqData?.(data);
+          if (data.userMessagePromise instanceof Promise) {
+            store.registerParentPersistence(subagentTasks.scopeId, data.userMessagePromise);
+          }
+        },
+      });
+    };
+    const managedChat2api =
+      this.options?.agent?.endpoint === 'chat2api' || this.options?.endpoint === 'chat2api';
+    const user = this.user ?? this.options?.req?.user?.id;
+    const conversationId = this.conversationId ?? opts.conversationId;
+    const messageId = opts.responseMessageId ?? this.responseMessageId;
+    if (!managedChat2api || !user || !conversationId || !messageId) {
+      return invoke();
     }
-    const getReqData = opts.getReqData;
-    return super.sendMessage(message, {
-      ...opts,
-      getReqData: (data = {}) => {
-        getReqData?.(data);
-        if (data.userMessagePromise instanceof Promise) {
-          store.registerParentPersistence(subagentTasks.scopeId, data.userMessagePromise);
-        }
+    // AsyncLocalStorage scopes the exact concurrent model transport. The
+    // browser only gets our MV3C message id; random request IDs remain server-
+    // side and are attached before the upstream SSE body starts flowing.
+    return withNativeRichScope({
+      bindRequestId: (requestId) => {
+        void recordTransportNativeBinding({ user, conversationId, messageId, requestId })
+          .catch((error) => logger.warn('[NativeRich] Transport binding unavailable', error?.name));
       },
-    });
+    }, invoke);
   }
 
   setOptions(_options) {}

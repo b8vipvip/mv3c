@@ -536,4 +536,7 @@ const useAuthContext = () => {
   return context;
 };
 
-export { AuthContextProvider, useAuthContext, AuthContext };
+// Optional readers (e.g. an inactive/preview message) must not throw when
+// rendered in a component test without a full authentication provider.
+const useOptionalAuthContext = () => useContext(AuthContext);
+export { AuthContextProvider, useAuthContext, useOptionalAuthContext, AuthContext };

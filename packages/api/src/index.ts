@@ -101,6 +101,7 @@ export * from './user';
 export * from './plugins';
 /* Endpoints */
 export * from './endpoints';
+export { withNativeRichScope } from './endpoints/openai/nativeRichCapture';
 /* Files */
 export * from './files';
 /* Images */

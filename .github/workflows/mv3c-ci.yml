@@ -23,6 +23,7 @@ jobs:
       - name: Validate encrypted settings, bootstrap and MCP tool protocol
         run: |
           node --test mv3c/tests/settings.test.cjs
+          node --test mv3c/tests/nativeRichBridge.test.cjs
           node --test mv3c/tests/toolBridge.test.cjs
           node --test mv3c/tests/pluginCatalog.test.cjs
       - name: Verify streamed multi-image rendering and archived-asset integrity
