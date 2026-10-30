@@ -19,6 +19,18 @@ class ManualOnlyDeployContract(unittest.TestCase):
         self.assertIn('target_for_channel(repo, "release"', agent,
                       "scheduled version discovery must remain supported")
 
+    def test_gptauto_progress_is_accepted_by_previous_container(self):
+        agent = (UPDATER / "agent.py").read_text(encoding="utf-8")
+        backend = (ROOT / "api/server/services/Config/mv3cUpdater.js").read_text(
+            encoding="utf-8")
+        # Real failed deploy 448267d9: old bridge rejected stage='strategy'
+        # at 23% after successfully reporting 'checking' and 'fetching'.
+        self.assertIn('progress("fetching", 23,', agent)
+        self.assertNotIn('progress("strategy", 23,', agent)
+        # A future container can also accept an older host's strategy stage;
+        # no pre-deployment command needs to cross versioned bridge semantics.
+        self.assertIn("'fetching', 'strategy', 'ci'", backend)
+
     def test_bridge_has_no_automatic_deploy_command(self):
         bridge = (UPDATER / "bridge.cjs").read_text(encoding="utf-8")
         self.assertNotIn("queue-auto", bridge)
