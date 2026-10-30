@@ -88,6 +88,7 @@ const {
 const { createOpenIDSessionTokenProvider } = require('~/server/services/OpenIDSessionRefresh');
 const { getLogStores } = require('~/cache');
 const db = require('~/models');
+const userPluginStore = require('~/server/services/UserPluginStore');
 
 const router = Router();
 
@@ -120,36 +121,44 @@ const checkMCPCreate = generateCheckAccess({
 });
 
 /**
- * Get all MCP tools available to the user
- * Returns only MCP tools, completely decoupled from regular LibreChat tools
- */
-/**
- * Read-only, server-filtered published catalogue.
- * The MCP create/edit routes retain their existing ACL/OAuth and SSRF checks;
- * hiding a preset does not silently delete an installed MCP server.
+ * Storefront is one server-attested list of administrator-configured,
+ * published servers. A global server is NOT installed for every user.
+ * Installations are separately persisted for each tenant/user.
  */
 router.get('/store/catalog', requireJwtAuth, checkMCPUsePermissions, async (req, res) => {
   try {
-    const settings = await require('~/server/services/Config/mv3cSettings').getPublicSettings();
-    const { listCatalog } = require('../../../mv3c/pluginCatalog.cjs');
-    // A legacy per-user server named 'github' can shadow the operator config
-    // in the MCP registry. Never advertise an untrusted user-tier server as
-    // the one-click managed connection, even when its URL matches GitHub's.
-    let managedGithub = false;
-    if (settings.plugins.githubOAuthReady === true) {
-      const config = (await resolveAllMcpConfigs(req.user.id, req.user))?.github;
-      managedGithub = config?.source === 'config' &&
-        config?.url === 'https://api.githubcopilot.com/mcp/' &&
-        config?.oauth != null && typeof config.oauth === 'object';
-    }
+    const storefront = await userPluginStore.getStorefront(req.user);
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
-      items: listCatalog(settings.plugins.catalogHidden),
-      managed: { github: managedGithub },
+      ...storefront,
+      managed: { github: storefront.items.some((item) => item.id === 'github') },
     });
   } catch (error) {
-    logger.error('[mcp-store] Failed to load catalogue', { type: error?.name });
+    logger.error('[mcp-store] Failed to load plugin catalogue', { type: error?.name });
     return res.status(503).json({ error: 'Plugin catalogue is unavailable' });
+  }
+});
+router.post('/store/:pluginId', requireJwtAuth, checkMCPUsePermissions, async (req, res) => {
+  try {
+    const result = await userPluginStore.install(req.user, req.params.pluginId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof TypeError) return res.status(400).json({ error: error.message });
+    if (error.status === 409) return res.status(409).json({ error: error.message });
+    logger.error('[mcp-store] Could not add plugin', { type: error?.name });
+    return res.status(503).json({ error: 'Failed to add plugin' });
+  }
+});
+router.delete('/store/:pluginId', requireJwtAuth, checkMCPUsePermissions, async (req, res) => {
+  try {
+    const result = await userPluginStore.uninstall(req.user, req.params.pluginId);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof TypeError) return res.status(400).json({ error: error.message });
+    logger.error('[mcp-store] Could not remove plugin', { type: error?.name });
+    return res.status(503).json({ error: 'Failed to remove plugin' });
   }
 });
 

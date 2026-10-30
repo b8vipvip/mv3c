@@ -4,6 +4,8 @@
 export type PluginCategory = '开发工具' | '项目管理' | '知识检索';
 export type PluginPreset = Readonly<{
   id: string;
+  /** Verified operator-side name returned by the storefront, not editable by users. */
+  serverName?: string;
   name: string;
   description: string;
   category: PluginCategory;

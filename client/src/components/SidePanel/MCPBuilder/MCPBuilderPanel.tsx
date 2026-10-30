@@ -1,177 +1,174 @@
-import { useState, useRef, useMemo, useEffect, useId } from 'react';
-import { Plus } from 'lucide-react';
+import { useEffect, useId, useState } from 'react';
+import { Plus, PlugZap, Trash2 } from 'lucide-react';
 import { useRecoilValue } from 'recoil';
 import { useLocation } from 'react-router-dom';
-import { SystemRoles, PermissionTypes, Permissions } from 'librechat-data-provider';
-import { Button, FilterInput, OGDialogTrigger, TooltipAnchor } from '@librechat/client';
+import { useQueryClient } from '@tanstack/react-query';
+import { QueryKeys } from 'librechat-data-provider';
 import {
-  useLocalize,
-  useMCPServerManager,
-  useHasAccess,
-  useAuthContext,
-  activateCatalog,
-} from '~/hooks';
-import { PanelFooter, PanelContent, PanelHeader } from '~/components/ui';
-import MCPConfigDialog from '~/components/MCP/MCPConfigDialog';
-import MCPServerCardSkeleton from './MCPServerCardSkeleton';
-import { useMCPRefresh } from '~/hooks/MCP/useMCPRefresh';
-import MCPAdminSettings from './MCPAdminSettings';
-import MCPServerDialog from './MCPServerDialog';
+  Button, OGDialog, OGDialogContent, OGDialogTitle, OGDialogDescription,
+} from '@librechat/client';
+import { useMCPServerManager, useAuthContext, activateCatalog } from '~/hooks';
+import { PanelHeader } from '~/components/ui';
 import McpOAuthDialog from '~/components/MCP/McpOAuthDialog';
-import MCPServerList from './MCPServerList';
 import PluginDiscovery from './PluginDiscovery';
+import type { PluginPreset } from './catalog';
 import store from '~/store';
 
+type PluginStoreResponse = {
+  items: PluginPreset[];
+  installed: string[];
+};
+
 export default function MCPBuilderPanel() {
-  const localize = useLocalize();
   const headingId = useId();
   const location = useLocation();
-  /** The panel stays mounted while the sidebar is hidden (collapsed, mobile
-   * drawer, or the insights route collapsing it), so only a visible panel
-   * releases its catalog ahead of the background warmup schedule */
+  const queryClient = useQueryClient();
+  const { token } = useAuthContext();
   const sidebarExpanded = useRecoilValue(store.sidebarExpanded);
   const panelVisible = sidebarExpanded && !location.pathname.startsWith('/insights');
   useEffect(() => {
-    if (panelVisible) {
-      activateCatalog('mcpServers');
-    }
+    if (panelVisible) activateCatalog('mcpServers');
   }, [panelVisible]);
-  const { user } = useAuthContext();
+
   const {
-    availableMCPServers, isLoading, getServerStatusIconProps, getConfigDialogProps,
     initializeServer, getOAuthUrl, isInitializing, connectionStatus,
   } = useMCPServerManager({ observeToolAuthorization: panelVisible });
-  useMCPRefresh({ enabled: panelVisible && !isLoading && availableMCPServers.length > 0 });
-
-  const hasCreateAccess = useHasAccess({
-    permissionType: PermissionTypes.MCP_SERVERS,
-    permission: Permissions.CREATE,
-  });
-  const [showDialog, setShowDialog] = useState(false);
-  const [activeView, setActiveView] = useState<'discover' | 'installed'>('discover');
+  const [storefront, setStorefront] = useState<PluginStoreResponse>({ items: [], installed: [] });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const [pendingOAuthServer, setPendingOAuthServer] = useState<string | null>(null);
-  const handleConnect = async (serverName: string) => {
-    // Uses the existing per-user MCP OAuth flow. No client credentials or
-    // provider tokens travel through the marketplace component.
-    const result = await initializeServer(serverName, false);
-    if (result?.oauthRequired && result.oauthUrl) {
-      setPendingOAuthServer(serverName);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setStorefront({ items: [], installed: [] });
+    setError('');
+    if (!token) { setLoading(false); return () => controller.abort(); }
+    setLoading(true);
+    fetch('/api/mcp/store/catalog', {
+      credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+      headers: { Authorization: 'Bearer ' + token },
+    }).then(async (response) => {
+      if (!response.ok) throw new Error('插件列表加载失败');
+      return response.json() as Promise<PluginStoreResponse>;
+    }).then((data) => {
+      if (!controller.signal.aborted) {
+        setStorefront({
+          items: Array.isArray(data.items) ? data.items : [],
+          installed: Array.isArray(data.installed) ? data.installed : [],
+        });
+      }
+    }).catch(() => {
+      if (!controller.signal.aborted) setError('插件列表加载失败，请刷新后重试');
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
+    return () => controller.abort();
+  }, [token]);
+
+  const changeInstallation = async (id: string, method: 'POST' | 'DELETE') => {
+    if (!token || busyId) return;
+    setBusyId(id);
+    setError('');
+    try {
+      const response = await fetch('/api/mcp/store/' + encodeURIComponent(id), {
+        method, credentials: 'same-origin', cache: 'no-store',
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      if (!response.ok) throw new Error('操作失败，请重试');
+      const data = await response.json() as PluginStoreResponse;
+      setStorefront({
+        items: Array.isArray(data.items) ? data.items : [],
+        installed: Array.isArray(data.installed) ? data.installed : [],
+      });
+      if (method === 'POST') setAddOpen(false);
+      // Newly added/removed plugin tools are published only after the next
+      // per-user catalogue refresh, never from the operator's global list.
+      await Promise.all([
+        queryClient.invalidateQueries([QueryKeys.mcpTools]),
+        queryClient.invalidateQueries([QueryKeys.mcpConnectionStatus]),
+      ]);
+    } catch {
+      setError('插件操作失败，请重试');
+    } finally {
+      setBusyId(null);
     }
   };
-  const [searchQuery, setSearchQuery] = useState('');
-  const addButtonRef = useRef<HTMLButtonElement | null>(null);
-  const configDialogProps = getConfigDialogProps();
+  const connect = async (serverName: string) => {
+    const result = await initializeServer(serverName, false);
+    if (result?.oauthRequired && result.oauthUrl) setPendingOAuthServer(serverName);
+  };
 
-  const filteredServers = useMemo(() => {
-    if (!searchQuery.trim()) {
-      return availableMCPServers;
-    }
-    const query = searchQuery.toLowerCase();
-    return availableMCPServers.filter((server) => {
-      const displayName = server.config?.title || server.serverName;
-      return (
-        displayName.toLowerCase().includes(query) || server.serverName.toLowerCase().includes(query)
-      );
-    });
-  }, [availableMCPServers, searchQuery]);
+  const myPlugins = storefront.items.filter((item) => storefront.installed.includes(item.id));
+  const addable = storefront.items.filter((item) => !storefront.installed.includes(item.id));
 
   return (
-    <div
-      role="region"
-      aria-labelledby={headingId}
-      className="flex h-full w-full flex-col overflow-hidden pt-2"
-    >
-      {/* Sticky header: title, create, search */}
-      <PanelHeader
-        title="插件与连接"
-        titleId={headingId}
+    <div role="region" aria-labelledby={headingId}
+      className="flex h-full w-full flex-col overflow-hidden pt-2">
+      <PanelHeader title="我的插件" titleId={headingId}
         action={
-          user?.role === SystemRoles.ADMIN && hasCreateAccess && (
-            <MCPServerDialog
-              open={showDialog}
-              onOpenChange={setShowDialog}
-              triggerRef={addButtonRef}
-            >
-              <OGDialogTrigger asChild>
-                <TooltipAnchor
-                  description={localize('com_ui_add_mcp')}
-                  side="bottom"
-                  render={
-                    <Button
-                      ref={addButtonRef}
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 shrink-0"
-                      onClick={() => setShowDialog(true)}
-                      aria-label={localize('com_ui_add_mcp')}
-                    >
-                      <Plus className="size-4" aria-hidden="true" />
-                    </Button>
-                  }
-                />
-              </OGDialogTrigger>
-            </MCPServerDialog>
-          )
+          <Button type="button" size="sm" variant="outline"
+            onClick={() => setAddOpen(true)} aria-label="添加插件">
+            <Plus className="mr-1 size-4" aria-hidden="true" />添加插件
+          </Button>
         }
-        search={activeView === 'installed' ? (
-          <FilterInput
-            inputId="mcp-filter"
-            label={localize('com_ui_filter_mcp_servers')}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        ) : undefined}
       />
-
-      <div className="border-border-light flex gap-1 border-b px-3 pb-2" role="tablist" aria-label="插件视图">
-        <button type="button" role="tab" aria-selected={activeView === 'discover'}
-          onClick={() => setActiveView('discover')}
-          className={`rounded-lg px-3 py-2 text-sm ${activeView === 'discover' ? 'bg-surface-active text-text-primary font-medium' : 'text-text-secondary hover:bg-surface-hover'}`}>
-          发现插件
-        </button>
-        <button type="button" role="tab" aria-selected={activeView === 'installed'}
-          onClick={() => setActiveView('installed')}
-          className={`rounded-lg px-3 py-2 text-sm ${activeView === 'installed' ? 'bg-surface-active text-text-primary font-medium' : 'text-text-secondary hover:bg-surface-hover'}`}>
-          我的插件（{availableMCPServers.length}）
-        </button>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        {error && <p role="alert" className="text-text-destructive py-2 text-xs">{error}</p>}
+        {loading && <p role="status" className="text-text-secondary py-3 text-sm">正在加载…</p>}
+        {!loading && myPlugins.map((item) => {
+          const serverName = item.serverName;
+          const state = serverName ? connectionStatus?.[serverName] : undefined;
+          const connected = state?.connectionState === 'connected' &&
+            (item.auth !== 'oauth' || state.authorizationState === 'authorized');
+          return (
+            <div key={item.id} data-testid={`my-plugin-${item.id}`}
+              className="border-border-light my-2 rounded-xl border p-3">
+              <div className="flex items-start gap-2">
+                <PlugZap className="text-text-secondary mt-0.5 size-5 shrink-0" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-text-primary text-sm font-semibold">{item.name}</p>
+                  <p className="text-text-secondary mt-1 text-xs">{item.description}</p>
+                  <p className="text-text-secondary mt-1 text-xs">{connected ? '已连接' : '未连接'}</p>
+                </div>
+              </div>
+              <div className="mt-3 flex justify-end gap-2">
+                {!connected && serverName && (
+                  <Button type="button" size="sm" variant="outline"
+                    disabled={isInitializing(serverName) || busyId !== null}
+                    onClick={() => { void connect(serverName); }}>
+                    {isInitializing(serverName) ? '连接中…' : '连接账号'}
+                  </Button>
+                )}
+                <Button type="button" size="sm" variant="outline"
+                  disabled={busyId !== null}
+                  onClick={() => { void changeInstallation(item.id, 'DELETE'); }}
+                  aria-label={`移除${item.name}`}>
+                  <Trash2 className="mr-1 size-4" aria-hidden="true" />移除
+                </Button>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      {/* Both views reuse the same MCP registry, connection state and permissions. */}
-      <PanelContent
-        isLoading={isLoading}
-        skeleton={<MCPServerCardSkeleton />}
-        className="px-3 pb-3"
-      >
-        {activeView === 'discover' ? (
-          <PluginDiscovery
-            servers={availableMCPServers}
-            connected={(name) => connectionStatus?.[name]?.connectionState === 'connected'}
-            connecting={isInitializing}
-            onConnect={(name) => { void handleConnect(name); }}
-          />
-        ) : (
-          <MCPServerList
-            servers={filteredServers}
-            getServerStatusIconProps={getServerStatusIconProps}
-            isFiltered={searchQuery.trim().length > 0}
-          />
-        )}
-      </PanelContent>
 
+      <OGDialog open={addOpen} onOpenChange={setAddOpen}>
+        <OGDialogContent className="w-11/12 max-w-lg overflow-y-auto rounded-2xl">
+          <OGDialogTitle>添加插件</OGDialogTitle>
+          <OGDialogDescription>
+            选择插件添加到“我的插件”。需要登录的插件可在添加后连接自己的账号。
+          </OGDialogDescription>
+          <PluginDiscovery items={addable} installed={storefront.installed}
+            busyId={busyId} onAdd={(id) => { void changeInstallation(id, 'POST'); }} />
+        </OGDialogContent>
+      </OGDialog>
       <McpOAuthDialog
-        open={pendingOAuthServer !== null &&
-          getOAuthUrl(pendingOAuthServer ?? '') != null}
+        open={pendingOAuthServer !== null && getOAuthUrl(pendingOAuthServer ?? '') != null}
         onOpenChange={(open) => { if (!open) setPendingOAuthServer(null); }}
         serverName={pendingOAuthServer ?? ''}
         oauthUrl={getOAuthUrl(pendingOAuthServer ?? '') ?? ''}
       />
-      {/* Config Dialog for custom user vars */}
-      {configDialogProps && <MCPConfigDialog {...configDialogProps} />}
-
-      {user?.role === SystemRoles.ADMIN && (
-        <PanelFooter>
-          <MCPAdminSettings />
-        </PanelFooter>
-      )}
     </div>
   );
 }

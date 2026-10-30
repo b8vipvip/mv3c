@@ -53,6 +53,11 @@ const { getResourcePermissionsMap } = require('~/server/services/PermissionServi
 const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { getMCPManager, getMCPServersRegistry } = require('~/config');
 const db = require('~/models');
+const { getInstalledIds } = require('~/server/services/UserPluginStore');
+const { getPublicSettings } = require('~/server/services/Config/mv3cSettings');
+const {
+  configuredCatalogEntries, filterUninstalledCatalogServers,
+} = require('../../../mv3c/userPluginStoreCore.cjs');
 
 const auditMCPServer = createMCPServerAuditor({ recordAuditEntry: db.recordAuditEntry });
 
@@ -140,7 +145,16 @@ const getMCPTools = async (req, res) => {
       return res.status(401).json({ message: 'Unauthorized' });
     }
 
-    const mcpConfig = await resolveAllMcpConfigs(userId, req.user);
+    const allMcpConfig = await resolveAllMcpConfigs(userId, req.user);
+    const [installedIds, publicSettings] = await Promise.all([
+      getInstalledIds(userId), getPublicSettings(),
+    ]);
+    const managedEntries = configuredCatalogEntries(
+      allMcpConfig, [], publicSettings.plugins.githubOAuthReady, true,
+    );
+    const mcpConfig = filterUninstalledCatalogServers(
+      allMcpConfig, installedIds, managedEntries,
+    );
     const mcpApps = resolveMCPAppsPolicy(
       req.config?.mcpSettings?.apps,
       undefined,
