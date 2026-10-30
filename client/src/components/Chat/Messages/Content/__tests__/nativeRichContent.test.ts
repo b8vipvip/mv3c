@@ -1,4 +1,4 @@
-import { isOwnedAsset, validateNativeContent, shouldApplyNativeSnapshot } from '../nativeRichContent';
+import { isOwnedAsset, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks } from '../nativeRichContent';
 
 const asset='https://chat2api.example.com/api/media/med_123456789/secretABC12345678';
 const input = {
@@ -38,5 +38,25 @@ describe('native snapshot readiness after latest DOM revision', () => {
     expect(shouldApplyNativeSnapshot(next, next)).toBe(false);
     expect(shouldApplyNativeSnapshot(next, { ...next, revision: 1 })).toBe(false);
     expect(shouldApplyNativeSnapshot(null, next)).toBe(true);
+  });
+});
+
+describe('native-rich v1 link and file handoff preservation', () => {
+  it('retains verified generated file download actions from Markdown', () => {
+    const files = '[📎 report.xlsx](https://files.example.com/api/generated-files/file_12345678/tokenABC12345)';
+    expect(hasUnrepresentedNativeLinks(files)).toBe(true);
+    expect(hasUnrepresentedNativeLinks('Some [source](https://example.com/report)')).toBe(true);
+    expect(hasUnrepresentedNativeLinks('<https://example.com/reference>')).toBe(true);
+  });
+
+  it('still enables native image-only layout and unlinked rich text', () => {
+    expect(hasUnrepresentedNativeLinks('![image](https://files.example.com/api/media/med_1234567/tokenABC12345)')).toBe(false);
+    expect(hasUnrepresentedNativeLinks('# Heading\\n\\n| A | B |\\n| - | - |')).toBe(false);
+    expect(hasUnrepresentedNativeLinks('')).toBe(false);
+  });
+
+  it('does not allow a malicious or incomplete link to bypass conservative fallback', () => {
+    expect(hasUnrepresentedNativeLinks('[📎 report.zip](/api/generated-files/file_12345678/token)')).toBe(true);
+    expect(hasUnrepresentedNativeLinks('[docs](sandbox:/mnt/data/notes.pdf)')).toBe(true);
   });
 });
