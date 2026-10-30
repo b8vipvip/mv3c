@@ -133,6 +133,11 @@ describe('verified native file cards preserve canonical download targets', () =>
     expect(hasUnrepresentedNativeLinks(canonical, rich)).toBe(false);
     expect(hasUnrepresentedNativeLinks(canonical, input)).toBe(true);
   });
+  it('keeps a verified same-host HTTP archive link represented by the HTTPS file card', () => {
+    const legacy = pending.replace('https://', 'http://');
+    expect(hasUnrepresentedNativeLinks('[📎 plan.xlsx](' + legacy + ')', rich)).toBe(false);
+    expect(hasUnrepresentedNativeLinks('[📎 plan.xlsx](http://evil.example.com/api/generated-files/unknown/token)', rich)).toBe(true);
+  });
   it('does not discard any ordinary external links or unrelated file references', () => {
     expect(hasUnrepresentedNativeLinks(canonical + ' [docs](https://example.com)', rich)).toBe(true);
     expect(hasUnrepresentedNativeLinks(canonical.replace('plan.xlsx', 'unmatched.xlsx'), rich)).toBe(true);
