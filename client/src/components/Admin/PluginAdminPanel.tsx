@@ -12,6 +12,7 @@ type PluginPolicy = {
   githubOAuthClientId: string;
   /** Computed by backend, never accepted in write requests. */
   githubOAuthConfigured: boolean;
+  githubOAuthReady: boolean;
 };
 type CatalogItem = {
   id: string;
@@ -36,6 +37,7 @@ type RegisteredServer = {
 };
 type PluginOverview = {
   policy: PluginPolicy;
+  sitePublicUrl: string;
   catalogue: CatalogItem[];
   pluginRegistrations?: { id: string; count: number }[];
   registrations: RegisteredServer[];
@@ -333,12 +335,18 @@ export default function PluginAdminPanel({ token }: { token: string | null }) {
           启用全站 GitHub OAuth MCP 连接
         </label>
         <p className="text-text-secondary text-xs">
-          GitHub 应用回调 URL：<code className="select-all">{
-            typeof window !== 'undefined' ? window.location.origin : 'https://chat.mv3.cn'
-          }/api/mcp/github/oauth/callback</code>。
+          GitHub OAuth 生效条件：先在后台「站点与注册」设置网站公开地址（HTTPS），再注册 GitHub OAuth App。
+          正式回调 URL：{overview.sitePublicUrl
+            ? <code className="select-all">{overview.sitePublicUrl}/api/mcp/github/oauth/callback</code>
+            : <strong className="text-red-600">尚未设置公开 HTTPS 地址，暂不能启用</strong>}。
           需要先在 GitHub 创建 OAuth App 并配置以上回调地址；授权范围包含
           <code>read:user repo</code>（repo 可访问授权账号允许的私有仓库，请在 GitHub 授权页确认）。
           Client Secret 仅服务端加密存储，不暴露给用户端。配置完成后保存插件设置。
+        </p>
+        <p role="status" className="text-text-secondary text-xs">
+          GitHub OAuth：{draft.githubOAuthEnabled
+            ? (overview.policy.githubOAuthReady ? '已配置，可供用户授权' : '尚未完成生效条件')
+            : '未启用'}。OAuth 回调域名来自服务器保存的公开站点地址，不依赖当前浏览器地址栏。
         </p>
         <a href="https://github.com/settings/developers" target="_blank"
           rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-600 underline">
