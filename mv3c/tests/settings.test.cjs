@@ -76,7 +76,8 @@ test('interactive MCP Apps require an explicit isolated HTTPS sandbox', () => {
   const safe = 'https://mcp-sandbox.example.net/api/mcp/sandbox';
   assert.deepEqual(core.publicSettings(null).plugins,
     { appsEnabled: false, sandboxURL: '', catalogHidden: [],
-      githubOAuthEnabled: false, githubOAuthClientId: '', githubOAuthConfigured: false });
+      githubOAuthEnabled: false, githubOAuthClientId: '', githubOAuthConfigured: false,
+      githubOAuthReady: false });
   for (const url of [
     'http://sandbox.example.net/api/mcp/sandbox',
     'https://sandbox.example.net/other',
@@ -142,10 +143,11 @@ test('operator GitHub OAuth config is the only GitHub MCP definition; no user PA
   const doc = { plugins: {
     githubOAuthClientId: id, githubOAuthClientSecretCipher: encrypted,
     githubOAuthEnabled: true, appsEnabled: false,
-  } };
+  }, site: { publicUrl: 'https://chat.mv3.cn' } };
   const settings = core.publicSettings(doc);
   assert.equal(settings.plugins.githubOAuthConfigured, true);
   assert.equal(settings.plugins.githubOAuthEnabled, true);
+  assert.equal(settings.plugins.githubOAuthReady, true);
   assert.equal(JSON.stringify(settings).includes(secret), false);
   assert.equal(JSON.stringify(settings).includes(encrypted), false);
   assert.equal(JSON.stringify(settings).includes('Cipher'), false);
@@ -169,10 +171,30 @@ test('operator GitHub OAuth config is the only GitHub MCP definition; no user PA
   assert.equal(withOrigin.mcpServers.github.oauth.redirect_uri,
     'https://chat.mv3.cn/api/mcp/github/oauth/callback');
   assert.equal(JSON.stringify(config).includes('personal-access-tokens'), false);
-  assert.equal(core.runtimeConfig({ plugins: { ...doc.plugins,
+  assert.equal(core.runtimeConfig({ ...doc, plugins: { ...doc.plugins,
     githubOAuthEnabled: false } }, KEY).mcpServers, undefined);
   assert.equal(core.runtimeConfig({ plugins: {
     githubOAuthClientId: id, githubOAuthEnabled: true } }, KEY).mcpServers, undefined);
+});
+
+test('managed GitHub OAuth requires a configured trusted HTTPS callback origin', () => {
+  const id = 'Ov23liExampleClient0001';
+  const ciphertext = core.encryptSecret('test-client-secret-for-operator', KEY);
+  const doc = { plugins: {
+    githubOAuthClientId: id, githubOAuthClientSecretCipher: ciphertext,
+    githubOAuthEnabled: true,
+  } };
+  assert.equal(core.publicSettings(doc).plugins.githubOAuthConfigured, true);
+  assert.equal(core.publicSettings(doc).plugins.githubOAuthReady, false);
+  assert.equal(core.runtimeConfig(doc, KEY).mcpServers, undefined,
+    'never publish an OAuth server without a stable callback URL');
+  const insecure = { ...doc, site: { publicUrl: 'http://localhost' } };
+  assert.equal(core.publicSettings(insecure).plugins.githubOAuthReady, false);
+  assert.equal(core.runtimeConfig(insecure, KEY).mcpServers, undefined);
+  const enabled = { ...doc, site: { publicUrl: 'https://chat.mv3.cn' } };
+  assert.equal(core.publicSettings(enabled).plugins.githubOAuthReady, true);
+  assert.equal(core.runtimeConfig(enabled, KEY).mcpServers.github.oauth.redirect_uri,
+    'https://chat.mv3.cn/api/mcp/github/oauth/callback');
 });
 
 test('GitHub OAuth operator fields fail closed on malformed credentials or unknown keys', () => {
