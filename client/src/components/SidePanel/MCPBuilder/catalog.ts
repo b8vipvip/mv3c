@@ -46,11 +46,14 @@ export function findConfiguredPluginServer<T extends { serverName: string; confi
   if (preset.id === 'github' && !managedGithubReady) return undefined;
   const expected = preset.url.replace(/\/+$/, '');
   return servers.find((server) => {
-    const config = server.config as { url?: unknown; oauth?: unknown } | null;
+    const config = server.config as {
+      url?: unknown; oauth?: unknown; source?: unknown;
+    } | null;
     if (!config || typeof config.url !== 'string' ||
         config.url.replace(/\/+$/, '') !== expected) return false;
     if (preset.id === 'github') {
       return server.serverName === 'github' &&
+        config.source === 'config' &&
         config.oauth !== null && typeof config.oauth === 'object';
     }
     // User-supplied PATs are deliberately not a one-click catalog connection.
