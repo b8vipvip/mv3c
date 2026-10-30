@@ -1,4 +1,4 @@
-import { isOwnedAsset, isOwnedGeneratedFile, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage, nativeMessageScopeKey, canRetryNativePendingFile } from '../nativeRichContent';
+import { isOwnedAsset, isOwnedGeneratedFile, validateNativeContent, shouldApplyNativeSnapshot, hasUnrepresentedNativeLinks, hasNativeTextCoverage, nativeMessageScopeKey, canRetryNativePendingFile, canRetryPostTerminalNativeBinding } from '../nativeRichContent';
 
 const asset='https://chat2api.example.com/api/media/med_123456789/secretABC12345678';
 const input = {
@@ -228,5 +228,15 @@ describe('message-scoped native readiness lifecycle', () => {
     expect(shouldApplyNativeSnapshot(failedDoc, running)).toBe(false);
     expect(shouldApplyNativeSnapshot(settled, { ...running, files: [] })).toBe(false);
     expect(shouldApplyNativeSnapshot(settled, { ...running, assets: [] })).toBe(false);
+  });
+});
+
+describe('bounded post-completion native binding recovery', () => {
+  it('never polls historical messages or after the short deterministic budget', () => {
+    expect(canRetryPostTerminalNativeBinding(null, 100, 0)).toBe(false);
+    expect(canRetryPostTerminalNativeBinding(100, 200, 0)).toBe(true);
+    expect(canRetryPostTerminalNativeBinding(100, 45100, 1)).toBe(false);
+    expect(canRetryPostTerminalNativeBinding(100, 201, 7)).toBe(false);
+    expect(canRetryPostTerminalNativeBinding(100, 99, 0)).toBe(false);
   });
 });
