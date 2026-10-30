@@ -23,7 +23,7 @@ const sections: { label: string; items: AdminNavItem[] }[] = [
     { id: 'audit', title: '操作审计', description: '后台修改记录', icon: ScrollText },
   ] },
   { label: '系统维护', items: [
-    { id: 'updates', title: '版本更新', description: '部署与健康验证', icon: RefreshCw },
+    { id: 'updates', title: '版本更新', description: 'GPTAuto 智能更新与验证', icon: RefreshCw },
   ] },
 ];
 
