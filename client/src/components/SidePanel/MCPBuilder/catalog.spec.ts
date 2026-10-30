@@ -64,6 +64,23 @@ describe('operator managed GitHub OAuth binding', () => {
     expect(findConfiguredPluginServer(preset, [impostor, oauthServer], true)).toEqual(oauthServer);
   });
 
+  it('recognizes the managed server when ordinary users cannot view its URL', () => {
+    // The MCP list intentionally removes config.url for users without
+    // MANAGE_MCP_SERVERS; the catalogue readiness response retains the proof.
+    const redacted = {
+      serverName: 'github',
+      config: { source: 'config', oauth: { client_id: 'server-provisioned' } },
+    };
+    expect(findConfiguredPluginServer(preset, [redacted], true)).toEqual(redacted);
+    expect(findConfiguredPluginServer(preset, [redacted], false)).toBeUndefined();
+    expect(findConfiguredPluginServer(preset, [{
+      ...redacted, config: { ...redacted.config, source: 'user' },
+    }], true)).toBeUndefined();
+    expect(findConfiguredPluginServer(preset, [{
+      ...redacted, config: { ...redacted.config, url: 'https://evil.example/mcp' },
+    }], true)).toBeUndefined();
+  });
+
   it('does not advertise a PAT-only preset as an account-connect flow', () => {
     const gitee: PluginPreset = {
       ...preset, id: 'gitee', auth: 'token',

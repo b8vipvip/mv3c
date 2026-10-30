@@ -49,13 +49,22 @@ export function findConfiguredPluginServer<T extends { serverName: string; confi
     const config = server.config as {
       url?: unknown; oauth?: unknown; source?: unknown;
     } | null;
-    if (!config || typeof config.url !== 'string' ||
-        config.url.replace(/\/+$/, '') !== expected) return false;
+    if (!config) return false;
     if (preset.id === 'github') {
+      // /store/catalog already verified this user's effective server URL,
+      // operator source, and OAuth configuration before issuing the readiness
+      // flag. /mcp/servers intentionally REDACTS the URL for ordinary users.
+      // Never make a one-click connection depend on that hidden field.
+      // If the URL is visible (e.g. admin), still reject any mismatch.
       return server.serverName === 'github' &&
         config.source === 'config' &&
-        config.oauth !== null && typeof config.oauth === 'object';
+        config.oauth !== null && typeof config.oauth === 'object' &&
+        (config.url === undefined ||
+          (typeof config.url === 'string' &&
+            config.url.replace(/\/+$/, '') === expected));
     }
+    if (typeof config.url !== 'string' ||
+        config.url.replace(/\/+$/, '') !== expected) return false;
     // User-supplied PATs are deliberately not a one-click catalog connection.
     // Such providers require an operator-managed OAuth integration first.
     if (preset.auth === 'token') return false;
