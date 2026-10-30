@@ -33,6 +33,7 @@ const Image = ({
   args,
   width,
   height,
+  compactGallery = false,
 }: {
   imagePath: string;
   altText: string;
@@ -47,6 +48,7 @@ const Image = ({
   };
   width?: number;
   height?: number;
+  compactGallery?: boolean;
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -104,11 +106,11 @@ const Image = ({
 
   const dims = width && height ? { width, height } : dimensionCache.get(absoluteImageUrl);
   const hasDimensions = !!(dims?.width && dims?.height);
-  const heightStyle = hasDimensions ? computeHeightStyle(dims.width, dims.height) : undefined;
+  const heightStyle = !compactGallery && hasDimensions ? computeHeightStyle(dims.width, dims.height) : undefined;
   const showSkeleton = hasDimensions && !paintedUrls.has(absoluteImageUrl);
 
   return (
-    <div className={alignRight ? 'ml-auto' : undefined}>
+    <div className={compactGallery ? 'min-w-0 shrink-0' : alignRight ? 'ml-auto' : undefined}>
       <button
         ref={triggerRef}
         type="button"
@@ -116,7 +118,10 @@ const Image = ({
         aria-haspopup="dialog"
         onClick={() => setIsOpen(true)}
         className={cn(
-          'border-border-light text-text-secondary-alt relative mt-1 w-full max-w-lg cursor-pointer overflow-hidden rounded-lg border shadow-md transition-shadow',
+          'border-border-light text-text-secondary-alt relative mt-1 cursor-pointer overflow-hidden rounded-lg border transition-shadow',
+          compactGallery
+            ? 'h-44 w-36 max-h-[48vw] max-w-[32vw] shadow-sm'
+            : 'w-full max-w-lg shadow-md',
           'focus-visible:ring-text-primary focus-visible:ring-offset-surface-primary focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2',
           className,
         )}
@@ -129,7 +134,9 @@ const Image = ({
           onLoad={() => paintedUrls.add(absoluteImageUrl)}
           className={cn(
             'relative block text-transparent',
-            hasDimensions
+            compactGallery
+              ? 'size-full object-cover'
+              : hasDimensions
               ? 'size-full object-contain'
               : cn('h-auto w-auto max-w-full', IMAGE_MAX_H),
           )}
