@@ -139,8 +139,10 @@ router.get('/:conversationId/:messageId/native-content', authorizeNativeMessage,
 
 router.get('/:conversationId/:messageId/native-content/events', authorizeNativeMessage, async (req, res) => {
   let upstream;
+  let normalizeSnapshot;
   try {
     upstream = await nativeRich.upstreamNativeEvents(res.locals.nativeMessage);
+    normalizeSnapshot = await nativeRich.nativeSnapshotNormalizer();
     if (!upstream || !upstream.ok || !upstream.body) {
       return res.status(upstream?.status === 404 || !upstream ? 404 : 502).end();
     }
@@ -165,7 +167,7 @@ router.get('/:conversationId/:messageId/native-content/events', authorizeNativeM
       const { done, value } = await reader.read();
       if (done) break;
       buffered += decoder.decode(value, { stream: true });
-      if (buffered.length > 100000) break; // no unbounded upstream frames
+      if (buffered.length > 512 * 1024) break; // bounded full rich snapshot frames
       let end;
       while ((end = buffered.indexOf('\n\n')) >= 0) {
         const frame = buffered.slice(0, end);
@@ -177,12 +179,12 @@ router.get('/:conversationId/:messageId/native-content/events', authorizeNativeM
           closed = true;
           break;
         }
-        if (name !== 'native.snapshot' || !data || data.length > 98000) continue;
+        if (name !== 'native.snapshot' || !data || data.length > 500000) continue;
         try {
           const payload = JSON.parse(data);
           if (payload.version !== 1 || !payload.root || !Array.isArray(payload.assets) ||
               !Number.isSafeInteger(payload.revision)) continue;
-          res.write('event: native.snapshot\ndata: ' + JSON.stringify(payload) + '\n\n');
+          res.write('event: native.snapshot\ndata: ' + JSON.stringify(normalizeSnapshot(payload)) + '\n\n');
         } catch (_) { /* discard malformed native frame */ }
       }
     }
