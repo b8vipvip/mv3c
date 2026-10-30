@@ -32,3 +32,30 @@ export function filterPluginCatalog(items: readonly PluginPreset[], query: strin
     ),
   );
 }
+
+/**
+ * The GitHub account-connect card must resolve only to the operator-owned
+ * OAuth config server, never to a user-created PAT server with the same URL.
+ * The server still makes the authoritative permission / OAuth decisions.
+ */
+export function findConfiguredPluginServer<T extends { serverName: string; config: unknown }>(
+  preset: PluginPreset,
+  servers: readonly T[],
+  managedGithubReady: boolean,
+): T | undefined {
+  if (preset.id === 'github' && !managedGithubReady) return undefined;
+  const expected = preset.url.replace(/\/+$/, '');
+  return servers.find((server) => {
+    const config = server.config as { url?: unknown; oauth?: unknown } | null;
+    if (!config || typeof config.url !== 'string' ||
+        config.url.replace(/\/+$/, '') !== expected) return false;
+    if (preset.id === 'github') {
+      return server.serverName === 'github' &&
+        config.oauth !== null && typeof config.oauth === 'object';
+    }
+    // User-supplied PATs are deliberately not a one-click catalog connection.
+    // Such providers require an operator-managed OAuth integration first.
+    if (preset.auth === 'token') return false;
+    return true;
+  });
+}
