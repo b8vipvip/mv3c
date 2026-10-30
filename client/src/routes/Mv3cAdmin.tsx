@@ -453,7 +453,7 @@ export default function Mv3cAdmin() {
   });
 
   const requestDeployment = () => {
-    if (!window.confirm('确定通过唯一更新器部署已交付并验证的 GitHub Actions 正式版镜像吗？若镜像尚未传输、SHA 不符或磁盘不足，会拒绝部署，绝不在生产服务器构建。切换期间可能短暂不可用。')) return;
+    if (!window.confirm('确定启动 GPTAuto 智能更新吗？宿主机将自动校验变更、GitHub 正式发布与镜像 SHA，并优先复用已验证的本地或预构建镜像；未满足安全条件时拒绝部署。生产服务器不会重新执行 Docker Build。')) return;
     void run(async () => {
       if (!token) return;
       await adminRequest(token, '/updates/deploy', { method: 'POST' });
@@ -714,9 +714,9 @@ export default function Mv3cAdmin() {
             {tab === 'updates' && (
               <section className="space-y-6 rounded-xl border border-border-medium p-5">
                 <div>
-                  <h2 className="text-xl font-semibold">版本检查与手动部署</h2>
+                  <h2 className="text-xl font-semibold">版本检查与一键智能更新</h2>
                   <p className="mt-1 text-sm text-text-secondary">
-                    代码拉取：与 chat2api 一致，依次尝试 GitHub SSH 443 → SSH 22 → HTTPS（均限时），宿主机不再查询 GitHub REST API。仅部署附有发布证明、包含两项 CI 成功记录并绑定正式版 SHA 的 GitHub Release；镜像由 GitHub Actions 预构建后上传至正式版 Release 下载资产，宿主机经 HTTPS 限速保护及断点续传取得镜像，再验证完整归档 SHA-256、镜像 ID 与正式版 SHA 后无构建部署。
+                    由 GPTAuto 统一分类和约束更新：后台点击一次，唯一宿主机更新器自动检查 GitHub 正式版并选择已校验的本地镜像、OCI 候选或预构建 Release 镜像。mv3c 的 React/Node 运行时仍必须保留正式 CI 与镜像证明，服务器不直接覆盖未经证明的源代码，也不执行 Docker Build。所有版本切换须通过健康检查及回滚机制。
                   </p>
                 </div>
                 {!updates ? (
@@ -912,7 +912,7 @@ export default function Mv3cAdmin() {
                         disabled={busy || !updates.agentOnline ||
                           Boolean(updates.pendingJob || updates.activeJob)}
                         onClick={requestDeployment}>
-                        立即更新并部署
+                        检查并智能更新
                       </button>
                       <button className={subtleButton} disabled={busy}
                         onClick={() => void loadUpdates()}>

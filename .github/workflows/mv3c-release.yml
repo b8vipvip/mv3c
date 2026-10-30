@@ -55,6 +55,22 @@ jobs:
               if not run or run.get('status') != 'completed' or run.get('conclusion') != 'success':
                   sys.exit('Release blocked: ' + name + ' is not successful')
           PY
+          # A green classification-only workflow is not image evidence.
+          # Publishing a Release requires the exact SHA's real Docker job
+          # to have completed successfully, not merely been skipped.
+          image_run="$(jq -r --arg sha "$EXPECTED_SHA" \
+            '[.workflow_runs[] | select(.name=="mv3c source Docker build" and .head_sha==$sha and .event=="push")] |
+             sort_by(.created_at, .id) | reverse | .[0].id // empty' /tmp/mv3c-runs.json)"
+          if [[ -z "$image_run" ]]; then
+            echo "No image build run for $EXPECTED_SHA; skip Release"
+            exit 0
+          fi
+          image_jobs="$(gh api "repos/$REPOSITORY/actions/runs/$image_run/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name=="docker-build" and .conclusion=="success")] | length')"
+          if [[ "$image_jobs" != "1" ]]; then
+            echo "Docker job was not successful (classification-only or skipped); skip Release"
+            exit 0
+          fi
           python3 - <<'PY'
           import json, os
           data = json.load(open('/tmp/mv3c-runs.json'))

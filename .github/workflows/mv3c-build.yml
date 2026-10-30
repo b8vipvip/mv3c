@@ -14,7 +14,40 @@ permissions:
   contents: read
 
 jobs:
+  smart-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      image_required: ${{ steps.plan.outputs.image_required }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Determine whether an attested release image is required
+        id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          FORCE_IMAGE: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=true
+          if [[ "$FORCE_IMAGE" != "true" && -f .github/gptauto/smart_update.py ]]; then
+            target="$(git rev-parse HEAD)"
+            base="$BASE_SHA"
+            if [[ ! "$base" =~ ^[a-f0-9]{40}$ ]] || [[ "$base" == 0000000000000000000000000000000000000000 ]]; then
+              base="$(git rev-parse HEAD^)"
+            fi
+            if python3 .github/gptauto/smart_update.py --repo mv3c --worktree . \
+                --from-sha "$base" --target-sha "$target" > /tmp/smart-plan.json; then
+              mode="$(python3 -c 'import json; print(json.load(open("/tmp/smart-plan.json"))["mode"])')"
+              [[ "$mode" != "checks-only" && "$mode" != "no-op" ]] || required=false
+            fi
+          fi
+          echo "image_required=$required" >> "$GITHUB_OUTPUT"
+
   docker-build:
+    needs: smart-plan
+    if: needs.smart-plan.outputs.image_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
