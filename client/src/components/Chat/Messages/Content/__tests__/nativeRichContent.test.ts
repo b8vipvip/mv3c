@@ -90,3 +90,21 @@ describe('canonical Markdown completeness guard for native-rich v1', () => {
     expect(hasNativeTextCoverage({}, complete)).toBe(false);
   });
 });
+
+describe('safe fractional native CSS grid layout', () => {
+  it('retains fractional computed widths in a native picture gallery', () => {
+    const rich = { ...input,
+      root: { ...input.root, style: { display: 'grid',
+        gridTemplateColumns: '348.5px 348.25px 1024px', gap: '8px' } } };
+    expect(validateNativeContent(rich)).toEqual(rich);
+  });
+  it('continues rejecting unsafe CSS and excessive pixel widths', () => {
+    for (const value of ['348.5px;position:fixed',
+      'url(https://evil.example/x)', '100000px 100px',
+      'repeat(3, auto)']) {
+      const rich = { ...input, root: { ...input.root,
+        style: { display: 'grid', gridTemplateColumns: value } } };
+      expect(validateNativeContent(rich)).toBeNull();
+    }
+  });
+});
