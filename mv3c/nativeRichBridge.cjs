@@ -1,7 +1,7 @@
 'use strict';
 const REQUEST_ID = /^req_[A-Za-z0-9_-]{6,100}$/;
 const OWNER_ID = /^[A-Za-z0-9:_-]{4,150}$/;
-const MAX_BYTES = 96 * 1024;
+const MAX_BYTES = 512 * 1024;
 const TTL_SECONDS = 90 * 24 * 3600;
 // Only provider response metadata is accepted. User text and user-controlled
 // message fields can never establish an upstream request association.
@@ -46,6 +46,40 @@ function nativeEndpoint(config, id, events = false) {
   return { url: trusted.base + '/native-content/' + encodeURIComponent(id) + (events ? '/events' : ''),
     token: trusted.apiKey };
 }
+// The configured HTTPS chat2api upstream is the sole trusted origin for this
+// narrow upgrade. Reverse proxies can produce HTTP archive URLs when the
+// request was server-to-server and supplied no browser Origin. Do not rewrite
+// third-party domains, local aliases, arbitrary paths, query strings or ports.
+function normalizeOwnedNativeAssetUrl(value, trusted) {
+  if (typeof value !== 'string' || !trusted) return value;
+  let upstream, candidate;
+  try {
+    upstream = new URL(trusted.base);
+    candidate = new URL(value);
+  } catch { return value; }
+  if (upstream.protocol !== 'https:' || candidate.protocol !== 'http:' ||
+      upstream.hostname.toLowerCase() !== candidate.hostname.toLowerCase() ||
+      candidate.port || candidate.username || candidate.password ||
+      candidate.search || candidate.hash) return value;
+  const media = /^\/api\/media\/[a-zA-Z0-9_-]{6,100}\/[a-zA-Z0-9_-]{8,150}$/;
+  const generated = /^\/api\/generated-files\/(?:pending\/pgen_[a-f0-9]{32}\/[a-zA-Z0-9_-]{16,150}|[a-zA-Z0-9_-]{6,100}\/[a-zA-Z0-9_-]{8,150})$/;
+  if (!media.test(candidate.pathname) && !generated.test(candidate.pathname)) return value;
+  return upstream.origin + candidate.pathname;
+}
+function normalizeBoundNativeSnapshot(payload, config) {
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.assets)) return payload;
+  const trusted = validatedUpstreamConfig(config);
+  if (!trusted) return payload;
+  return {
+    ...payload,
+    assets: payload.assets.map(value => normalizeOwnedNativeAssetUrl(value, trusted)),
+    ...(Array.isArray(payload.files) ? {
+      files: payload.files.map(file => file && typeof file === 'object'
+        ? { ...file, url: normalizeOwnedNativeAssetUrl(file.url, trusted) } : file),
+    } : {}),
+  };
+}
+
 async function readBoundSnapshot({ collection, user, conversationId, messageId, config, fetchImpl = fetch }) {
   const record = await collection.findOne({ user, conversationId, messageId, expiresAt: { $gt: new Date() } });
   if (!record) return null;
@@ -74,9 +108,9 @@ async function readBoundSnapshot({ collection, user, conversationId, messageId, 
   const payload = JSON.parse(Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).toString('utf8'));
   if (payload?.version !== 1 || !Number.isSafeInteger(payload.revision) ||
       !payload.root || !Array.isArray(payload.assets)) return null;
-  return payload;
+  return normalizeBoundNativeSnapshot(payload, config);
 }
 module.exports = {
   extractProviderBinding, saveProviderBinding, nativeEndpoint,
-  readBoundSnapshot, validatedUpstreamConfig,
+  readBoundSnapshot, validatedUpstreamConfig, normalizeBoundNativeSnapshot,
 };
