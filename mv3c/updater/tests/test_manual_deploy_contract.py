@@ -34,7 +34,8 @@ class ManualOnlyDeployContract(unittest.TestCase):
         self.assertNotIn("checked={updateConfig.autoDeployEnabled}", ui)
         self.assertNotIn("允许无人值守自动部署", ui)
         self.assertIn("自动检查 GitHub 正式版", ui)
-        self.assertIn("立即更新并部署", ui)
+        self.assertIn("检查并智能更新", ui)
+        self.assertIn("唯一宿主机更新器", ui)
 
 
 if __name__ == "__main__":
