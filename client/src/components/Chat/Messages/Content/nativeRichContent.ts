@@ -223,3 +223,14 @@ export function canRetryNativePendingFile(
   return firstProcessingAt !== null &&
     now >= firstProcessingAt && now - firstProcessingAt < 8 * 60 * 1000;
 }
+
+/** A request may be terminal before a delayed authenticated native binding is
+ * persisted. Retry a previously active message only for a hard 45s/7-poll
+ * window; historical messages never automatically retry a missing binding. */
+export function canRetryPostTerminalNativeBinding(
+  startedAt: number | null, now: number, attempts: number,
+): boolean {
+  return startedAt !== null && now >= startedAt &&
+    now - startedAt < 45_000 && Number.isInteger(attempts) &&
+    attempts >= 0 && attempts < 7;
+}
