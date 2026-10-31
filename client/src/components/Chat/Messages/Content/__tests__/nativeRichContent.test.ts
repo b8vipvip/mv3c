@@ -39,6 +39,30 @@ describe('large but bounded native layout', () => {
   });
 });
 
+describe('f7c8 deep image layout fidelity', () => {
+  it('accepts bounded 17-level Grid and all four archived media ordinals', () => {
+    const assets = [0,1,2,3].map((n) =>
+      'https://chat2api.example.com/api/media/med_123456789/' +
+      ('tokenABC1234567' + n));
+    let root: any = {tag:'div',style:{display:'grid',
+      gridTemplateColumns:'1fr 1fr'},children:
+      assets.map((_,media_index)=>({tag:'img',media_index}))};
+    for(let i=0;i<17;i++)root={tag:'div',children:[root]};
+    const doc={version:1,revision:19,root,assets};
+    const valid=validateNativeContent(doc);
+    expect(valid).not.toBeNull();
+    const imgNodes:number[]=[];
+    const visit=(node:any):void=>{
+      if(node.tag==='img')imgNodes.push(node.media_index);
+      node.children?.forEach(visit);
+    };
+    visit(valid!.root);
+    expect(imgNodes).toEqual([0,1,2,3]);
+    for(let i=0;i<10;i++)root={tag:'div',children:[root]};
+    expect(validateNativeContent({...doc,root})).toBeNull();
+  });
+});
+
 describe('native snapshot readiness after latest DOM revision', () => {
   it('updates assets without asking the Worker for a new DOM version', () => {
     const prev = validateNativeContent(input);
