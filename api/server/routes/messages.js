@@ -207,12 +207,16 @@ router.post('/:conversationId/:messageId/native-diagnostics', authorizeNativeMes
   const modes = new Set(['native', 'markdown']);
   const numeric = ['canonicalChars','renderedChars','headings','tables',
     'codeBlocks','images','imagesLoaded','imagesFailed','mixedContentImages',
-    'renderedGridContainers','renderedFlexContainers','renderedImageRows',
     'nativeAssets','nativeFiles','nativeRevision'];
+  // Optional to support browsers still running the previous client bundle
+  // during a rolling backend update.
+  const optionalMetrics = ['renderedGridContainers','renderedFlexContainers','renderedImageRows'];
   if (!body || typeof body !== 'object' || Array.isArray(body) ||
-      Object.keys(body).some(key => !['mode','reason',...numeric].includes(key)) ||
+      Object.keys(body).some(key => !['mode','reason',...numeric,...optionalMetrics].includes(key)) ||
       !modes.has(body.mode) || !reasons.has(body.reason) ||
       numeric.some(key => !Number.isInteger(body[key]) || body[key] < 0 || body[key] > 1000000) ||
+      optionalMetrics.some(key => key in body &&
+        (!Number.isInteger(body[key]) || body[key] < 0 || body[key] > 1000000)) ||
       Buffer.byteLength(JSON.stringify(body)) > 1500) {
     return res.status(400).json({ error: 'Invalid native render metrics' });
   }
@@ -223,7 +227,8 @@ router.post('/:conversationId/:messageId/native-diagnostics', authorizeNativeMes
       requestId: requestId || 'unbound',
       conversationId: res.locals.nativeMessage.conversationId,
       messageId: res.locals.nativeMessage.messageId,
-      ...Object.fromEntries(['mode','reason',...numeric].map(k => [k, body[k]])),
+      ...Object.fromEntries(['mode','reason',...numeric,...optionalMetrics]
+        .filter(k => k in body).map(k => [k, body[k]])),
     };
     logger.info('[mv3c-client-native] ' + JSON.stringify(record));
     return res.status(202).json({ accepted: true });
