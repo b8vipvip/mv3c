@@ -28,14 +28,38 @@ describe('safe native ChatGPT rich renderer contract',()=>{
 });
 
 describe('large but bounded native layout', () => {
-  it('accepts 720 individually accounted safe nodes and rejects truncation above 1200', () => {
+  it('accepts 1500+ nodes but still rejects above the bounded 3200 cap', () => {
     const sections = Array.from({ length: 12 }, (_, group) => ({ tag: 'div',
       children: Array.from({ length: 60 }, (_, i) => ({ tag: 'p', text: `paragraph ${group}-${i}` })) }));
     const rich = { version: 1, revision: 20, assets: [],
       root: { tag: 'div', children: sections } };
     expect(validateNativeContent(rich)).not.toBeNull();
-    const overBudget = { ...rich, root: { tag: 'div', children: [...sections, ...sections] } };
+    const bigger = { ...rich, root: { tag: 'div', children: [...sections, ...sections, ...sections] } };
+    expect(validateNativeContent(bigger)).not.toBeNull();
+    const overBudget = { ...rich, root: { tag: 'div',
+      children: Array.from({length: 65},(_,i) => ({tag:'div',
+        children: Array.from({length:60},(_,j)=>({tag:'p',text:'block '+i+'-'+j}))})) } };
     expect(validateNativeContent(overBudget)).toBeNull();
+  });
+});
+
+describe('062f large 19-image GameFlow layout', () => {
+  it('keeps all archived image ordinals in a large request-bound native tree', () => {
+    const assets = Array.from({length:19},(_,i) =>
+      'https://chat2api.example.com/api/media/med_123456789/TokenEncoded123' + i);
+    const blocks = Array.from({length:28},(_,group)=>({tag:'div',
+      children: [
+        {tag:'div',style:{display:'grid',gridTemplateColumns:'1fr 1fr'},
+          children:group<19?[{tag:'img',media_index:group}]:[{tag:'p',text:'category'}]},
+        ...Array.from({length:60},(_,i)=>({tag:'p',text:'game '+group+'-'+i})),
+      ]}));
+    const value={version:1,revision:22,root:{tag:'div',children:blocks},assets};
+    const valid=validateNativeContent(value);
+    expect(valid).not.toBeNull();
+    const ids:number[]=[];
+    const visit=(node:any):void=>{if(node.tag==='img')ids.push(node.media_index);node.children?.forEach(visit)};
+    visit(valid!.root);
+    expect(ids).toEqual(Array.from({length:19},(_,i)=>i));
   });
 });
 
