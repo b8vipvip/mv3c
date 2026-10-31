@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { apiBaseUrl } from 'librechat-data-provider';
+import { countNativeRenderLayout } from './nativeRenderLayoutEvidence';
 import { useOptionalAuthContext } from '~/hooks/AuthContext';
 
 type Snapshot = {
@@ -36,8 +37,11 @@ export default function useNativeRenderDiagnostics({
       const root = ref.current;
       if (!root || sent.current === key) return;
       const imgs = Array.from(root.querySelectorAll('img'));
+      const { renderedGridContainers, renderedFlexContainers, renderedImageRows } =
+        countNativeRenderLayout(root);
       const metrics = {
         mode, reason, canonicalChars,
+        renderedGridContainers, renderedFlexContainers, renderedImageRows,
         renderedChars: (root.textContent || '').length,
         headings: root.querySelectorAll('h1,h2,h3,h4,h5,h6').length,
         tables: root.querySelectorAll('table').length,
