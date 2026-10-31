@@ -1,7 +1,7 @@
 'use strict';
 const REQUEST_ID = /^req_[A-Za-z0-9_-]{6,100}$/;
 const OWNER_ID = /^[A-Za-z0-9:_-]{4,150}$/;
-const MAX_BYTES = 512 * 1024;
+const MAX_BYTES = 1152 * 1024;
 const TTL_SECONDS = 90 * 24 * 3600;
 // Only provider response metadata is accepted. User text and user-controlled
 // message fields can never establish an upstream request association.
