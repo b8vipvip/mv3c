@@ -207,6 +207,7 @@ router.post('/:conversationId/:messageId/native-diagnostics', authorizeNativeMes
   const modes = new Set(['native', 'markdown']);
   const numeric = ['canonicalChars','renderedChars','headings','tables',
     'codeBlocks','images','imagesLoaded','imagesFailed','mixedContentImages',
+    'renderedGridContainers','renderedFlexContainers','renderedImageRows',
     'nativeAssets','nativeFiles','nativeRevision'];
   if (!body || typeof body !== 'object' || Array.isArray(body) ||
       Object.keys(body).some(key => !['mode','reason',...numeric].includes(key)) ||
