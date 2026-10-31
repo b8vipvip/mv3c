@@ -70,6 +70,11 @@ export default function NativeRichContent({
   if (!doc) return <>{fallback}</>;
   return (
     <div data-testid="mv3c-native-rich-content" className="w-full min-w-0 max-w-full overflow-x-auto">
+      {doc.imageMappingEvidence === 'unique-dimensions-unverified' ? (
+        <div role="note" className="mb-2 text-xs text-text-secondary">
+          图片仅按唯一尺寸候选位置展示，尚未通过内容哈希验证，不能视为 1:1 还原。
+        </div>
+      ) : null}
       <NativeElement node={doc.root} doc={doc} />
       {doc.files?.length ? (
         <div data-testid="mv3c-native-files" className="mt-3 flex flex-wrap gap-3">
