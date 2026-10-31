@@ -288,3 +288,46 @@ describe('bounded post-completion native binding recovery', () => {
     expect(canRetryPostTerminalNativeBinding(100, 99, 0)).toBe(false);
   });
 });
+
+
+describe('33da cross-repo native layout compatibility', () => {
+  it('accepts a bounded 111-sibling reply and rejects 161-child truncation', () => {
+    const children = Array.from({ length: 111 }, (_, i) => ({ tag: 'p', text: 'section ' + i }));
+    const value = { version: 1, revision: 26, assets: [],
+      root: { tag: 'div', children } };
+    expect(validateNativeContent(value)).not.toBeNull();
+    const over = { ...value, root: { tag: 'div', children: [
+      ...children, ...Array.from({ length: 50 }, (_, i) => ({ tag: 'p', text: 'extra ' + i }))
+    ] } };
+    expect(validateNativeContent(over)).toBeNull();
+  });
+  it('uses only authenticated unique-dimension candidates, preserving ownership and ordering', () => {
+    const url = (i: number) => 'https://chat2api.example.com/api/media/med_123456789/tokenABC1234567' + i;
+    const assets = Array.from({ length: 10 }, (_, i) => url(i));
+    const root = { tag: 'div', children: [
+      { tag: 'img', media_index: 0 }, { tag: 'img', media_index: 1 },
+    ] };
+    const missing = { version: 1, revision: 30, root, assets };
+    expect(validateNativeContent(missing)).toBeNull();
+    const candidate = { ...missing, image_asset_candidates: {
+      status: 'unique-dimensions-unverified', indices: [8, 3],
+    } };
+    const accepted = validateNativeContent(candidate);
+    expect(accepted?.assets).toEqual([assets[8], assets[3]]);
+    expect(accepted?.imageMappingEvidence).toBe('unique-dimensions-unverified');
+    expect(accepted?.root).toEqual(root);
+    expect(validateNativeContent({ ...candidate, image_asset_candidates: {
+      status: 'unique-dimensions-unverified', indices: [8, 8],
+    } })).toBeNull();
+    expect(validateNativeContent({ ...candidate, image_asset_candidates: {
+      status: 'unavailable', indices: [8, 3],
+    } })).toBeNull();
+    expect(validateNativeContent({ ...candidate, image_asset_candidates: {
+      status: 'unique-dimensions-unverified', indices: [8, 10],
+    } })).toBeNull();
+    expect(validateNativeContent({ ...candidate, assets: [assets[0], 'blob:private'] })).toBeNull();
+    expect(validateNativeContent({ ...candidate, image_asset_candidates: {
+      status: 'unique-dimensions-unverified', indices: [8, 3], src: 'https://evil.invalid'
+    } })).toBeNull();
+  });
+});

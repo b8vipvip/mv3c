@@ -9,6 +9,7 @@ export type NativeNode = {
 export type NativeFile = { filename: string; url: string; bytes: number; status: 'processing' | 'ready' | 'failed' };
 export type NativeDocument = {
   version: 1; revision: number; root: NativeNode; assets: string[]; files?: NativeFile[];
+  imageMappingEvidence?: 'unique-dimensions-unverified';
 };
 const tags = new Set('div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' '));
 const enums: Record<string, string[]> = {
@@ -90,7 +91,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
       node.style = styles;
     }
     if ('children' in n) {
-      if (!Array.isArray(n.children) || n.children.length > 80 ||
+      if (!Array.isArray(n.children) || n.children.length > 160 ||
           ['img','hr','br'].includes(n.tag)) return null;
       const children: NativeNode[] = [];
       for (const child of n.children) {
@@ -103,13 +104,32 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
     return node;
   };
   const root = check(doc.root,0);
-  // Native image ordinals must match the *archived* image count exactly.
-  // Otherwise the server response may contain decorative/older images:
-  // fall back to canonical Markdown rather than show the wrong picture.
-  return root && images === doc.assets.length ? {
-    version: 1, revision: doc.revision, root, assets: doc.assets as string[],
+  if (!root) return null;
+  // The canonical mapping is a full one-to-one archive. Extra archived images
+  // can belong to decorative/fresh media outside the verified final layout.
+  // Only the authenticated chat2api server may provide a *unique dimension*
+  // subset candidate. Never infer a mapping from count or order alone.
+  let safeAssets = doc.assets as string[];
+  let imageMappingEvidence: NativeDocument['imageMappingEvidence'];
+  if (images !== safeAssets.length) {
+    const candidate = doc.image_asset_candidates;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+    const hint = candidate as Record<string, unknown>;
+    if (Object.keys(hint).some(k => !['status', 'indices'].includes(k)) ||
+        hint.status !== 'unique-dimensions-unverified' ||
+        !Array.isArray(hint.indices) || hint.indices.length !== images ||
+        images < 1 || images > 40 ||
+        !hint.indices.every(i => Number.isSafeInteger(i) && i >= 0 && i < safeAssets.length) ||
+        new Set(hint.indices).size !== hint.indices.length) return null;
+    safeAssets = hint.indices.map(i => safeAssets[i]);
+    if (new Set(safeAssets).size !== safeAssets.length) return null;
+    imageMappingEvidence = 'unique-dimensions-unverified';
+  }
+  return {
+    version: 1, revision: doc.revision, root, assets: safeAssets,
+    ...(imageMappingEvidence ? { imageMappingEvidence } : {}),
     ...(files.length || 'files' in doc ? { files } : {}),
-  } : null;
+  };
 }
 
 /** Archive readiness may change after the last DOM revision. A same-revision
