@@ -105,6 +105,42 @@ function getRecentLogText(range, dir = logDirectory(), now = Date.now()) {
   }
   return lines.join('\n') + '\n';
 }
+/** Administrator preview of *only* the redacted native client counters, not chat. */
+function getNativeClientDiagnostics(range, dir = logDirectory(), now = Date.now()) {
+  const raw = getRecentLogText(range, dir, now);
+  const output = [];
+  for (const line of raw.split('\n')) {
+    const match = line.match(/^(\S+) \[[a-z]{1,12}\] \[mv3c-client-native\] (\{.*\})$/);
+    if (!match) continue;
+    try {
+      const event = JSON.parse(match[2]);
+      if (!event || typeof event !== 'object') continue;
+      const fields = ['canonicalChars', 'renderedChars', 'headings', 'tables',
+        'codeBlocks', 'images', 'imagesLoaded', 'imagesFailed',
+        'mixedContentImages', 'renderedGridContainers',
+        'renderedFlexContainers', 'renderedImageRows', 'nativeAssets',
+        'nativeFiles', 'nativeRevision'];
+      const row = {
+        at: match[1],
+        requestId: /^req_[a-zA-Z0-9_-]{6,100}$/.test(event.requestId || '')
+          ? event.requestId : 'unbound',
+        mode: ['native', 'markdown'].includes(event.mode) ? event.mode : 'unknown',
+        reason: ['native_rendered', 'missing_sidecar', 'invalid_schema',
+          'unrepresented_links', 'text_coverage', 'markdown_fallback'].includes(event.reason)
+          ? event.reason : 'unknown',
+      };
+      for (const key of fields) {
+        if (Number.isSafeInteger(event[key]) && event[key] >= 0 && event[key] <= 1000000) {
+          row[key] = event[key];
+        }
+      }
+      output.push(row);
+    } catch {
+      // Ignore malformed/partial rotated records without exposing raw values.
+    }
+  }
+  return { total: output.length, records: output.slice(-50).reverse() };
+}
 function installRuntimeLogCapture(logger, dir = logDirectory()) {
   if (logger.__mv3cRuntimeCaptureInstalled) return;
   fs.mkdirSync(dir, { recursive: true });
@@ -130,5 +166,5 @@ function installRuntimeLogCapture(logger, dir = logDirectory()) {
 
 module.exports = {
   FILE_NAME, LOG_MAX_BYTES, SEGMENT_BYTES, MAX_FILES, PRESETS,
-  validateRange, getStats, getRecentLogText, installRuntimeLogCapture,
+  validateRange, getStats, getRecentLogText, getNativeClientDiagnostics, installRuntimeLogCapture,
 };
