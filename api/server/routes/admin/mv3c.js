@@ -250,6 +250,14 @@ router.get('/runtime-logs', async (req, res) => {
     return failure(res, error);
   }
 });
+router.get('/runtime-logs/client-native', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.json(runtimeLogs.getNativeClientDiagnostics(req.query.range || '1h'));
+  } catch (error) {
+    return failure(res, error);
+  }
+});
 router.get('/runtime-logs/export', async (req, res) => {
   try {
     const range = req.query.range || '1h';
