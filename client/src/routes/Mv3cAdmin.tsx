@@ -51,6 +51,13 @@ type RuntimeLogStats = {
   usedBytes: number; maxBytes: number; fileCount: number; ranges: LogRange[];
   capture: string;
 };
+type NativeClientDiag = {
+  at: string; requestId: string; mode: string; reason: string;
+  images?: number; imagesLoaded?: number; imagesFailed?: number;
+  renderedGridContainers?: number; renderedFlexContainers?: number;
+  renderedImageRows?: number; nativeAssets?: number; nativeRevision?: number;
+};
+type NativeClientDiagPage = { total: number; records: NativeClientDiag[] };
 type UpdateConfig = { autoEnabled: boolean; channel: 'release'; intervalMinutes: number };
 type UpdateProgress = {
   stage: string; percent: number; message: string; updatedAt: string;
@@ -150,6 +157,7 @@ export default function Mv3cAdmin() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [logRange, setLogRange] = useState<LogRange>('1h');
   const [logStats, setLogStats] = useState<RuntimeLogStats | null>(null);
+  const [nativeClientLogs, setNativeClientLogs] = useState<NativeClientDiagPage | null>(null);
   const [logDownloading, setLogDownloading] = useState(false);
   const [requestPage, setRequestPage] = useState<RequestPage | null>(null);
   const [requestStatus, setRequestStatus] = useState<RequestStatus>('');
@@ -227,12 +235,18 @@ export default function Mv3cAdmin() {
   const loadRuntimeLogs = useCallback(async () => {
     if (!token) return;
     try {
-      setLogStats(await adminRequest<RuntimeLogStats>(token, '/runtime-logs'));
+      const [stats, client] = await Promise.all([
+        adminRequest<RuntimeLogStats>(token, '/runtime-logs'),
+        adminRequest<NativeClientDiagPage>(token,
+          '/runtime-logs/client-native?range=' + logRange),
+      ]);
+      setLogStats(stats);
+      setNativeClientLogs(client);
     } catch (err) {
       if (err instanceof AdminApiError && err.status === 401) setAdminAuthExpired(true);
       setError(err instanceof Error ? err.message : '日志信息加载失败');
     }
-  }, [token]);
+  }, [token, logRange]);
 
   useEffect(() => {
     if (token && tab === 'logs') void loadRuntimeLogs();
@@ -1166,6 +1180,39 @@ export default function Mv3cAdmin() {
                     onClick={() => void loadRuntimeLogs()}>
                     刷新日志统计
                   </button>
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-base font-semibold">客户端富媒体渲染诊断</h3>
+                  <p className="text-xs text-text-secondary">
+                    最近范围内最多显示 50 条；仅展示回退原因和布局计数。无记录时先发起一次新请求并刷新。
+                    这是客户端最终渲染证据，不包含 ChatGPT 原生回复结构。
+                  </p>
+                  <div className="max-h-80 overflow-auto rounded-lg border border-border-medium">
+                    <table className="w-full min-w-[760px] text-left text-xs">
+                      <thead className="sticky top-0 bg-surface-secondary">
+                        <tr><th className="p-2">时间</th><th className="p-2">上游请求</th>
+                          <th className="p-2">模式/原因</th><th className="p-2">Grid / Flex</th>
+                          <th className="p-2">图片行</th><th className="p-2">图片成功/失败</th></tr>
+                      </thead>
+                      <tbody>
+                        {(nativeClientLogs?.records || []).map((row, index) => (
+                          <tr key={row.at + row.requestId + index} className="border-t border-border-medium">
+                            <td className="p-2 whitespace-nowrap">{row.at}</td>
+                            <td className="p-2 font-mono">{row.requestId}</td>
+                            <td className="p-2">{row.mode} / {row.reason}</td>
+                            <td className="p-2">{row.renderedGridContainers ?? '-'} / {row.renderedFlexContainers ?? '-'}</td>
+                            <td className="p-2">{row.renderedImageRows ?? '-'}</td>
+                            <td className="p-2">{row.imagesLoaded ?? '-'} / {row.imagesFailed ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!nativeClientLogs?.records.length && (
+                      <p className="p-4 text-sm text-text-secondary">
+                        当前时间段没有客户端富媒体诊断记录。
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <p className="text-xs text-text-secondary">
                   仅管理员可导出，文件总容量上限 10 MB。选择的时间范围内如果没有记录，
