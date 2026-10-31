@@ -59,7 +59,7 @@ export function validateNativeContent(data: unknown): NativeDocument | null {
   }
   let count = 0, total = 0, images = 0;
   const check = (input: unknown, depth: number): NativeNode | null => {
-    if (!input || typeof input !== 'object' || depth > 14 || ++count > 1200) return null;
+    if (!input || typeof input !== 'object' || depth > 24 || ++count > 1200) return null;
     const n = input as Record<string, unknown>;
     if (typeof n.tag !== 'string' || !tags.has(n.tag) ||
         Object.keys(n).some(k => !['tag','text','children','style','media_index'].includes(k))) return null;
