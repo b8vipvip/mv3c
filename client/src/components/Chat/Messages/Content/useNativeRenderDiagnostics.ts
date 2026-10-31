@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { apiBaseUrl } from 'librechat-data-provider';
+import { countNativeRenderLayout } from './nativeRenderLayoutEvidence';
 import { useOptionalAuthContext } from '~/hooks/AuthContext';
 
 type Snapshot = {
@@ -36,25 +37,8 @@ export default function useNativeRenderDiagnostics({
       const root = ref.current;
       if (!root || sent.current === key) return;
       const imgs = Array.from(root.querySelectorAll('img'));
-      // Geometry-independent comparison signals. The original Worker captures
-      // grids/flex groups and row structure, while the browser reports what
-      // was actually committed to MV3C (not the source React model).
-      const elements = Array.from(root.querySelectorAll('*')).slice(0, 1400);
-      let renderedGridContainers = 0;
-      let renderedFlexContainers = 0;
-      for (const element of elements) {
-        const style = getComputedStyle(element);
-        if (style.display === 'grid' || style.display === 'inline-grid') renderedGridContainers++;
-        else if (style.display === 'flex' || style.display === 'inline-flex') renderedFlexContainers++;
-      }
-      const imageTops = imgs.map(img => img.getBoundingClientRect().top)
-        .filter(top => Number.isFinite(top)).sort((a,b) => a-b);
-      let renderedImageRows = 0;
-      let lastTop: number | null = null;
-      for (const top of imageTops) {
-        if (lastTop === null || Math.abs(top-lastTop) > 20) renderedImageRows++;
-        lastTop = top;
-      }
+      const { renderedGridContainers, renderedFlexContainers, renderedImageRows } =
+        countNativeRenderLayout(root);
       const metrics = {
         mode, reason, canonicalChars,
         renderedGridContainers, renderedFlexContainers, renderedImageRows,
