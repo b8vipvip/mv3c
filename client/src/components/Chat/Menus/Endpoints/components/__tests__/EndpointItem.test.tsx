@@ -1,9 +1,10 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { Endpoint, SelectedValues } from '~/common';
-import { EndpointItem } from '../EndpointItem';
+import { EndpointItem, EndpointMenuContent } from '../EndpointItem';
 
 const mockHandleSelectEndpoint = jest.fn();
+const mockHandleSelectModel = jest.fn();
 const mockHandleOpenKeyDialog = jest.fn();
 const mockSetEndpointSearchValue = jest.fn();
 
@@ -11,6 +12,17 @@ let mockSelectedValues: SelectedValues = { endpoint: '', model: '', modelSpec: '
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
+  useFavorites: () => ({
+    isFavoriteModel: () => false,
+    toggleFavoriteModel: jest.fn(),
+    isFavoriteAgent: () => false,
+    toggleFavoriteAgent: jest.fn(),
+  }),
+}));
+
+jest.mock('~/components/Chat/Menus/Endpoints/useActiveItem', () => ({
+  __esModule: true,
+  default: () => ({ ref: { current: null }, isActive: false }),
 }));
 
 jest.mock('~/components/Chat/Menus/Endpoints/ModelSelectorContext', () => ({
@@ -22,6 +34,7 @@ jest.mock('~/components/Chat/Menus/Endpoints/ModelSelectorContext', () => ({
     endpointSearchValues: {},
     handleOpenKeyDialog: mockHandleOpenKeyDialog,
     handleSelectEndpoint: mockHandleSelectEndpoint,
+    handleSelectModel: mockHandleSelectModel,
     setEndpointSearchValue: mockSetEndpointSearchValue,
     endpointRequiresUserKey: () => false,
   }),
@@ -68,6 +81,25 @@ describe('EndpointItem', () => {
 
     expect(screen.queryByText('My Agents')).not.toBeInTheDocument();
     expect(mockHandleSelectEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('renders chat2api IDs as first-level selectable rows, without the provider label', () => {
+    const chat2api: Endpoint = {
+      value: 'chat2api',
+      label: 'chat2api',
+      hasModels: true,
+      icon: null,
+      models: [{ name: 'gpt-5.6-sol' }, { name: 'gpt-6' }],
+    };
+
+    render(<EndpointMenuContent endpoint={chat2api} endpointIndex={0} />);
+
+    expect(screen.getByText('gpt-5.6-sol')).toBeInTheDocument();
+    expect(screen.getByText('gpt-6')).toBeInTheDocument();
+    expect(screen.queryByText('chat2api')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('gpt-6'));
+    expect(mockHandleSelectModel).toHaveBeenCalledWith(chat2api, 'gpt-6');
   });
 
   it('keeps non-agent endpoints without models selectable', () => {

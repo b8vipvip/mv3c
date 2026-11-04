@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { TooltipAnchor } from '@librechat/client';
-import { EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
+import { getConfigDefaults } from 'librechat-data-provider';
 import type { ModelSelectorProps } from '~/common';
 import {
   renderModelSpecs,
@@ -12,7 +12,7 @@ import {
 import { ModelSelectorProvider, useModelSelectorContext } from './ModelSelectorContext';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
 import { ModelSelectorChatProvider } from './ModelSelectorChatContext';
-import { getSelectedIcon, getDisplayValue } from './utils';
+import { getSelectedIcon, getDisplayValue, getModelPickerSections } from './utils';
 import { CustomMenu as Menu } from './CustomMenu';
 import DialogManager from './DialogManager';
 import { useLocalize } from '~/hooks';
@@ -45,10 +45,7 @@ function ModelSelectorContent() {
 
   // Show chat2api model IDs directly in the first menu level.
   // Agent management stays in the sidebar, not in this model picker.
-  const directEndpoint = (mappedEndpoints ?? []).find((item) => item.value === 'chat2api');
-  const otherEndpoints = (mappedEndpoints ?? []).filter(
-    (item) => item.value !== 'chat2api' && item.value !== EModelEndpoint.agents,
-  );
+  const { directEndpoint, otherEndpoints } = getModelPickerSections(mappedEndpoints ?? []);
 
   const selectedIcon = useMemo(
     () =>
