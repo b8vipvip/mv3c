@@ -280,9 +280,10 @@ export function createLoadConfigModels(deps: LoadConfigModelsDeps) {
       }
 
       if (Array.isArray(models?.default)) {
-        modelsConfig[name] = models.default.map((model) =>
-          typeof model === 'string' ? model : model.name,
-        );
+        const excluded = new Set(models.exclude ?? []);
+        modelsConfig[name] = models.default
+          .map((model) => (typeof model === 'string' ? model : model.name))
+          .filter((model) => !excluded.has(model));
       }
     }
 
@@ -305,11 +306,13 @@ export function createLoadConfigModels(deps: LoadConfigModelsDeps) {
         );
         // Discovery normally replaces defaults. Explicit opt-in keeps pinned
         // administrator choices while allowing new upstream models to appear.
-        modelsConfig[name] = !modelData?.length
+        const combined = !modelData?.length
           ? defaults
           : endpoint.models?.mergeDefaults
             ? [...new Set([...defaults, ...modelData])]
             : modelData;
+        const excluded = new Set(endpoint.models?.exclude ?? []);
+        modelsConfig[name] = combined.filter((model) => !excluded.has(model));
       }
 
       /** A shared fetch caches token config under one endpoint's tokenKey;

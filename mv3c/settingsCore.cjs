@@ -317,7 +317,13 @@ function runtimeConfig(doc, keyHex) {
       baseURL: provider.baseURL,
       iconURL: '/assets/logo.svg',
       // Keep administrator-configured models visible alongside /models discovery.
-      models: { default: provider.models, fetch: provider.fetchModels, mergeDefaults: true },
+      models: {
+        default: provider.models,
+        fetch: provider.fetchModels,
+        mergeDefaults: true,
+        // Voice/image-only entries do not belong in MV3C's chat model menu.
+        exclude: ['gpt-image', 'gpt-live', 'gpt-live-mini'],
+      },
       // Generate conversation names with a model this chat2api instance advertises.
       titleConvo: true,
       titleModel: provider.models[0],

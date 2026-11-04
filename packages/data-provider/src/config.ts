@@ -2148,6 +2148,8 @@ export const endpointSchema = baseEndpointSchema.merge(
       fetch: z.boolean().optional(),
       /** Keep administrator-pinned models when /models discovery succeeds. */
       mergeDefaults: z.boolean().optional(),
+      /** Hide selected upstream model IDs from this endpoint's advertised list. */
+      exclude: z.array(z.string()).optional(),
       userIdQuery: z.boolean().optional(),
     }),
     iconURL: z.string().optional(),
