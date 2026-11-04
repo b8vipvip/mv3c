@@ -69,7 +69,9 @@ export function ModelSelectorProvider({ children, startupConfig }: ModelSelector
   const { announcePolite } = useLiveAnnouncer();
   const modelSpecs = useMemo(() => {
     /** Labels are normalized at the startup-config query boundary. */
-    const specs = startupConfig?.modelSpecs?.list ?? [];
+    const specs = (startupConfig?.modelSpecs?.list ?? []).filter(
+      (item) => !isAgentsEndpoint(item.preset?.endpoint),
+    );
     if (!agentsMap) {
       return specs;
     }
@@ -182,7 +184,10 @@ export function ModelSelectorProvider({ children, startupConfig }: ModelSelector
     if (!searchValue) {
       return null;
     }
-    const allItems = [...modelSpecs, ...mappedEndpoints];
+    const allItems = [
+      ...modelSpecs,
+      ...mappedEndpoints.filter((item) => !isAgentsEndpoint(item.value)),
+    ];
     return filterItems(allItems, searchValue, agentsMap, assistantsMap || {}, localize);
   }, [searchValue, modelSpecs, mappedEndpoints, agentsMap, assistantsMap, localize]);
 

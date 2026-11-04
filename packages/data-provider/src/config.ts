@@ -2146,6 +2146,8 @@ export const endpointSchema = baseEndpointSchema.merge(
     models: z.object({
       default: z.array(modelItemSchema).min(1),
       fetch: z.boolean().optional(),
+      /** Keep administrator-pinned models when /models discovery succeeds. */
+      mergeDefaults: z.boolean().optional(),
       userIdQuery: z.boolean().optional(),
     }),
     iconURL: z.string().optional(),

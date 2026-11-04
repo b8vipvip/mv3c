@@ -353,3 +353,82 @@ describe('configuredModelList', () => {
     expect(configuredModelList(undefined, EModelEndpoint.anthropic)).toBeUndefined();
   });
 });
+
+
+describe('createLoadConfigModels – opt-in default and discovered model union', () => {
+  const request = { user: { id: 'user-1' } } as unknown as ServerRequest;
+  const configuredEndpoint = (mergeDefaults?: boolean) => ({
+    endpoints: {
+      [EModelEndpoint.custom]: [{
+        name: 'chat2api',
+        baseURL: 'https://chat2api.example.com/v1',
+        apiKey: 'test-key',
+        models: {
+          default: ['gpt-5.6-sol', 'gpt-6'],
+          fetch: true,
+          ...(mergeDefaults === undefined ? {} : { mergeDefaults }),
+        },
+      }],
+    },
+  });
+
+  it('keeps manually configured IDs when discovery returns different models', async () => {
+    const fetchModels = jest.fn().mockResolvedValue(['gpt-image', 'gpt-live', 'gpt-6']);
+    const load = createLoadConfigModels({
+      getAppConfig: jest.fn().mockResolvedValue(configuredEndpoint(true)),
+      getUserKeyValues: jest.fn(),
+      fetchModels,
+    });
+
+    const result = await load(request);
+
+    expect(result.chat2api).toEqual(['gpt-5.6-sol', 'gpt-6', 'gpt-image', 'gpt-live']);
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps existing fetched-only behavior when mergeDefaults is omitted', async () => {
+    const load = createLoadConfigModels({
+      getAppConfig: jest.fn().mockResolvedValue(configuredEndpoint()),
+      getUserKeyValues: jest.fn(),
+      fetchModels: jest.fn().mockResolvedValue(['gpt-image']),
+    });
+
+    expect((await load(request)).chat2api).toEqual(['gpt-image']);
+  });
+
+  it('falls back to configured IDs when discovery fails', async () => {
+    const load = createLoadConfigModels({
+      getAppConfig: jest.fn().mockResolvedValue(configuredEndpoint(true)),
+      getUserKeyValues: jest.fn(),
+      fetchModels: jest.fn().mockRejectedValue(new Error('unavailable')),
+    });
+
+    expect((await load(request)).chat2api).toEqual(['gpt-5.6-sol', 'gpt-6']);
+  });
+
+  it('honors per-request configuration rather than broadening model access', async () => {
+    const getAppConfig = jest.fn().mockResolvedValue(configuredEndpoint(true));
+    const load = createLoadConfigModels({
+      getAppConfig,
+      getUserKeyValues: jest.fn(),
+      fetchModels: jest.fn().mockResolvedValue(['gpt-live']),
+    });
+
+    const result = await load({
+      user: { id: 'user-1' },
+      config: {
+        endpoints: {
+          [EModelEndpoint.custom]: [{
+            name: 'chat2api',
+            baseURL: 'https://chat2api.example.com/v1',
+            apiKey: 'test-key',
+            models: { default: ['gpt-6'], fetch: true, mergeDefaults: true },
+          }],
+        },
+      },
+    } as unknown as ServerRequest);
+
+    expect(getAppConfig).not.toHaveBeenCalled();
+    expect(result.chat2api).toEqual(['gpt-6', 'gpt-live']);
+  });
+});

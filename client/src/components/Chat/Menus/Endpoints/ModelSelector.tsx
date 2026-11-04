@@ -1,10 +1,11 @@
 import React, { useMemo } from 'react';
 import { TooltipAnchor } from '@librechat/client';
-import { getConfigDefaults } from 'librechat-data-provider';
+import { EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
 import type { ModelSelectorProps } from '~/common';
 import {
   renderModelSpecs,
   renderEndpoints,
+  EndpointMenuContent,
   renderSearchResults,
   renderCustomGroups,
 } from './components';
@@ -41,6 +42,13 @@ function ModelSelectorContent() {
     onOpenChange,
     keyDialogEndpoint,
   } = useModelSelectorContext();
+
+  // Show chat2api model IDs directly in the first menu level.
+  // Agent management stays in the sidebar, not in this model picker.
+  const directEndpoint = (mappedEndpoints ?? []).find((item) => item.value === 'chat2api');
+  const otherEndpoints = (mappedEndpoints ?? []).filter(
+    (item) => item.value !== 'chat2api' && item.value !== EModelEndpoint.agents,
+  );
 
   const selectedIcon = useMemo(
     () =>
@@ -113,7 +121,8 @@ function ModelSelectorContent() {
               selectedValues.modelSpec || '',
             )}
             {/* Render endpoints (will include grouped specs matching endpoint names) */}
-            {renderEndpoints(mappedEndpoints ?? [])}
+            {directEndpoint && <EndpointMenuContent endpoint={directEndpoint} endpointIndex={0} />}
+            {renderEndpoints(otherEndpoints)}
             {/* Render custom groups (specs with group field not matching any endpoint) */}
             {renderCustomGroups(modelSpecs || [], mappedEndpoints ?? [])}
           </>
