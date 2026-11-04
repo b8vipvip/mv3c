@@ -432,3 +432,54 @@ describe('createLoadConfigModels – opt-in default and discovered model union',
     expect(result.chat2api).toEqual(['gpt-6', 'gpt-live']);
   });
 });
+
+
+describe('createLoadConfigModels – per-endpoint excluded model IDs', () => {
+  const req = { user: { id: 'user-1' } } as unknown as ServerRequest;
+  const makeLoader = (fetch: boolean, response: string[]) =>
+    createLoadConfigModels({
+      getAppConfig: jest.fn().mockResolvedValue({
+        endpoints: {
+          [EModelEndpoint.custom]: [
+            {
+              name: 'chat2api',
+              apiKey: 'test-secret',
+              baseURL: 'https://chat2api.example.com/v1',
+              models: {
+                default: ['gpt-5.6-sol', 'gpt-6', 'gpt-image'],
+                fetch,
+                mergeDefaults: true,
+                exclude: ['gpt-image', 'gpt-live', 'gpt-live-mini'],
+              },
+            },
+            {
+              name: 'other-endpoint',
+              apiKey: 'another-secret',
+              baseURL: 'https://other.example.com/v1',
+              models: { default: ['gpt-live'], fetch: false },
+            },
+          ],
+        },
+      }),
+      getUserKeyValues: jest.fn(),
+      fetchModels: jest.fn().mockResolvedValue(response),
+    });
+
+  it('hides image/live models even when configured and discovered', async () => {
+    const load = makeLoader(true, [
+      'gpt-image', 'gpt-live', 'gpt-live-mini', 'gpt-6', 'gpt-new',
+    ]);
+
+    const result = await load(req);
+
+    expect(result.chat2api).toEqual(['gpt-5.6-sol', 'gpt-6', 'gpt-new']);
+    expect(result['other-endpoint']).toEqual(['gpt-live']);
+  });
+
+  it('also hides the excluded models when automatic discovery is disabled', async () => {
+    const result = await makeLoader(false, [])(req);
+
+    expect(result.chat2api).toEqual(['gpt-5.6-sol', 'gpt-6']);
+    expect(result['other-endpoint']).toEqual(['gpt-live']);
+  });
+});
