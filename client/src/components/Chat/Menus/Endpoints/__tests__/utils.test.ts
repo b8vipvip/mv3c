@@ -1,6 +1,6 @@
 import type { useLocalize } from '~/hooks';
 import type { Endpoint } from '~/common';
-import { filterItems } from '../utils';
+import { filterItems, getModelPickerSections } from '../utils';
 
 const agentsEndpoint: Endpoint = {
   value: 'agents',
@@ -42,5 +42,24 @@ describe('model selector utilities', () => {
   it('does not match agents when there are no selectable agent options', () => {
     const results = filterItems([disabledAgentsEndpoint], 'my agents', undefined, undefined);
     expect(results).toEqual([]);
+  });
+});
+
+
+describe('mv3c flat model picker sections', () => {
+  it('shows chat2api as direct model rows and excludes My Agents from provider rows', () => {
+    const chat2api: Endpoint = {
+      value: 'chat2api',
+      label: 'chat2api',
+      hasModels: true,
+      icon: null,
+      models: [{ name: 'gpt-5.6-sol' }, { name: 'gpt-6' }],
+    };
+    const other: Endpoint = { value: 'another-provider', label: 'Other', icon: null };
+
+    const sections = getModelPickerSections([agentsEndpoint, chat2api, other]);
+
+    expect(sections.directEndpoint).toEqual(chat2api);
+    expect(sections.otherEndpoints).toEqual([other]);
   });
 });

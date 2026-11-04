@@ -316,7 +316,8 @@ function runtimeConfig(doc, keyHex) {
       apiKey: decryptSecret(doc.chat2api.apiKeyCipher, keyHex),
       baseURL: provider.baseURL,
       iconURL: '/assets/logo.svg',
-      models: { default: provider.models, fetch: provider.fetchModels },
+      // Keep administrator-configured models visible alongside /models discovery.
+      models: { default: provider.models, fetch: provider.fetchModels, mergeDefaults: true },
       // Generate conversation names with a model this chat2api instance advertises.
       titleConvo: true,
       titleModel: provider.models[0],

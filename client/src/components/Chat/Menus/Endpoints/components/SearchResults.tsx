@@ -269,14 +269,16 @@ export function SearchResults({ results, localize, searchValue }: SearchResultsP
           const { endpoint, filteredModels, showMarketplace } = result;
           return (
             <Fragment key={`endpoint-${endpoint.value}-search`}>
-              <div className="flex items-center gap-2 px-3 py-1 text-sm font-medium">
-                {endpoint.icon && (
-                  <div className="flex items-center justify-center overflow-hidden rounded-full p-1">
-                    {endpoint.icon}
-                  </div>
-                )}
-                {endpoint.label}
-              </div>
+              {endpoint.value !== 'chat2api' && (
+                <div className="flex items-center gap-2 px-3 py-1 text-sm font-medium">
+                  {endpoint.icon && (
+                    <div className="flex items-center justify-center overflow-hidden rounded-full p-1">
+                      {endpoint.icon}
+                    </div>
+                  )}
+                  {endpoint.label}
+                </div>
+              )}
               {showMarketplace && (
                 <MarketplaceItem
                   className="px-3 py-2 pl-6"

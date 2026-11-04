@@ -303,7 +303,13 @@ export function createLoadConfigModels(deps: LoadConfigModelsDeps) {
         const defaults = (endpoint.models?.default ?? []).map((m) =>
           typeof m === 'string' ? m : m.name,
         );
-        modelsConfig[name] = !modelData?.length ? defaults : modelData;
+        // Discovery normally replaces defaults. Explicit opt-in keeps pinned
+        // administrator choices while allowing new upstream models to appear.
+        modelsConfig[name] = !modelData?.length
+          ? defaults
+          : endpoint.models?.mergeDefaults
+            ? [...new Set([...defaults, ...modelData])]
+            : modelData;
       }
 
       /** A shared fetch caches token config under one endpoint's tokenKey;

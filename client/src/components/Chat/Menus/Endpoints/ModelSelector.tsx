@@ -5,13 +5,14 @@ import type { ModelSelectorProps } from '~/common';
 import {
   renderModelSpecs,
   renderEndpoints,
+  EndpointMenuContent,
   renderSearchResults,
   renderCustomGroups,
 } from './components';
 import { ModelSelectorProvider, useModelSelectorContext } from './ModelSelectorContext';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
 import { ModelSelectorChatProvider } from './ModelSelectorChatContext';
-import { getSelectedIcon, getDisplayValue } from './utils';
+import { getSelectedIcon, getDisplayValue, getModelPickerSections } from './utils';
 import { CustomMenu as Menu } from './CustomMenu';
 import DialogManager from './DialogManager';
 import { useLocalize } from '~/hooks';
@@ -41,6 +42,10 @@ function ModelSelectorContent() {
     onOpenChange,
     keyDialogEndpoint,
   } = useModelSelectorContext();
+
+  // Show chat2api model IDs directly in the first menu level.
+  // Agent management stays in the sidebar, not in this model picker.
+  const { directEndpoint, otherEndpoints } = getModelPickerSections(mappedEndpoints ?? []);
 
   const selectedIcon = useMemo(
     () =>
@@ -113,7 +118,8 @@ function ModelSelectorContent() {
               selectedValues.modelSpec || '',
             )}
             {/* Render endpoints (will include grouped specs matching endpoint names) */}
-            {renderEndpoints(mappedEndpoints ?? [])}
+            {directEndpoint && <EndpointMenuContent endpoint={directEndpoint} endpointIndex={0} />}
+            {renderEndpoints(otherEndpoints)}
             {/* Render custom groups (specs with group field not matching any endpoint) */}
             {renderCustomGroups(modelSpecs || [], mappedEndpoints ?? [])}
           </>

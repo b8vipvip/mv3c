@@ -89,6 +89,19 @@ export function shouldRenderEndpointOption(endpoint: {
   return !isAgentsEndpoint(endpoint.value) || endpoint.hasModels === true;
 }
 
+/** The mv3c picker exposes chat2api models as first-level options. */
+export function getModelPickerSections(endpoints: Endpoint[]): {
+  directEndpoint: Endpoint | undefined;
+  otherEndpoints: Endpoint[];
+} {
+  return {
+    directEndpoint: endpoints.find((endpoint) => endpoint.value === 'chat2api'),
+    otherEndpoints: endpoints.filter(
+      (endpoint) => endpoint.value !== 'chat2api' && !isAgentsEndpoint(endpoint.value),
+    ),
+  };
+}
+
 export function filterModels(
   endpoint: Endpoint,
   models: string[],
