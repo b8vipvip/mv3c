@@ -58,6 +58,21 @@ test('admin update state never exposes secret keys and detects stale host agents
   assert.equal(formatted.latestVersion, '');
 });
 
+test('pending GitHub check timestamp is distinct from stale completed result', () => {
+  const checkedAt = new Date('2026-10-28T05:44:07.000Z');
+  const checkRequestedAt = new Date('2026-10-29T01:21:59.000Z');
+  const state = updates.format({
+    checkedAt, checkRequestedAt, latestVersion: 'v0.1.45', updateAvailable: false,
+    status: 'success', config: { autoEnabled: false, autoDeployEnabled: false },
+  });
+  assert.equal(state.checkedAt, checkedAt);
+  assert.equal(state.checkRequestedAt, checkRequestedAt);
+  assert.ok(new Date(state.checkRequestedAt) > new Date(state.checkedAt));
+  assert.equal(state.latestVersion, 'v0.1.45', 'previous result remains historical');
+  assert.equal(state.config.autoEnabled, false);
+  assert.equal(Object.hasOwn(state.config, 'autoDeployEnabled'), false);
+});
+
 test('progress accepts only bounded stages and safe fields', () => {
   const jobId = '22222222-2222-4222-8222-222222222222';
   assert.deepEqual(updates.validateProgress({
